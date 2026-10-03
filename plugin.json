@@ -1,7 +1,7 @@
 {
   "name": "siyuan-plugin-caldav-sync",
-  "author": "bonebearHsu",
-  "url": "https://github.com/bonebearHsu/siyuan-plugin-caldav-sync",
+  "author": "vilifetime",
+  "url": "https://github.com/vilifetime/siyuan-plugin-caldav-sync",
   "version": "0.2.14",
   "minAppVersion": "3.2.0",
   "backends": ["all"],
@@ -24,7 +24,7 @@
   "funding": {
     "openCollective": "",
     "patreon": "",
-    "github": "bonebearHsu",
+    "github": "vilifetime",
     "custom": [""]
   },
   "keywords": ["caldav", "calendar", "todo", "task", "日历", "任务", "同步", "radicale", "nextcloud", "baikal"]

@@ -23,3 +23,4 @@ backup/
 .test-dock-foot/
 # 发版用的临时目录（含 GitHub token 与 Release 请求体，绝不入库）
 .rel-tmp/
+.bz-tmp/

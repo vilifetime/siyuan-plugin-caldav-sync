@@ -491,8 +491,17 @@
   position: relative;
 }
 
+/* ⚠️ 周视图里「同一批日期列」由三处独立渲染：日期表头 .cal-wk-days、全天栏 .cal-wk-allday-cells、
+   时间网格 .cal-wk-grid。三者必须等宽，否则竖线对不上。
+   而唯一的滚动容器 .cal-wk-main 会被竖直滚动条吃掉约 6px 宽度，它是唯一「变窄」的那个；
+   表头与全天栏都不滚动，天然占满父宽 —— 差出 6px，竖线逐列漂移（实测第 7 列偏 5.1px）。
+   解法：三处都声明 scrollbar-gutter: stable，各自预留同宽滚动条槽位，列宽重新一致
+   （实测偏差归零）。overflow:hidden 让表头/全天栏成为「滚动容器」以便该属性生效。
+   ⚠️ 以后若再加一行按日分列的条带，必须同样声明，否则又会漂移。 */
 .cal-wk-header {
   display: flex;
+  overflow: hidden;
+  scrollbar-gutter: stable;
   border-bottom: 1px solid var(--caldav-border);
   background: var(--caldav-bg, #fff);
   height: 44px;
@@ -507,14 +516,23 @@
   grid-template-columns: repeat(var(--cols, 7), 1fr);
 }
 
+/* ⚠️ 表头只有 44px 高（.cal-wk-header），而「周几 + 日期圆圈」竖排要占
+   padding 8 + 周几 14 + gap 1 + 圆圈 23 + padding 8 = 54px —— 超载 10px。
+   .cal-wk-dayhead 是 flex item 不会被压缩，多出来的部分直接溢出，
+   圆圈底部（y=46）越过表头内容底边（y=44）压住 border-bottom（实测溢出 2px，
+   表现为「今天的圆圈盖住表头下边界线」）。
+   修法：把 padding 8→4、圆圈上下 padding 2→1，总高正好 44px，圆圈底 40 距边界线留 4px。
+   若要改这里的尺寸，必须重算：padding*2 + 14 + gap + 圆圈高 ≤ 44。 */
 .cal-wk-dayhead {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 1px;
-  padding: 8px 0;
+  padding: 4px 0;
   font-size: 12px;
   cursor: default;
+  min-height: 0;
 }
 
 .cal-wk-dayhead.is-today .cal-wk-num {
@@ -523,33 +541,53 @@
   border-radius: 50%;
 }
 
-.cal-wk-wd { color: var(--caldav-text-2); font-size: 11px; }
-.cal-wk-num { font-weight: 600; font-size: 15px; padding: 2px 6px; }
+.cal-wk-wd { color: var(--caldav-text-2); font-size: 11px; line-height: 14px; }
+.cal-wk-num { font-weight: 600; font-size: 15px; line-height: 19px; padding: 1px 6px; }
 
-/* 主滚动区：表头固定在 .cal-wk-header，这里负责全天区+时间网格的纵向滚动。
-   用 grid 把左侧 gutter(48px) 和右侧日期区(1fr) 对齐，滚动条落在 .cal-wk-main
-   最右侧，内部三列(表头/全天/网格)天然等宽，分隔竖线上下对齐。
-   无全天事件时全天区 DOM 不渲染，auto 行自动塌成 0，不再占高度。
-   基座始终保留两行模板，防止旧代码/异常情况下「全天」标签被排到最底部。 */
+/* 主滚动区：只装时间网格（左 gutter + 右日期列），负责纵向滚动。
+   表头 .cal-wk-header 与全天栏 .cal-wk-allday 都是它的兄弟节点、常驻顶部不随滚动移动，
+   滚动条落在这里最右侧；内部两列天然等宽，分隔竖线上下对齐。
+   ⚠️ scrollbar-gutter: stable 必须与 .cal-wk-allday 成对出现：
+   本元素是滚动容器，竖直滚动条会吃掉右侧约 6px 宽度，于是它的可用宽 = 父宽 - 6px；
+   而 .cal-wk-allday 是兄弟节点、不滚动，可用宽 = 父宽 —— 两者列宽不同，
+   导致全天栏的竖线相对网格逐列漂移（实测第 7 列偏 5.1px、右缘偏 6px）。
+   两边都声明 stable 后各自预留同宽，列宽恢复一致（实测偏差归零）。 */
 .cal-wk-main {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: grid;
+  /* 只有时间网格这一行（全天栏已提到 .cal-wk-main 之外，常驻顶部） */
   grid-template-columns: 48px 1fr;
-  grid-template-rows: auto 1fr;
-  grid-template-areas:
-    "allday-label allday-cells"
-    "grid-label   grid-days";
+  grid-template-rows: 1fr;
+  grid-template-areas: "grid-label grid-days";
   min-height: 0;
 }
 
-/* 显式关闭全天区时（JS 空状态兜底），整行完全收起 */
-.cal-wk-main.no-allday {
-  grid-template-rows: 1fr;
-  grid-template-areas: "grid-label grid-days";
+/* 全天栏：独立于滚动容器的固定行（与 .cal-wk-header 同级同待遇）。
+   早先它长在 .cal-wk-main 内部，会随时间网格一起纵向滚动 —— 一旦「自动滚动到当前时间」
+   把 scrollTop 推起来，全天事件就被顶出视口（表现为「顶部的全天事件栏不见了」）。
+   现在整行常驻顶部，只有时间网格滚动。
+   无全天事件时加 .is-empty 整行收起（JS 判定，不靠 CSS :has 兼容性）。
+   ⚠️ 必须显式声明 grid-template-areas：子元素 .cal-wk-allday-label / .cal-wk-allday-cells
+   用的是具名区域（grid-area），没有 areas 定义时那两个具名区域不存在，浏览器会退化成
+   自动放置并凭空生成轨道 —— 实测退化成 columns "48px 469px 0px 483px"、rows "0px 44px"，
+   结果「全天」标签和日期格子全部堆到最右侧（左边界 517px，而表头第一个日期格子是 48px）。
+   ⚠️ scrollbar-gutter: stable 是为了跟 .cal-wk-main 的滚动条占宽对齐（见上方说明）——
+   本元素 overflow:hidden 也是滚动容器，声明后同样预留右侧滚动条宽度，列宽才与网格一致。 */
+.cal-wk-allday {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  grid-template-areas: "allday-label allday-cells";
+  scrollbar-gutter: stable;
+  flex: 0 0 auto;
+  height: 44px;
+  max-height: 44px;
+  border-bottom: 1px solid var(--caldav-border);
+  background: var(--caldav-bg, #fff);
+  overflow: hidden;
 }
-.cal-wk-main.no-allday .cal-wk-allday-label,
-.cal-wk-main.no-allday .cal-wk-allday-cells { display: none; }
+.cal-wk-allday.is-empty { display: none; }
 
 .cal-wk-allday-label {
   grid-area: allday-label;
@@ -565,11 +603,9 @@
   grid-area: allday-cells;
   display: grid;
   grid-template-columns: repeat(var(--cols, 7), 1fr);
-  border-bottom: 1px solid var(--caldav-border);
-  min-height: 44px;
-  max-height: 44px;
-  overflow: hidden;
+  height: 44px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .cal-wk-allday-cell {
@@ -603,6 +639,14 @@
   font-size: 10.5px;
   color: var(--caldav-text-2);
 }
+
+/* 首个刻度 00:00 需要特殊处理：
+   刻度文字用 top:-7px 垂直居中到整点线上，而 .cal-wk-main 是滚动容器（overflow-y:auto）
+   会裁掉溢出 → 00:00 会被切掉一半。这里**只**把它压回格内（贴齐内容顶），
+   换来两件事同时成立：文字完整可见，且时间格子线依旧紧顶着上方分界线。
+   只在首行做，其余整点保持在线上 —— 否则每个标签都会比对应的横线低 7px。
+   时间网格（.cal-wk-grid，事件定位的基准）完全不动。 */
+.cal-wk-gutter > .cal-wk-hour:first-child span { top: 0; }
 
 .cal-wk-grid {
   grid-area: grid-days;
@@ -3217,6 +3261,11 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-mobile-dialog .cal-wk-gutterhead { flex: 0 0 42px; }
 .caldav-touch .cal-wk-main,
 .caldav-mobile-dialog .cal-wk-main { grid-template-columns: 42px 1fr; }
+/* 全天栏与时间网格是两条独立的 grid，gutter 宽度必须同步收窄，
+   否则手机上全天栏的「全天」标签列会和时间网格的刻度列错位 6px。
+   表头 .cal-wk-gutterhead 用的是 flex-basis，全天栏用的是 grid-template-columns，两者不能共用一条规则。 */
+.caldav-touch .cal-wk-allday,
+.caldav-mobile-dialog .cal-wk-allday { grid-template-columns: 42px 1fr; }
 .caldav-touch .cal-wk-hour span,
 .caldav-mobile-dialog .cal-wk-hour span { right: 2px; }
 .caldav-touch .cal-wk-block,

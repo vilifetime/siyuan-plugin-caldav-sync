@@ -6,6 +6,8 @@ import { calColorOf, escape, keyOfItem, occComparator, repeatMark, type ViewArgs
 import { openDateAddMenu } from "./date-add-menu";
 
 const HOUR_H = 44; // 每小时像素
+// 顶部全天栏行高由 index.css 的 .cal-wk-allday-cells min/max-height 决定（44px），
+// DOM 里只写类名、不写内联高度，避免两处硬编码打架。
 
 interface Block {
   it: import("../core/types").CalItem;
@@ -106,10 +108,6 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
     .join("");
 
   const hasAllDay = allDay.length > 0;
-  const alldayHtml = hasAllDay
-    ? `<div class="cal-wk-allday-label">全天</div>
-       <div class="cal-wk-allday-cells">${allDayRow}</div>`
-    : "";
 
   viewEl.innerHTML = `
 <div class="cal-wk ${days === 1 ? "is-day" : ""}" style="--cols:${days}">
@@ -117,17 +115,29 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
     <div class="cal-wk-gutterhead"></div>
     <div class="cal-wk-days">${dayHead}</div>
   </div>
-  <div class="cal-wk-main ${hasAllDay ? "has-allday" : "no-allday"}">
-    ${alldayHtml}
+  <div class="cal-wk-allday${hasAllDay ? "" : " is-empty"}">
+    <div class="cal-wk-allday-label">全天</div>
+    <div class="cal-wk-allday-cells">${allDayRow}</div>
+  </div>
+  <div class="cal-wk-main">
     <div class="cal-wk-gutter">${hours.join("")}</div>
     <div class="cal-wk-grid" style="height:${24 * HOUR_H}px">${gridCols}</div>
   </div>
 </div>`;
 
-  // 滚动到当前时间（.cal-wk-main 是纵向滚动容器）
+  // 安全性兜底：全天栏在 DOM 上是 .cal-wk-main 的兄弟，任何情况下都不该消失。
+  // 若渲染后它被压成 0 高（父级 flex/overflow 挤压、宿主样式污染等），强制恢复成一行，
+  // 免得又出现「全天事件看不见」这种只能靠肉眼发现的问题。
+  if (hasAllDay) {
+    const ad = viewEl.querySelector<HTMLElement>(".cal-wk-allday");
+    if (ad && ad.getBoundingClientRect().height < 1) ad.style.flex = "0 0 44px";
+  }
+
+  // 全天栏是独立于滚动容器的固定行（同 .cal-wk-header），所以这里可以按整条时间网格
+  // 的高度算滚动量，全天栏不会被滚走。留 120 分钟余量，让当前时间线不至于贴死顶边。
   const sc = viewEl.querySelector<HTMLElement>(".cal-wk-main");
   if (sc) {
-    const target = Math.max(0, (nowMin - 120) / 1440 * 24 * HOUR_H);
+    const target = Math.max(0, ((nowMin - 120) / 1440) * 24 * HOUR_H);
     setTimeout(() => (sc.scrollTop = target), 0);
   }
   // 日期单元格/全天区双击：弹出新增事件/任务

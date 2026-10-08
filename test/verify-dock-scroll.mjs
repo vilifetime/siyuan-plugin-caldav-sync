@@ -85,7 +85,7 @@ const pageHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
         <!-- 脚注（与 panel.ts 模板同构）：与主行同缩进、字号再小一档 -->
         <div class="caldav-calfilter-note" id="optExpiredNote" data-note="showExpired" hidden>（过期按[已完成]处理）</div>
         <div class="caldav-calfilter-foot" id="foot">
-          <button class="caldav-link" data-action="insert-diary">把今日日程与待办插入日记</button>
+          <button class="caldav-link" data-action="insert-diary">把日程与待办插入日记</button>
         </div>
       </div>
     </div>

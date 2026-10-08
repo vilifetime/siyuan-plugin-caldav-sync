@@ -15,6 +15,8 @@ import { icons } from "./icons";
 import { isMobile } from "./device";
 import { openEditor } from "./editor";
 import { openSettingsDialog } from "./settings-dialog";
+import { askDiaryRange } from "./diary-range-dialog";
+import type { DiaryRange, DiaryTarget } from "./diary-range";
 import { renderMonthView } from "./view-month";
 import { renderWeekView } from "./view-week";
 import { renderTaskView } from "./view-task";
@@ -27,8 +29,13 @@ export interface PanelCtx {
   store: CalStore;
   sync: SyncEngine;
   i18n: (key: string) => string;
-  /** 把今日日程插入日记（由入口注入，依赖思源内核 API） */
-  insertTodayToDiary: () => Promise<string>;
+  /**
+   * 把日程与待办插入日记（由入口注入，依赖思源内核 API）。
+   *
+   * ⚠️ 必须收下 `range` / `target` 并透传 —— 无参版本会吞掉弹窗里选的范围，
+   * 永远走默认「当日 + 今天」。
+   */
+  insertTodayToDiary: (range?: DiaryRange, target?: DiaryTarget) => Promise<string>;
   /** 发送一条测试提醒（由入口注入，用于自检提醒投递通道） */
   testReminder?: () => Promise<string>;
   /** 提醒状态摘要（由入口注入，显示已排程条数与带提醒时间的条目数） */
@@ -121,7 +128,8 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
             -->
             <div class="caldav-calfilter-note" data-note="showExpired" hidden>（过期按[已完成]处理）</div>
             <div class="caldav-calfilter-foot">
-              <button class="caldav-link" data-action="insert-diary">把今日日程与待办插入日记</button>
+              <!-- 不再写死「今日」：点了先弹范围选择（当日/本周/本月/所有） -->
+              <button class="caldav-link" data-action="insert-diary">把日程与待办插入日记</button>
             </div>
           </div>
         </div>
@@ -571,8 +579,8 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       return;
     }
     if (action === "insert-diary") {
-      // 反馈与「打开日记页签」都在入口侧完成（含失败提示），这里不重复处理
-      void ctx.insertTodayToDiary();
+      // 先问范围与目标，再插 —— 反馈与「打开日记页签」都在入口侧完成，这里不重复处理
+      askDiaryRange((range, target) => void ctx.insertTodayToDiary(range, target));
       return;
     }
     if (action === "new-event" || action === "new-todo") {

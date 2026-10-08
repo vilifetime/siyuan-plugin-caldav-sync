@@ -20,6 +20,8 @@ import { isMobile } from "@/ui/device";
 import { adoptMobileLayer, closeAllMobileLayers, isDialogAlive } from "@/ui/mobile-layers";
 import { openEditor } from "@/ui/editor";
 import { openSettingsDialog } from "@/ui/settings-dialog";
+import { askDiaryRange } from "@/ui/diary-range-dialog";
+import { diarySpanOf, spanContains, diaryTargetStamp, targetOptionsOf, type DiaryRange, type DiaryTarget } from "@/ui/diary-range";
 import { showReminderToast, clearReminderToasts } from "@/ui/reminder-toast";
 import { newDialog } from "@/ui/dialog";
 
@@ -39,8 +41,14 @@ const DATA_FILE = "caldav-sync.json";
 const LEGACY_DATA_FILE = "caldav-sync-dock";
 /** 更早期原型留下的空壳文件：任何已发布版本都不读它，迁移时顺手清掉 */
 const STALE_DATA_FILES = ["caldav-data.json"];
-/** 写入日记的小节标题，同时作为「重复点击→替换而非追加」的识别标记 */
-const DIARY_SECTION_TITLE = "今日日程与待办";
+/**
+ * 写入日记的小节标题的**基础部分**，同时作为「重复点击→替换而非追加」的识别标记。
+ *
+ * ⚠️ 实际写入的标题可能带区间后缀（本周/本月，见 ui/diary-range.ts 的
+ * diarySpanOf），所以匹配旧小节时必须用**实际要写的那一行**，不能用本常量
+ * 硬匹配 —— 否则跨日范围永远命中不了，每次点击都追加一个重复小节。
+ */
+const DIARY_SECTION_BASE = "日程与待办";
 
 const ICONS = `<symbol id="iconCalDavSync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></symbol>`;
 
@@ -207,9 +215,10 @@ export default class CalDavPlugin extends Plugin {
     });
     this.addCommand({
       langKey: "insertToday",
-      langText: "把今日日程与待办插入日记",
+      // 不再写死「今日」：点了会先问范围（当日/本周/本月/所有）
+      langText: "把日程与待办插入日记",
       hotkey: "",
-      callback: () => void this.insertTodayToDiary()
+      callback: () => this.askInsertDiary()
     });
 
     // 移动端入口：移动端没有 Dock 图标列，addTopBar 会归入右上「插件」菜单，
@@ -650,7 +659,10 @@ export default class CalDavPlugin extends Plugin {
       store: this.store,
       sync: this.sync,
       i18n: (k) => (this.i18n as any)?.[k] || k,
-      insertTodayToDiary: () => this.insertTodayToDiary(),
+      // ⚠️ 必须把 range / target 都透传下去 —— 写成
+      // `() => this.insertTodayToDiary()` 会**吞掉选择**，永远走默认「当日 + 今天」。
+      // 症状：选了「本周」却提示「当日没有日程或待办」（Obsidian 侧 2026-10-07 实测踩过）。
+      insertTodayToDiary: (range, target) => this.insertTodayToDiary(range, target),
       unsaved: new Set(),
       viewMode: "month" as ViewMode,
       cursor: todayStamp(),
@@ -837,22 +849,31 @@ export default class CalDavPlugin extends Plugin {
   }
 
   /**
-   * 把今日日程与待办汇总插入当天日记。
+   * 把日程与待办汇总插入日记。
+   *
+   * 2026-10-08 起支持**范围 + 目标**（对齐 Obsidian 侧）：
+   *  - `range`  当日 / 本周 / 本月 / 所有，默认当日（命令行与旧行为一致）
+   *  - `target` 写到今天的日记还是区间首日的日记（本周=周一 / 本月=1 号），默认今天
+   * 范围计算见 ui/diary-range.ts（纯函数）。
    *
    * 两个关键约束：
    * 1. `occurrencesInRange()` 对「无重复规则」的条目会**回退返回 `item.start`**（见 core/ics.ts），
    *    该值可能根本不在窗口内 —— 视图侧按日期落格时会被自然丢掉，这里若照单全收就会把
-   *    「不是今天」的条目也写进日记。所以事件必须再按窗口过滤一次。
+   *    「不在范围内」的条目也写进日记。所以每个实例必须再按窗口过滤一次。
    * 2. 待办的时间归属一律取到期日（DUE），与视图/统计口径一致，走 todoDueOccurrences。
    *
    * 写入后打开该日记文档并使其成为当前活动页签（移动端关闭全屏面板后定位到文档），
    * 同时弹出结果提示 —— 避免「点了没反应、又点一遍」导致重复插入。
    */
-  async insertTodayToDiary(): Promise<string> {
+  async insertTodayToDiary(range: DiaryRange = "day", target: DiaryTarget = "today"): Promise<string> {
     try {
       const today = todayStamp();
-      const startMs = parseLocalStamp(today + "T00:00:00").getTime();
-      const endMs = startMs + 86400000;
+      const span = diarySpanOf(range, today);
+      const startMs = parseLocalStamp(span.from + "T00:00:00").getTime();
+      const endMs = parseLocalStamp(span.toExclusive + "T00:00:00").getTime();
+      // 目标日记：默认今天，选「本周/本月 + 区间首日」时才换成周一 / 1 号
+      const targetStamp = diaryTargetStamp(range, target, today);
+      const targetLabel = (targetOptionsOf(range, today).find((o) => o.key === target) || { short: "今天" }).short;
       const enabled = new Set(this.store.settings.calendars.filter((c) => c.enabled).map((c) => c.url));
 
       const rows: { ms: number; line: string }[] = [];
@@ -864,21 +885,22 @@ export default class CalDavPlugin extends Plugin {
         for (const occ of occs) {
           if (!occ) continue;
           const ms = parseLocalStamp(occ).getTime();
-          if (!Number.isFinite(ms) || ms < startMs || ms >= endMs) continue; // 只收真正落在今天的实例
+          if (!Number.isFinite(ms) || !spanContains(span, ms)) continue; // 只收真正落在范围内的实例
           const timed = !it.allDay && /T\d{1,2}:\d{2}/.test(occ);
           const mark = it.kind === "todo" ? "☑️" : "📅";
           rows.push({ ms, line: `- ${mark} ${timed ? occ.slice(11, 16) : "全天"} ${it.summary || "(无标题)"}` });
         }
       }
       rows.sort((a, b) => a.ms - b.ms);
-      if (!rows.length) return this.notify("今天没有日程或待办");
+      if (!rows.length) return this.notify(`${span.label}没有日程或待办`);
 
-      const md = `## ${DIARY_SECTION_TITLE}\n${rows.map((r) => r.line).join("\n")}\n`;
-      const docId = await this.resolveDailyNoteId(today);
-      if (!docId) return this.notify("没有打开的笔记本，无法创建今日日记", "error");
+      const md = `## ${span.sectionTitle}\n${rows.map((r) => r.line).join("\n")}\n`;
+      const docId = await this.resolveDailyNoteId(targetStamp);
+      if (!docId) return this.notify("没有打开的笔记本，无法创建日记", "error");
 
-      // 上一次写过就整段替换：重复点击是「刷新」而不是无限追加
-      const replaced = await this.clearPrevDiarySection(docId);
+      // 上一次写过就整段替换：重复点击是「刷新」而不是无限追加。
+      // ⚠️ 必须用实际要写的标题（跨日范围带区间后缀），不能用固定常量匹配。
+      const replaced = await this.clearPrevDiarySection(docId, span.sectionTitle);
       const ins = await fetch("/api/block/insertBlock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -889,11 +911,21 @@ export default class CalDavPlugin extends Plugin {
       if (ins?.code) return this.notify(`写入日记失败：${ins.msg || ins.code}`, "error");
 
       this.openDocAsActive(docId);
-      return this.notify(`已${replaced ? "更新" : "写入"}今日日记「${DIARY_SECTION_TITLE}」${rows.length} 条`);
+      return this.notify(
+        `已${replaced ? "更新" : "写入"}${targetLabel}的日记「${span.sectionTitle}」${rows.length} 条`
+      );
     } catch (e) {
       // 任何异常都要有反馈：静默失败会让用户以为没执行而重复点击
       return this.notify(`插入日记失败：${(e as Error)?.message || e}`, "error");
     }
+  }
+
+  /**
+   * 弹出「范围 + 目标」选择框，确认后插入日记。
+   * 面板按钮与命令面板都走这里 —— 用户点的是「插入日记」，范围得让他自己选。
+   */
+  askInsertDiary(): void {
+    askDiaryRange((range, target) => void this.insertTodayToDiary(range, target));
   }
 
   /** 统一反馈出口：站内提示 + 返回文案（命令面板/调用方复用同一句） */
@@ -921,38 +953,45 @@ export default class CalDavPlugin extends Plugin {
     }
   }
 
-  /** 定位今天的日记文档：优先 hpath / 标题命中，找不到再新建 */
-  private async resolveDailyNoteId(today: string): Promise<string | null> {
+  /**
+   * 定位某一天的日记文档：优先 hpath / 标题命中，找不到再新建。
+   *
+   * 不一定是「今天」—— 选「本周 + 周一」时这里收到的是周一那一天。
+   */
+  private async resolveDailyNoteId(day: string): Promise<string | null> {
     const rows: any[] =
       (await this.kernelData("/api/query/sql", {
-        stmt: `select id, content, hpath from blocks where type = 'd' and (content like '%${today}%' or hpath like '%${today}%') limit 20`
+        stmt: `select id, content, hpath from blocks where type = 'd' and (content like '%${day}%' or hpath like '%${day}%') limit 20`
       })) || [];
     const titleOf = (r: any) => String(r.content || "").trim();
     const pathOf = (r: any) => String(r.hpath || "");
     // 日记路径模板必然含日期，hpath 命中比「正文里提过这个日期」可信得多
     const hit =
-      rows.find((r) => pathOf(r).includes(today) && titleOf(r) === today) ||
-      rows.find((r) => pathOf(r).includes(today)) ||
-      rows.find((r) => titleOf(r) === today);
+      rows.find((r) => pathOf(r).includes(day) && titleOf(r) === day) ||
+      rows.find((r) => pathOf(r).includes(day)) ||
+      rows.find((r) => titleOf(r) === day);
     if (hit?.id) return hit.id;
 
     const notebooks: any[] = (await this.kernelData("/api/notebook/lsNotebooks", {}))?.notebooks || [];
     const nb = notebooks.find((n) => !n.closed);
     if (!nb) return null;
-    return (await this.kernelData("/api/filetree/createDocWithMd", { notebook: nb.id, path: "/" + today, markdown: "" })) || null;
+    return (await this.kernelData("/api/filetree/createDocWithMd", { notebook: nb.id, path: "/" + day, markdown: "" })) || null;
   }
 
   /**
-   * 删除上一次插入的「今日日程与待办」小节（标题块 + 紧跟其后的连续列表块）。
+   * 删除上一次插入的小节（标题块 + 紧跟其后的连续列表块），让重复点击变成「刷新」。
+   *
+   * ⚠️ `title` 必须是**实际写入的那一行标题**：跨日范围的小节标题带区间后缀，
+   * 若按固定常量匹配就永远命中不了 —— 结果是每次点击都追加一个重复小节。
    * 只认标题文本完全匹配的块，且在第一个非列表块处停下，不会误删用户其它内容。
    */
-  private async clearPrevDiarySection(docId: string): Promise<boolean> {
+  private async clearPrevDiarySection(docId: string, title: string = DIARY_SECTION_BASE): Promise<boolean> {
     const kids: any[] = (await this.kernelData("/api/query/sql", {
       stmt: `select id, type, content from blocks where parent_id = '${docId}' order by sort`
     })) || [];
     const del: string[] = [];
     for (let i = 0; i < kids.length; i++) {
-      if (kids[i].type !== "h" || String(kids[i].content || "").trim() !== DIARY_SECTION_TITLE) continue;
+      if (kids[i].type !== "h" || String(kids[i].content || "").trim() !== title) continue;
       del.push(kids[i].id);
       for (let j = i + 1; j < kids.length && (kids[j].type === "l" || kids[j].type === "i"); j++) del.push(kids[j].id);
     }

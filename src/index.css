@@ -3752,3 +3752,75 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   line-height: 1.6;
 }
 
+
+/* ===== 插入日记：范围 + 目标选择弹窗 =====
+   与 Obsidian 侧同一套类名（便于两边对照）。
+   注意：思源**没有根级 --caldav-inset**（只在弹窗作用域里定义），
+   这里 hover 用 --caldav-bg-2，别照抄 Obsidian 的 var(--caldav-inset)。 */
+.caldav-range-lead {
+  font-size: 13px;
+  color: var(--caldav-text-2);
+  margin-bottom: 10px;
+}
+.caldav-range-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 用 fieldset 承担 radiogroup 语义。fieldset 默认带边框与内边距，须归零；
+     .sr-only 的 legend 仅供读屏器，不参与视觉。 */
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.caldav-range-opts > .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.caldav-range-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--caldav-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.caldav-range-opt:hover { background: var(--caldav-bg-2); }
+/* 选中态由 JS 加 .is-checked，不用 CSS `:has(input:checked)` ——
+   `:has()` 会在每次 DOM 变更时触发全量匹配重评估，在频繁重渲染的宿主里代价明显。 */
+.caldav-range-opt.is-checked {
+  border-color: var(--caldav-accent);
+  background: color-mix(in srgb, var(--caldav-accent) 10%, transparent);
+}
+/* 选中项悬停给更深的蓝：.is-checked 排在 :hover 之后会把它盖掉
+   （特异度相同时后来者胜），故必须再写一条。 */
+.caldav-range-opt.is-checked:hover {
+  background: color-mix(in srgb, var(--caldav-accent) 16%, transparent);
+}
+.caldav-range-opt input { margin: 2px 0 0; flex: 0 0 auto; }
+.caldav-range-opt-body { display: flex; flex-direction: column; gap: 2px; }
+.caldav-range-opt-label { font-size: 13px; font-weight: 500; }
+.caldav-range-opt-hint { font-size: 11.5px; color: var(--caldav-text-2); }
+
+/* 目标子选项区：比主选项缩进一档，视觉上从属于上面的范围。
+   ⚠️ [hidden] 必须自写：虽然 .caldav-range-sub 没设 display，
+   但带上它是防「哪天给它加了 display:flex」的老坑（见 .caldav-switch-line 那条）。 */
+.caldav-range-sub {
+  margin-top: 12px;
+  padding-left: 14px;
+  border-left: 2px solid var(--caldav-border);
+}
+.caldav-range-sub[hidden] { display: none; }
+.caldav-range-sub-lead {
+  font-size: 12px;
+  color: var(--caldav-text-2);
+  margin-bottom: 6px;
+}

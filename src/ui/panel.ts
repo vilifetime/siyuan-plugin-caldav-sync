@@ -8,7 +8,7 @@ import type { CalStore } from "../core/store";
 import { keyOf } from "../core/store";
 import type { SyncEngine } from "../core/sync";
 import type { CalItem, CalKind, SortMode } from "../core/types";
-import { DEFAULT_CATEGORIES, calEventColor } from "../core/types";
+import { DEFAULT_CATEGORIES, calEventColor, setTaskViewEventsShown } from "../core/types";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
 import { icons } from "./icons";
@@ -92,6 +92,26 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
                 <span class="caldav-switch-track"></span>
               </span>
             </label>
+            <!--
+              任务视图的两个开关（2026-10-08 对齐 Obsidian 侧：那边就放在这个浮层里）。
+              默认都是关的；第二层「显示过期日程」初始 hidden，主开关打开才出现，
+              hidden 时整行不占位（display 由 CSS 类定为 flex，必须另写 [hidden] 规则）。
+            -->
+            <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
+              <span class="caldav-switch-label">任务视图中显示日程事件</span>
+              <span class="caldav-switch">
+                <input type="checkbox" data-opt="showEvents"/>
+                <span class="caldav-switch-track"></span>
+              </span>
+            </label>
+            <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt caldav-switch-line--nested"
+                   data-opt-row="showExpired" hidden>
+              <span class="caldav-switch-label">任务视图中显示过期日程</span>
+              <span class="caldav-switch">
+                <input type="checkbox" data-opt="showExpired"/>
+                <span class="caldav-switch-track"></span>
+              </span>
+            </label>
             <div class="caldav-calfilter-foot">
               <button class="caldav-link" data-action="insert-diary">把今日日程与待办插入日记</button>
             </div>
@@ -113,6 +133,9 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   const calListEl = root.querySelector(".caldav-cal-list") as HTMLElement;
   const calfilterPop = root.querySelector(".caldav-calfilter-pop") as HTMLElement;
   const showTodosInput = root.querySelector('[data-opt="showTodos"]') as HTMLInputElement;
+  const showEventsInput = root.querySelector('[data-opt="showEvents"]') as HTMLInputElement;
+  const showExpiredInput = root.querySelector('[data-opt="showExpired"]') as HTMLInputElement;
+  const showExpiredRow = root.querySelector('[data-opt-row="showExpired"]') as HTMLElement;
   const viewEl = root.querySelector(".caldav-view") as HTMLElement;
   const cursorTitleEl = root.querySelector(".caldav-cursor-title") as HTMLElement;
   const ctxMenu = root.querySelector(".caldav-ctxmenu") as HTMLElement;
@@ -164,6 +187,10 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
 
   function renderFilterOpts(): void {
     showTodosInput.checked = todosShownInCalendar();
+    // 任务视图的两个开关：主开关决定第二层是否出现（联动规则见 setTaskViewEventsShown）
+    showEventsInput.checked = ctx.store.settings.showEventsInTaskView === true;
+    showExpiredInput.checked = ctx.store.settings.showExpiredEventsInTaskView === true;
+    showExpiredRow.hidden = !showEventsInput.checked;
   }
 
   function cursorTitle(): string {
@@ -554,6 +581,23 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   // 自动 renderAll + 落盘），不用在这里手动重渲染。
   showTodosInput.addEventListener("change", () => {
     ctx.store.settings.showTodosInCalendar = showTodosInput.checked;
+    ctx.store.saveSettings();
+  });
+
+  /**
+   * 任务视图的两个开关（浮层里，与设置弹窗同一对）。
+   *
+   * saveSettings() 会 emit → 本实例的 onChange → renderAll()，任务视图随即重渲染，
+   * 所以「勾一下就立刻见效」。这里额外先调一次 renderFilterOpts()：
+   * 让第二层那一行**当场**展开/收起，不依赖 emit 的时序。
+   */
+  showEventsInput.addEventListener("change", () => {
+    setTaskViewEventsShown(ctx.store.settings, showEventsInput.checked, showExpiredInput.checked);
+    renderFilterOpts();
+    ctx.store.saveSettings();
+  });
+  showExpiredInput.addEventListener("change", () => {
+    ctx.store.settings.showExpiredEventsInTaskView = showExpiredInput.checked;
     ctx.store.saveSettings();
   });
 

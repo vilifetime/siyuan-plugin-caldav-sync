@@ -8,7 +8,11 @@
  * 覆盖：
  *   1. 滚动条轨道透明、滑块默认透明、两端箭头 display:none；
  *   2. 强制 :hover 后滑块变成半透明主题色（显形）；
- *   3. 开关行落在浮层里、单行不换行、开关贴右、浮层不横向溢出。
+ *   3. 开关行落在浮层里、单行不换行、开关贴右、浮层不横向溢出；
+ *   4. 浮层里第二层联动开关（「任务视图中显示过期日程」）：hidden 时真的是
+ *      display:none（`.caldav-switch-line{display:flex}` 会盖掉 UA 的 [hidden]，必须自证）、
+ *      展开后缩进 18px 且文字变淡 —— 缩进要防 `.caldav-calfilter-opt` 的
+ *      padding 简写把 padding-left 吃掉（Obsidian 侧就是这么坏的）。
  */
 import { freeDebugPort } from "./helpers.mjs";
 import fs from "node:fs";
@@ -55,6 +59,22 @@ const pageHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
           <span class="caldav-switch">
             <input type="checkbox" data-opt="showTodos" checked>
             <span class="caldav-switch-track" id="track"></span>
+          </span>
+        </label>
+        <!-- 任务视图的两个开关（与 panel.ts 模板同构；第三行初始 hidden） -->
+        <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt" id="optEvents">
+          <span class="caldav-switch-label">任务视图中显示日程事件</span>
+          <span class="caldav-switch">
+            <input type="checkbox" data-opt="showEvents">
+            <span class="caldav-switch-track"></span>
+          </span>
+        </label>
+        <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt caldav-switch-line--nested"
+               id="optExpired" data-opt-row="showExpired" hidden>
+          <span class="caldav-switch-label">任务视图中显示过期日程</span>
+          <span class="caldav-switch">
+            <input type="checkbox" data-opt="showExpired">
+            <span class="caldav-switch-track"></span>
           </span>
         </label>
         <div class="caldav-calfilter-foot" id="foot">
@@ -210,6 +230,29 @@ const geom = await evalJs(`(() => {
 console.log("=== 开关行几何 ===");
 console.log(JSON.stringify(geom, null, 2));
 
+// ---- 第二层联动开关：hidden 是否真生效 + 缩进有没有被 padding 简写吃掉 ----
+const nested = await evalJs(`(() => {
+  const row = document.getElementById('optExpired');
+  const pop = document.querySelector('.caldav-calfilter-pop');
+  const hiddenDisplay = getComputedStyle(row).display;   // 仍带 hidden
+  row.hidden = false;                                    // 展开看一眼真实样式
+  const cs = getComputedStyle(row);
+  const out = {
+    hiddenDisplay,
+    shownDisplay: cs.display,
+    paddingLeft: cs.paddingLeft,
+    color: cs.color,
+    labelFont: getComputedStyle(row.querySelector('.caldav-switch-label')).fontSize,
+    mainPaddingLeft: getComputedStyle(document.getElementById('opt')).paddingLeft,
+    mainColor: getComputedStyle(document.getElementById('opt')).color,
+    overflowX: pop.scrollWidth - pop.clientWidth
+  };
+  row.hidden = true;                                     // 复原，不影响别的断言
+  return out;
+})()`);
+console.log("=== 第二层联动开关 ===");
+console.log(JSON.stringify(nested, null, 2));
+
 const isTransparent = (v) => /^rgba\(0,\s*0,\s*0,\s*0\)$/i.test(v) || v === "transparent" || v === "";
 /**
  * 注意：Chromium 把 color-mix() 序列化成 `color(srgb r g b / a)`（分量是 0~1 的小数），
@@ -241,7 +284,13 @@ const checks = [
   ["开关行排在列表之后、页脚之前", geom.order === true],
   ["开关是单行（高度 < 40px）", geom.optH > 0 && geom.optH < 40],
   ["开关贴浮层右侧（右间隙 ≤ 2px）", geom.trackRightGap >= -0.5 && geom.trackRightGap <= 2],
-  ["浮层无横向溢出", geom.overflowX <= 1]
+  ["浮层无横向溢出", geom.overflowX <= 1],
+  ["第二层带 hidden 时 display 真的是 none（flex 没盖掉 UA 规则）", nested.hiddenDisplay === "none"],
+  ["展开后 display 为 flex", nested.shownDisplay === "flex"],
+  ["展开后缩进 18px（没被 .caldav-calfilter-opt 的 padding 简写吃掉）", nested.paddingLeft === "18px"],
+  ["缩进确实比主行深", parseFloat(nested.mainPaddingLeft) === 0 && parseFloat(nested.paddingLeft) > 0],
+  ["第二层文字比主行淡（从属关系）", nested.color !== nested.mainColor],
+  ["三行全展开时浮层仍无横向溢出", nested.overflowX <= 1]
 ];
 
 let pass = true;

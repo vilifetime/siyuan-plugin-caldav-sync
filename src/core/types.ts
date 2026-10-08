@@ -175,6 +175,20 @@ export interface CalSettings {
   categoryMulti?: boolean;
 }
 
+/**
+ * 「任务视图中显示日程事件」两级开关的**唯一**联动规则：主开关关闭时，
+ * 第二层 `showExpiredEventsInTaskView` 恒为 false —— 否则留着 true，
+ * 下次打开主开关会突然冒出一批过期日程，看着像出 bug
+ * （理由详见 CalSettings 上的注释）。主开关打开时第二层才取 `expiredOn`。
+ *
+ * 浮层（ui/panel.ts）与设置弹窗（ui/settings-dialog.ts）都有这一对开关，
+ * 两处共用本函数 —— 分开写迟早漂移成两种口径。
+ */
+export function setTaskViewEventsShown(s: CalSettings, eventsOn: boolean, expiredOn = false): void {
+  s.showEventsInTaskView = eventsOn;
+  s.showExpiredEventsInTaskView = eventsOn && expiredOn === true;
+}
+
 export const DEFAULT_SETTINGS: CalSettings = {
   serverUrl: "",
   username: "",

@@ -5,7 +5,7 @@ import { Dialog, showMessage } from "siyuan";
 import { newDialog } from "@/ui/dialog";
 import { isMobile } from "./device";
 import type { CalCalendar } from "../core/types";
-import { calEventColor, calTodoColor, normalizeCalendarColors } from "../core/types";
+import { calEventColor, calTodoColor, normalizeCalendarColors, setTaskViewEventsShown } from "../core/types";
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
@@ -109,6 +109,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     const showExpiredRow = el.querySelector<HTMLElement>("[data-sub='showExpired']");
     showEventsBox.addEventListener("change", () => {
       if (showExpiredRow) showExpiredRow.hidden = !showEventsBox.checked;
+      // 主开关关掉时第二层必然为 false。这里只动 DOM，不写 `s` ——
+      // 设置弹窗是「点保存才落盘」的模型，提前改 s 会让用户点「取消」
+      // 也把设置改掉。落盘时由 setTaskViewEventsShown() 统一收敛。
       if (!showEventsBox.checked) showExpiredBox.checked = false;
     });
 
@@ -175,12 +178,11 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       s.futureDays = Math.max(30, +$("input[data-s='future']").value || 370);
       const wasRemindOn = s.enableReminders;
       s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement).checked;
-      // 任务视图的两个开关。主开关关闭时第二层必然是 false（change 时已连带置掉，
-      // 这里再与一次是兜底 —— 用户可能直接点保存而没触发 change）。
+      // 任务视图的两个开关。与浮层共用同一个联动规则函数（主开关关 → 第二层恒 false）——
+      // 它内部还会兜住「用户直接点保存、没触发 change」的情况。
       const wasEventsOn = s.showEventsInTaskView === true;
       const wasExpiredOn = s.showExpiredEventsInTaskView === true;
-      s.showEventsInTaskView = showEventsBox.checked;
-      s.showExpiredEventsInTaskView = showEventsBox.checked && showExpiredBox.checked;
+      setTaskViewEventsShown(s, showEventsBox.checked, showExpiredBox.checked);
       const taskViewOptChanged = wasEventsOn !== s.showEventsInTaskView || wasExpiredOn !== s.showExpiredEventsInTaskView;
       // 勾选的日历
       el.querySelectorAll<HTMLElement>(".caldav-set-cal").forEach((row) => {

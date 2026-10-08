@@ -282,7 +282,55 @@ assert.ok(
   "过期日程应归入「已完成」组（日程没有「完成」语义，时间过去即结束）"
 );
 
-/* ---------- 8. 源码级断言：防止测试照抄的副本与生产代码漂移 ---------- */
+/* ---------- 8. 「日历筛选」浮层里的两个开关（与设置弹窗同一对） ---------- */
+// 浮层是常驻 DOM，不随视图切换重建，正好用来验「开关在不在」+「联动规则」。
+// 默认态要先复位（第 7 段把两个开关都打开了）。
+store.settings.showEventsInTaskView = false;
+store.settings.showExpiredEventsInTaskView = false;
+plugin.openPanelTab("task");
+await settle();
+
+const pop = host.querySelector(".caldav-calfilter-pop");
+assert.ok(pop, "面板里应有「日历筛选」浮层");
+const evSwitch = pop.querySelector('input[data-opt="showEvents"]');
+const exSwitch = pop.querySelector('input[data-opt="showExpired"]');
+const exRow = pop.querySelector('[data-opt-row="showExpired"]');
+assert.ok(evSwitch && exSwitch, "浮层里应有「任务视图中显示日程事件」「任务视图中显示过期日程」两个开关");
+assert.ok(exRow, "第二层开关应带 data-opt-row 标记，供渲染时整行收起");
+assert.strictEqual(evSwitch.checked, false, "「显示日程事件」默认应为关");
+assert.strictEqual(exRow.hidden, true, "主开关关着时，第二层「显示过期日程」应整行隐藏");
+
+// 打开主开关：当场展开第二层，并写入 settings（saveSettings 会落盘 + 通知各面板）
+evSwitch.checked = true;
+evSwitch.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+assert.strictEqual(store.settings.showEventsInTaskView, true, "打开主开关应写入 settings");
+assert.strictEqual(exRow.hidden, false, "主开关打开后第二层应出现");
+
+// 再打开第二层
+exSwitch.checked = true;
+exSwitch.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+assert.strictEqual(store.settings.showExpiredEventsInTaskView, true, "第二层开关应写入 settings");
+
+// 关掉主开关：第二层必须**连带**置 false，重渲染后不留残留
+evSwitch.checked = false;
+evSwitch.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+assert.strictEqual(store.settings.showEventsInTaskView, false, "主开关应被关掉");
+assert.strictEqual(
+  store.settings.showExpiredEventsInTaskView,
+  false,
+  "主开关关闭时，「显示过期日程」必须连带置 false（否则下次打开会突然冒出一批过期日程）"
+);
+assert.strictEqual(host.querySelector('[data-opt-row="showExpired"]').hidden, true, "重渲染后第二层仍是隐藏");
+assert.strictEqual(
+  host.querySelector('input[data-opt="showExpired"]').checked,
+  false,
+  "第二层的勾选态也要跟着清掉，不能只改 settings"
+);
+
+/* ---------- 9. 源码级断言：防止测试照抄的副本与生产代码漂移 ---------- */
 // 只取 GROUPS 那一块：filters 数组里也有 key: "today" 之类，全文件匹配会把两者混起来
 const gStart = SRC.indexOf("const GROUPS");
 assert.ok(gStart > 0, "源码里应能定位到 GROUPS 定义");
@@ -301,4 +349,4 @@ assert.ok(
   "isCollapsed 里不得再有 gkey !== \"done\" 特判（那是把默认值错当权限限制，会锁死其他分组）"
 );
 
-console.log("[task] 任务视图分组回归全部通过（组顺序 / 组内排序 / 折叠三态 / 统计条六项 / 日程两级开关 / 源码防漂移）");
+console.log("[task] 任务视图分组回归全部通过（组顺序 / 组内排序 / 折叠三态 / 统计条六项 / 日程两级开关（渲染＋浮层联动） / 源码防漂移）");

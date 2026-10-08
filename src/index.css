@@ -2432,6 +2432,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   color: var(--caldav-text-2);
 }
 
+/* hidden 属性必须显式生效：.caldav-check-row{display:flex} 会盖掉 UA 的
+   [hidden]{display:none} —— 设置页里「显示已过期的日程」那一行靠它收起。 */
+.caldav-check-row[hidden] { display: none; }
+
 /* 窄屏（Dock 面板）隐藏侧栏时保底 */
 .caldav-root .cal-month, .caldav-root .cal-wk { min-width: 0; }
 
@@ -2678,6 +2682,21 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   border-top: 1px solid var(--caldav-border);
 }
 .caldav-calfilter-opt .caldav-switch-label { font-weight: 400; }
+
+/* 浮层里第二层联动开关（「任务视图中显示过期日程」）：缩进 + 变灰，表示从属于上方主开关。
+ *
+ * ⚠️ 选择器必须带上 `.caldav-calfilter-opt` 提高一级特异性：
+ * 那条规则的 `padding` 简写（9px 0 2px）在同一特异性下会整体盖掉 `padding-left`，
+ * 只写 `.caldav-switch-line--nested` 缩进根本不生效（Obsidian 侧就是这样，
+ * 缩进被吃掉、只剩变灰 —— 别照抄它的写法）。
+ */
+.caldav-calfilter-opt.caldav-switch-line--nested {
+  padding-left: 18px;
+  color: var(--caldav-text-2);
+}
+.caldav-calfilter-opt.caldav-switch-line--nested .caldav-switch-label { font-size: 12.5px; }
+/* hidden 属性必须显式生效：上面的 .caldav-switch-line{display:flex} 会盖掉 UA 的 [hidden]{display:none} */
+.caldav-switch-line--nested[hidden] { display: none; }
 
 /* ===== Dock：标题 + 一行 5 个按钮 =====
    用 grid 等分，不要用 flex:1。「新增 / 排序」是包着下拉菜单的

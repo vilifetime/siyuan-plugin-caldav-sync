@@ -3775,16 +3775,22 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-range-lead {
   font-size: 13px;
   color: var(--caldav-text-2);
-  margin-bottom: 10px;
+  margin: 0 14px 10px;
+  /* 左右 14px：思源 Dialog 的内容区没有内边距（.b3-dialog__content 的 padding 被
+     插件自己压成 0），导语与选项卡片会直接顶到弹窗两侧、圆角切边（雄哥 2026-10-09 反馈）。
+     页脚 .caldav-editor-foot 自带 padding: 10px 14px 12px，与这 14px 对齐；
+     **不要**改成给 .caldav-range 加 padding —— 那会把页脚也压进去，
+     页脚就比内容窄一截、右下圆角也接不上。移动端全屏态同理。 */
 }
 .caldav-range-opts {
   display: flex;
   flex-direction: column;
   gap: 4px;
   /* 用 fieldset 承担 radiogroup 语义。fieldset 默认带边框与内边距，须归零；
-     .sr-only 的 legend 仅供读屏器，不参与视觉。 */
+     .sr-only 的 legend 仅供读屏器，不参与视觉。
+     左右 14px 与导语、页脚对齐（见 .caldav-range-lead 的注释）。 */
   border: 0;
-  margin: 0;
+  margin: 0 14px;
   padding: 0;
   min-width: 0;
 }

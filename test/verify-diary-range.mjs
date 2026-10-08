@@ -10,6 +10,8 @@
  *      祖先链里**没有 .caldav-root**（变量定义在那儿）。所以 `.caldav-range` 必须
  *      自带一份主题变量映射，否则 `var(--caldav-border)` 解析为空 → 边框退化成
  *      currentColor（深黑）而不是浅灰。这一条只能在真实浏览器里量，jsdom 没有层叠。
+ *   C. 左右留白 —— 宿主内容区 padding 是 0，导语与选项卡片必须靠自己的 margin
+ *      留出缝隙，且与页脚（自带 padding: 10px 14px 12px）对齐（雄哥 2026-10-09）。
  *
  * DOM 来自**真实插件**：先用 jsdom 起环境、调 askInsertDiary()、切到「本周」，
  * 把 `.caldav-range` 的 outerHTML 原样搬到页面里 —— 手写 HTML 会与实现漂移。
@@ -63,7 +65,10 @@ const pageHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
   .b3-dialog__container{width:${DIALOG_W}px;background:#fff;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.2)}
   .b3-dialog__header{padding:10px 15px}
   .b3-dialog__title{font-size:14px;font-weight:500}
-  .b3-dialog__body{padding:12px 15px 14px}
+  /* 内容区 padding 必须是 0 —— 真实思源里这个弹窗没挂 containerClassName，
+     而插件把 .caldav-dialog 的 content padding 压成 0；思源自身默认也是 0。
+     留 0 才能验证「卡片左右留白靠 .caldav-range-opts 自己的 margin」这件事。 */
+  .b3-dialog__body{padding:0}
 </style></head>
 <body>
 <div class="b3-dialog">
@@ -151,6 +156,8 @@ const MEASURE = String.raw`(() => {
   const emptyInline = all('[data-inline]').filter((n) => n !== inline).map((n) => r(n));
   const rowR = r(weekRow);
   const cs = getComputedStyle(weekRow);
+  const bodyEl = q(".b3-dialog__body");
+  const bodyR = r(bodyEl);
   return {
     label: r(label),
     inline: r(inline),
@@ -167,7 +174,14 @@ const MEASURE = String.raw`(() => {
     textColor2: getComputedStyle(label).color,
     varBorder: cs.getPropertyValue("--caldav-border").trim(),
     varAccent: cs.getPropertyValue("--caldav-accent").trim(),
-    rangeScroll: (() => { const e = q(".caldav-range"); return { sw: e.scrollWidth, cw: e.clientWidth }; })()
+    rangeScroll: (() => { const e = q(".caldav-range"); return { sw: e.scrollWidth, cw: e.clientWidth }; })(),
+    // 左右留白：宿主的 .b3-dialog__body 在真实思源里 padding 被压成 0，
+    // 卡片贴边靠 .caldav-range-opts 自己的 margin 补出来（雄哥 2026-10-09 要求）
+    body: bodyR,
+    lead: r(q(".caldav-range-lead")),
+    opts: r(q(".caldav-range-opts")),
+    foot: r(q(".caldav-editor-foot")),
+    footBtns: r(q('[data-act="ok"]'))
   };
 })()`;
 
@@ -187,7 +201,16 @@ const checks = [
   ["--caldav-accent 在弹窗作用域可解析", m.varAccent !== ""],
   ["未选中行的边框是主题浅灰（不是退化成 currentColor 的黑）", m.uncheckedBorder === "rgb(228, 231, 237)"],
   ["选中行边框取强调色（--caldav-accent 生效）", m.borderColor === "rgb(53, 117, 240)"],
-  ["选中子选项的文字用强调色（灰字/强调都没退化成黑）", m.targetCheckedColor === "rgb(53, 117, 240)"]
+  ["选中子选项的文字用强调色（灰字/强调都没退化成黑）", m.targetCheckedColor === "rgb(53, 117, 240)"],
+  // 左右留白（雄哥 2026-10-09）：内容区 padding=0，卡片必须靠自己的 margin 留出缝隙
+  ["导语左侧留白 ≥ 10px", m.lead.left - m.body.left >= 10],
+  ["选项列表左侧留白 ≥ 10px", m.opts.left - m.body.left >= 10],
+  ["选项列表右侧留白 ≥ 10px（不能顶到弹窗右边）", m.body.right - m.opts.right >= 10],
+  ["卡片本身也在留白内（左缘不贴内容区）", m.row.left - m.body.left >= 10],
+  // 页脚的留白来自它自己的 padding（边框盒通宽、底色与上边框要贯通到圆角），
+  // 所以要量的是「按钮右缘与选项列表右缘收在同一处」，而不是页脚盒子本身缩进。
+  ["页脚盒子通宽（底色/上边框贯通到圆角，不能被 margin 压进去）", Math.abs(m.foot.left - m.body.left) <= 0.5 && Math.abs(m.foot.right - m.body.right) <= 0.5],
+  ["确认按钮右缘与选项列表右缘对齐（都在 14px 处收住）", Math.abs(m.footBtns.right - m.opts.right) <= 1.5]
 ];
 
 let bad = 0;
@@ -203,6 +226,7 @@ if (bad) {
 }
 console.log("\n实测：子选项文案 =", m.targetText.join(" / "));
 console.log(`实测：子选项左缘 ${m.targets[0].left.toFixed(0)} / 「本周」标签右缘 ${m.label.right.toFixed(0)} / 行右缘 ${m.row.right.toFixed(0)}`);
+console.log(`实测：内容区左右留白 ${(m.opts.left - m.body.left).toFixed(1)} / ${(m.body.right - m.opts.right).toFixed(1)}（页脚 ${(m.foot.left - m.body.left).toFixed(1)} / ${(m.body.right - m.foot.right).toFixed(1)}）`);
 console.log(`实测：边框色 ${m.borderColor}（--caldav-border = ${m.varBorder || "(空)"}）`);
 
 // 顺带留一张截图，方便人工核对观感

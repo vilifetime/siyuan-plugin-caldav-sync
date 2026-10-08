@@ -268,6 +268,28 @@ assert.ok(
   "面板点击必须走范围弹窗，并把 range/target 一起透传（吞掉参数就会永远走「当日+今天」）"
 );
 
+// 左右留白（雄哥 2026-10-09）：宿主内容区 padding=0，卡片贴边。
+// 修法是给导语与选项列表各加 margin 0 14px，**不是**给 .caldav-range 加 padding
+// —— 那会把页脚一起压进去，页脚比内容窄一截、右下圆角接不上。
+const CSS_SRC = fs.readFileSync(path.join(ROOT, "src", "index.css"), "utf8");
+const cssBlock = (sel) => {
+  const i = CSS_SRC.indexOf(sel);
+  assert.ok(i >= 0, `CSS 里找不到 ${sel}`);
+  return CSS_SRC.slice(i, i + 420);
+};
+assert.ok(
+  /margin: 0 14px 10px/.test(cssBlock(".caldav-range-lead {")),
+  "导语必须留左右 14px（与页脚 padding 一致）"
+);
+assert.ok(
+  /margin: 0 14px/.test(cssBlock(".caldav-range-opts {")),
+  "选项列表必须留左右 14px，否则卡片直接顶到弹窗两侧"
+);
+assert.ok(
+  !/\.caldav-range \{[^}]*padding/.test(CSS_SRC),
+  ".caldav-range 根容器不许加 padding —— 会把页脚也压进去"
+);
+
 /* ---------- 弹窗交互：默认当日+今天，选本周才出现目标子选项 ---------- */
 const origInsert = plugin.insertTodayToDiary.bind(plugin);
 let picked = null;

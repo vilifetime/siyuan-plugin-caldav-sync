@@ -94,8 +94,10 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
             </label>
             <!--
               任务视图的两个开关（2026-10-08 对齐 Obsidian 侧：那边就放在这个浮层里）。
-              默认都是关的；第二层「显示过期日程」初始 hidden，主开关打开才出现，
-              hidden 时整行不占位（display 由 CSS 类定为 flex，必须另写 [hidden] 规则）。
+              **这是唯一入口** —— 设置弹窗里不再放同一对开关，避免两处都能改、
+              改完互相打架。默认都是关的；第二层「显示过期日程」初始 hidden，
+              主开关打开才出现，hidden 时整行不占位
+              （display 由 CSS 类定为 flex，必须另写 [hidden] 规则）。
             -->
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
               <span class="caldav-switch-label">任务视图中显示日程事件</span>
@@ -112,6 +114,12 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
                 <span class="caldav-switch-track"></span>
               </span>
             </label>
+            <!--
+              「过期」在任务视图里没有独立的「逾期」语义：分桶时直接归到「已完成」组。
+              不写这句，用户会去「逾期」组里找这些日程、然后以为开关坏了。
+              与主行同缩进、再小一档字号，视觉上属于上面那行的脚注。
+            -->
+            <div class="caldav-calfilter-note" data-note="showExpired" hidden>（过期按[已完成]处理）</div>
             <div class="caldav-calfilter-foot">
               <button class="caldav-link" data-action="insert-diary">把今日日程与待办插入日记</button>
             </div>
@@ -136,6 +144,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   const showEventsInput = root.querySelector('[data-opt="showEvents"]') as HTMLInputElement;
   const showExpiredInput = root.querySelector('[data-opt="showExpired"]') as HTMLInputElement;
   const showExpiredRow = root.querySelector('[data-opt-row="showExpired"]') as HTMLElement;
+  const showExpiredNote = root.querySelector('[data-note="showExpired"]') as HTMLElement;
   const viewEl = root.querySelector(".caldav-view") as HTMLElement;
   const cursorTitleEl = root.querySelector(".caldav-cursor-title") as HTMLElement;
   const ctxMenu = root.querySelector(".caldav-ctxmenu") as HTMLElement;
@@ -190,7 +199,8 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     // 任务视图的两个开关：主开关决定第二层是否出现（联动规则见 setTaskViewEventsShown）
     showEventsInput.checked = ctx.store.settings.showEventsInTaskView === true;
     showExpiredInput.checked = ctx.store.settings.showExpiredEventsInTaskView === true;
-    showExpiredRow.hidden = !showEventsInput.checked;
+    // 脚注与它注解的那一行永远同进同出：主开关一关，两个都收起（不留孤零零一行说明）
+    showExpiredRow.hidden = showExpiredNote.hidden = !showEventsInput.checked;
   }
 
   function cursorTitle(): string {

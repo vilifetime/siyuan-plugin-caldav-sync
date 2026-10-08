@@ -12,7 +12,12 @@
  *   4. 浮层里第二层联动开关（「任务视图中显示过期日程」）：hidden 时真的是
  *      display:none（`.caldav-switch-line{display:flex}` 会盖掉 UA 的 [hidden]，必须自证）、
  *      展开后缩进 18px 且文字变淡 —— 缩进要防 `.caldav-calfilter-opt` 的
- *      padding 简写把 padding-left 吃掉（Obsidian 侧就是这么坏的）。
+ *      padding 简写把 padding-left 吃掉（Obsidian 侧就是这么坏的）；
+ *   5. 第二层下面的脚注「（过期按[已完成]处理）」：与主行同缩进、字号更小、
+ *      紧跟其下、hidden 时同样收得起来。
+ *
+ * ⚠️ 页面 HTML 是**硬编码**的、与 panel.ts 的模板同构 —— 改了模板必须同步改这里，
+ * 否则测的是旧结构（历史上因此误判过「修复没生效」）。
  */
 import { freeDebugPort } from "./helpers.mjs";
 import fs from "node:fs";
@@ -77,6 +82,8 @@ const pageHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
             <span class="caldav-switch-track"></span>
           </span>
         </label>
+        <!-- 脚注（与 panel.ts 模板同构）：与主行同缩进、字号再小一档 -->
+        <div class="caldav-calfilter-note" id="optExpiredNote" data-note="showExpired" hidden>（过期按[已完成]处理）</div>
         <div class="caldav-calfilter-foot" id="foot">
           <button class="caldav-link" data-action="insert-diary">把今日日程与待办插入日记</button>
         </div>
@@ -233,21 +240,37 @@ console.log(JSON.stringify(geom, null, 2));
 // ---- 第二层联动开关：hidden 是否真生效 + 缩进有没有被 padding 简写吃掉 ----
 const nested = await evalJs(`(() => {
   const row = document.getElementById('optExpired');
+  const note = document.getElementById('optExpiredNote');
   const pop = document.querySelector('.caldav-calfilter-pop');
   const hiddenDisplay = getComputedStyle(row).display;   // 仍带 hidden
+  const noteHiddenDisplay = getComputedStyle(note).display;
   row.hidden = false;                                    // 展开看一眼真实样式
+  note.hidden = false;                                   // 脚注与主行同进同出
   const cs = getComputedStyle(row);
+  const label = row.querySelector('.caldav-switch-label');
+  const ns = getComputedStyle(note);
   const out = {
     hiddenDisplay,
     shownDisplay: cs.display,
     paddingLeft: cs.paddingLeft,
     color: cs.color,
-    labelFont: getComputedStyle(row.querySelector('.caldav-switch-label')).fontSize,
+    labelFont: getComputedStyle(label).fontSize,
     mainPaddingLeft: getComputedStyle(document.getElementById('opt')).paddingLeft,
     mainColor: getComputedStyle(document.getElementById('opt')).color,
-    overflowX: pop.scrollWidth - pop.clientWidth
+    overflowX: pop.scrollWidth - pop.clientWidth,
+    // 脚注
+    noteHiddenDisplay,
+    noteShownDisplay: ns.display,
+    noteFont: ns.fontSize,
+    noteColor: ns.color,
+    notePaddingLeft: ns.paddingLeft,
+    // 文字左缘是否对齐（脚注看起来得像上面那行的脚注，而不是另起一段）
+    labelTextLeft: label.getBoundingClientRect().left,
+    noteTextLeft: note.getBoundingClientRect().left + parseFloat(ns.paddingLeft),
+    noteTop: note.getBoundingClientRect().top,
+    rowBottom: row.getBoundingClientRect().bottom
   };
-  row.hidden = true;                                     // 复原，不影响别的断言
+  row.hidden = true; note.hidden = true;                 // 复原，不影响别的断言
   return out;
 })()`);
 console.log("=== 第二层联动开关 ===");
@@ -290,7 +313,13 @@ const checks = [
   ["展开后缩进 18px（没被 .caldav-calfilter-opt 的 padding 简写吃掉）", nested.paddingLeft === "18px"],
   ["缩进确实比主行深", parseFloat(nested.mainPaddingLeft) === 0 && parseFloat(nested.paddingLeft) > 0],
   ["第二层文字比主行淡（从属关系）", nested.color !== nested.mainColor],
-  ["三行全展开时浮层仍无横向溢出", nested.overflowX <= 1]
+  ["三行全展开时浮层仍无横向溢出", nested.overflowX <= 1],
+  ["脚注带 hidden 时 display 真的是 none", nested.noteHiddenDisplay === "none"],
+  ["脚注展开后 display 为 block", nested.noteShownDisplay === "block"],
+  ["脚注字号比它注解的那一行更小", parseFloat(nested.noteFont) < parseFloat(nested.labelFont)],
+  ["脚注文字左缘与上一行对齐（差 ≤ 1px）", Math.abs(nested.noteTextLeft - nested.labelTextLeft) <= 1],
+  ["脚注紧跟在上一行下面（不隔太远）", nested.noteTop - nested.rowBottom <= 6 && nested.noteTop >= nested.rowBottom - 8],
+  ["脚注也用淡色（与主行同一从属档）", nested.noteColor === nested.color]
 ];
 
 let pass = true;

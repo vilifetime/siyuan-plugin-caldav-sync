@@ -5,7 +5,7 @@ import { Dialog, showMessage } from "siyuan";
 import { newDialog } from "@/ui/dialog";
 import { isMobile } from "./device";
 import type { CalCalendar } from "../core/types";
-import { calEventColor, calTodoColor, normalizeCalendarColors, setTaskViewEventsShown } from "../core/types";
+import { calEventColor, calTodoColor, normalizeCalendarColors } from "../core/types";
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
@@ -98,23 +98,6 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       /* 仅保存时生效 */
     });
 
-    /**
-     * 「显示日程事件」→「显示已过期的日程」两级联动。
-     *
-     * 关闭主开关时**连带把第二层置 false** —— 否则留着 true，下次打开主开关
-     * 会突然冒出一堆过期日程，看着像出 bug（Obsidian 侧 2026-10-06 定下的规矩）。
-     */
-    const showEventsBox = $("input[data-s='showEvents']") as HTMLInputElement;
-    const showExpiredBox = $("input[data-s='showExpiredEvents']") as HTMLInputElement;
-    const showExpiredRow = el.querySelector<HTMLElement>("[data-sub='showExpired']");
-    showEventsBox.addEventListener("change", () => {
-      if (showExpiredRow) showExpiredRow.hidden = !showEventsBox.checked;
-      // 主开关关掉时第二层必然为 false。这里只动 DOM，不写 `s` ——
-      // 设置弹窗是「点保存才落盘」的模型，提前改 s 会让用户点「取消」
-      // 也把设置改掉。落盘时由 setTaskViewEventsShown() 统一收敛。
-      if (!showEventsBox.checked) showExpiredBox.checked = false;
-    });
-
     el.querySelector("[data-action='test']")?.addEventListener("click", () => {
       const server = $("input[data-s='server']").value.trim();
       const username = $("input[data-s='username']").value.trim();
@@ -178,12 +161,6 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       s.futureDays = Math.max(30, +$("input[data-s='future']").value || 370);
       const wasRemindOn = s.enableReminders;
       s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement).checked;
-      // 任务视图的两个开关。与浮层共用同一个联动规则函数（主开关关 → 第二层恒 false）——
-      // 它内部还会兜住「用户直接点保存、没触发 change」的情况。
-      const wasEventsOn = s.showEventsInTaskView === true;
-      const wasExpiredOn = s.showExpiredEventsInTaskView === true;
-      setTaskViewEventsShown(s, showEventsBox.checked, showExpiredBox.checked);
-      const taskViewOptChanged = wasEventsOn !== s.showEventsInTaskView || wasExpiredOn !== s.showExpiredEventsInTaskView;
       // 勾选的日历
       el.querySelectorAll<HTMLElement>(".caldav-set-cal").forEach((row) => {
         const c = s.calendars[+row.dataset.idx!];
@@ -203,9 +180,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       ctx.sync.startAutoSync();
       dialog.destroy();
       resolve();
-      // 设置页保存不会自动重渲染主面板，任务视图的两个开关改了要显式刷一次，
-      // 否则用户回到任务视图看到的还是老样子，以为没生效。
-      if (taskViewOptChanged) ctx.refreshPanels?.();
+      // persist() 只落盘、不 emit，所以保存后已打开的面板不会自己重渲染 ——
+      // 这里统一刷一次。日历勾选 / 颜色 / 同步窗口这些改了都得立刻看得见。
+      ctx.refreshPanels?.();
       // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
       // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
       if (s.enableReminders) {
@@ -325,18 +302,6 @@ function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string
     </p>
   </div>
 
-  <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.taskList}</span>任务视图</div>
-    <label class="caldav-check-row">
-      <input type="checkbox" data-s="showEvents" ${s.showEventsInTaskView === true ? "checked" : ""}/>
-      <span>显示日程事件（默认只列待办；打开后日程也进同一列表，按「逾期 / 今天 / 明天 / 本周 / 下周后」分组）</span>
-    </label>
-    <label class="caldav-check-row caldav-check-row--sub" data-sub="showExpired"
-           ${s.showEventsInTaskView === true ? "" : "hidden"}>
-      <input type="checkbox" data-s="showExpiredEvents" ${s.showExpiredEventsInTaskView === true ? "checked" : ""}/>
-      <span>显示已过期的日程（过期的按「已完成」处理，默认藏起来以免抢走待办的注意力）</span>
-    </label>
-  </div>
 </div>
 
 <div class="caldav-editor-foot">

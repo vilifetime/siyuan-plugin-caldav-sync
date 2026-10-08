@@ -2422,18 +2422,8 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   cursor: pointer;
 }
 
-/* 嵌套的第二层开关（「显示已过期的日程」从属于「显示日程事件」）：
-   缩进 + 左侧竖线，让它一眼看出是从属项而非并列项。 */
-.caldav-check-row--sub {
-  margin-left: 24px;
-  padding-left: 12px;
-  border-left: 2px solid var(--caldav-border);
-  font-size: 12.5px;
-  color: var(--caldav-text-2);
-}
-
 /* hidden 属性必须显式生效：.caldav-check-row{display:flex} 会盖掉 UA 的
-   [hidden]{display:none} —— 设置页里「显示已过期的日程」那一行靠它收起。 */
+   [hidden]{display:none} —— 设置页任何一行想用 hidden 收起都靠这条兜底。 */
 .caldav-check-row[hidden] { display: none; }
 
 /* 窄屏（Dock 面板）隐藏侧栏时保底 */
@@ -2697,6 +2687,17 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-calfilter-opt.caldav-switch-line--nested .caldav-switch-label { font-size: 12.5px; }
 /* hidden 属性必须显式生效：上面的 .caldav-switch-line{display:flex} 会盖掉 UA 的 [hidden]{display:none} */
 .caldav-switch-line--nested[hidden] { display: none; }
+
+/* 第二层开关的脚注（「（过期按[已完成]处理）」）：与主行同缩进，字号再小一档。
+   缩进 18px 必须写在这里 —— 别指望继承，它是独立的一行。 */
+.caldav-calfilter-note {
+  padding: 0 0 2px 18px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--caldav-text-2);
+  opacity: .85;
+}
+.caldav-calfilter-note[hidden] { display: none; }
 
 /* ===== Dock：标题 + 一行 5 个按钮 =====
    用 grid 等分，不要用 flex:1。「新增 / 排序」是包着下拉菜单的

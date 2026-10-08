@@ -300,12 +300,24 @@ assert.ok(exRow, "第二层开关应带 data-opt-row 标记，供渲染时整行
 assert.strictEqual(evSwitch.checked, false, "「显示日程事件」默认应为关");
 assert.strictEqual(exRow.hidden, true, "主开关关着时，第二层「显示过期日程」应整行隐藏");
 
+// 脚注「（过期按[已完成]处理）」：过期日程归「已完成」组而非「逾期」组，不说清楚
+// 用户会去「逾期」组里找。它与主行同进同出，主开关一关就得跟着收起。
+const exNote = pop.querySelector('[data-note="showExpired"]');
+assert.ok(exNote, "第二层下面应有脚注（说明过期按已完成处理）");
+assert.ok(/已完成/.test(exNote.textContent), `脚注文案应点明「已完成」，实际：${exNote.textContent.trim()}`);
+assert.strictEqual(exNote.hidden, true, "主开关关着时脚注也要一起隐藏");
+
 // 打开主开关：当场展开第二层，并写入 settings（saveSettings 会落盘 + 通知各面板）
 evSwitch.checked = true;
 evSwitch.dispatchEvent(new window.Event("change", { bubbles: true }));
 await settle();
 assert.strictEqual(store.settings.showEventsInTaskView, true, "打开主开关应写入 settings");
 assert.strictEqual(exRow.hidden, false, "主开关打开后第二层应出现");
+assert.strictEqual(
+  host.querySelector('[data-note="showExpired"]').hidden,
+  false,
+  "主开关打开后脚注应跟着出现（与主行同进同出）"
+);
 
 // 再打开第二层
 exSwitch.checked = true;
@@ -324,6 +336,7 @@ assert.strictEqual(
   "主开关关闭时，「显示过期日程」必须连带置 false（否则下次打开会突然冒出一批过期日程）"
 );
 assert.strictEqual(host.querySelector('[data-opt-row="showExpired"]').hidden, true, "重渲染后第二层仍是隐藏");
+assert.strictEqual(host.querySelector('[data-note="showExpired"]').hidden, true, "重渲染后脚注仍是隐藏");
 assert.strictEqual(
   host.querySelector('input[data-opt="showExpired"]').checked,
   false,
@@ -349,4 +362,25 @@ assert.ok(
   "isCollapsed 里不得再有 gkey !== \"done\" 特判（那是把默认值错当权限限制，会锁死其他分组）"
 );
 
-console.log("[task] 任务视图分组回归全部通过（组顺序 / 组内排序 / 折叠三态 / 统计条六项 / 日程两级开关（渲染＋浮层联动） / 源码防漂移）");
+/* ---------- 10. 唯一入口：设置弹窗里不得再出现这一对开关 ----------
+ * 雄哥 2026-10-08 拍板：两处都能改会互相打架，只留浮层这一个入口。
+ * 这条断言盯着「哪天有人图省事又把它加回设置页」。
+ */
+const SET_SRC = fs.readFileSync(path.join(ROOT, "src", "ui", "settings-dialog.ts"), "utf8");
+const setNoComment = SET_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+for (const needle of ["data-s='showEvents'", 'data-s="showEvents"', "setTaskViewEventsShown", "任务视图中显示"]) {
+  assert.ok(
+    !setNoComment.includes(needle),
+    `设置弹窗里不该再有「${needle}」——任务视图这两个开关的唯一入口是日历筛选浮层`
+  );
+}
+assert.ok(
+  !/>\s*任务视图\s*</.test(SET_SRC),
+  "设置弹窗里不该再有「任务视图」分区（唯一入口是浮层）"
+);
+assert.ok(
+  /ctx\.refreshPanels\?\.\(\)/.test(setNoComment),
+  "设置页保存后仍要刷新面板：persist() 只落盘不 emit，日历勾选/颜色/同步窗口改了要立刻可见"
+);
+
+console.log("[task] 任务视图分组回归全部通过（组顺序 / 组内排序 / 折叠三态 / 统计条六项 / 日程两级开关（渲染＋浮层联动＋脚注） / 唯一入口 / 源码防漂移）");

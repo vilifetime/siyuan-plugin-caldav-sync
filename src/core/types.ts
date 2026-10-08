@@ -181,8 +181,9 @@ export interface CalSettings {
  * 下次打开主开关会突然冒出一批过期日程，看着像出 bug
  * （理由详见 CalSettings 上的注释）。主开关打开时第二层才取 `expiredOn`。
  *
- * 浮层（ui/panel.ts）与设置弹窗（ui/settings-dialog.ts）都有这一对开关，
- * 两处共用本函数 —— 分开写迟早漂移成两种口径。
+ * 这一对开关的**唯一入口**是日历筛选浮层（ui/panel.ts）—— 设置弹窗里不再放，
+ * 避免两处都能改、改完互相打架（2026-10-08 雄哥拍板）。即便哪天要加第二个入口，
+ * 也必须走本函数，分开写迟早漂移成两种口径。
  */
 export function setTaskViewEventsShown(s: CalSettings, eventsOn: boolean, expiredOn = false): void {
   s.showEventsInTaskView = eventsOn;

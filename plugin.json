@@ -2,10 +2,18 @@
   "name": "siyuan-plugin-caldav-sync",
   "author": "vilifetime",
   "url": "https://github.com/vilifetime/siyuan-plugin-caldav-sync",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "minAppVersion": "3.2.0",
-  "backends": ["all"],
-  "frontends": ["desktop", "desktop-window", "browser-desktop", "mobile", "browser-mobile"],
+  "backends": [
+    "all"
+  ],
+  "frontends": [
+    "desktop",
+    "desktop-window",
+    "browser-desktop",
+    "mobile",
+    "browser-mobile"
+  ],
   "displayName": {
     "default": "CalDAV日历任务",
     "zh_CN": "CalDAV日历任务",
@@ -25,7 +33,20 @@
     "openCollective": "",
     "patreon": "",
     "github": "vilifetime",
-    "custom": [""]
+    "custom": [
+      ""
+    ]
   },
-  "keywords": ["caldav", "calendar", "todo", "task", "日历", "任务", "同步", "radicale", "nextcloud", "baikal"]
+  "keywords": [
+    "caldav",
+    "calendar",
+    "todo",
+    "task",
+    "日历",
+    "任务",
+    "同步",
+    "radicale",
+    "nextcloud",
+    "baikal"
+  ]
 }

@@ -6,7 +6,16 @@
  */
 import type { CalItem } from "./types";
 import { keyOf, type CalStore } from "./store";
-import { syncCollection, fetchCalendarItems, putItem, deleteItem, icsRangeIso, type DavAuth } from "./caldav";
+import {
+  syncCollection,
+  fetchCalendarItems,
+  putItem,
+  deleteItem,
+  icsRangeIso,
+  listResourceNames,
+  fileNameOf,
+  type DavAuth
+} from "./caldav";
 import { httpRequest } from "./http";
 import { itemToEditedICS, itemToNewICS } from "./ics";
 import { dateStampOfMs, stampOfMs } from "./date";
@@ -19,6 +28,10 @@ export interface SyncReport {
   deleted: number;
   errors: string[];
   elapsedMs: number;
+  /** 对账清掉的「幽灵条目」数（本地有、服务端早已不存在，见 reconcile） */
+  reconciled: number;
+  /** 对账判定「服务端丢了」并重新上传的条目数（conflict === "local" 时） */
+  requeued: number;
 }
 
 /** 取 URL 的「源」（协议 + 主机 + 端口），用于判断两条地址是否属于同一台服务器 */
@@ -93,10 +106,20 @@ export class SyncEngine {
   }
 
   async syncAll(): Promise<SyncReport> {
-    if (this.syncing) return { ok: false, fetched: 0, uploaded: 0, deleted: 0, errors: ["正在同步中"], elapsedMs: 0 };
+    if (this.syncing)
+      return { ok: false, fetched: 0, uploaded: 0, deleted: 0, errors: ["正在同步中"], elapsedMs: 0, reconciled: 0, requeued: 0 };
     this.syncing = true;
     const t0 = Date.now();
-    const report: SyncReport = { ok: true, fetched: 0, uploaded: 0, deleted: 0, errors: [], elapsedMs: 0 };
+    const report: SyncReport = {
+      ok: true,
+      fetched: 0,
+      uploaded: 0,
+      deleted: 0,
+      errors: [],
+      elapsedMs: 0,
+      reconciled: 0,
+      requeued: 0
+    };
     try {
       // 凭据缺失时直接给出明确错误，不再发无效请求、也不再显示“同步成功”
       const credErr = this.credentialError();
@@ -164,6 +187,9 @@ export class SyncEngine {
             .map((h) => this.findKeyByHref(h, cal.url))
             .filter(Boolean) as string[];
           this.store.mergeServerItems(items, deletedKeys);
+          // 拉取成功了才做对账 —— 上一步抛错说明与服务端的对话不完整，
+          // 此时拿到的清单不可信，宁可这一轮不做（见 reconcile 的安全约束）
+          await this.reconcile(cal, report);
         } catch (e: any) {
           report.ok = false;
           report.errors.push(`${cal.displayName}: ${explainError(e)}`);
@@ -174,7 +200,12 @@ export class SyncEngine {
 
       // 使用本地时区墙上时间（东八区等），避免 toISOString() 输出 UTC 导致显示偏差
       this.store.lastSync = stampOfMs(Date.now()).replace("T", " ");
-      this.store.lastError = report.errors.length ? report.errors.join("; ") : undefined;
+      // 对账结果虽然不算「错误」，但「本地凭空少了 N 条」必须让用户看得见，
+      // 否则会以为数据丢了。措辞带「对账」前缀，与真正的失败区分开。
+      const notes: string[] = [];
+      if (report.reconciled) notes.push(`对账：已清理 ${report.reconciled} 条服务端不存在的本地条目`);
+      if (report.requeued) notes.push(`对账：${report.requeued} 条本地条目在服务端已丢失，已重新上传`);
+      this.store.lastError = [...report.errors, ...notes].join("; ") || undefined;
     } catch (e: any) {
       // 兜底：try 内部若抛出未捕获的异常（例如 pushDirty 直接抛错），原先会跳过上面两行赋值，
       // 于是 lastError 保持旧值（空）→ 界面继续显示「上次同步 XX」，看起来像同步成功了。
@@ -231,6 +262,63 @@ export class SyncEngine {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * 幽灵条目对账：清掉「服务端早已不存在、本地却以为已同步」的条目。
+   *
+   * 为什么必须专门做这件事（2026-10-08 实测确认过 4 条）：
+   *   · 本地条目只要 `etag` 有值就会 `dirty=false` → `pushDirty` 永远跳过它；
+   *   · `mergeServerItems` 只在 `deletedKeys` 里删本地，而 `deletedKeys`
+   *     **只有增量 sync-collection 路径才产出**；sync-token 一旦失效回退全量
+   *     `fetchCalendarItems`，它恒为空。
+   * 结果是服务端删过的条目在本地永久残留：思源里看着完全正常，严格跟随服务端的
+   * 别的客户端（如 Obsidian）却永远看不到，而且它再也不会被重传。
+   *
+   * 覆盖范围取「该日历集合的完整资源清单」（PROPFIND Depth:1），与 sync-token、
+   * time-range 都无关 —— 事件与待办一视同仁，不必去算查询窗口。
+   *
+   * 安全约束（三条，都是「宁可漏判，不可误删」）：
+   *   ① 清单拿不到（PROPFIND 失败/非 207）→ 直接跳过，**绝不**当成「服务端为空」；
+   *   ② 清单为空而本地有条目 → 多半是路径或权限不对，同样跳过；
+   *   ③ 只处理本地**不脏**的条目 —— 脏条目本来就在等上传，不能被判成幽灵。
+   *
+   * 处理方式跟随 `settings.conflict`：服务端优先 → 删本地；本地优先 → 置脏重传。
+   */
+  private async reconcile(cal: import("./types").CalCalendar, report: SyncReport): Promise<void> {
+    let names: string[];
+    try {
+      names = await listResourceNames(cal, this.channel(), this.auth());
+    } catch (e: any) {
+      console.warn(`[caldav] ${cal.displayName}: 资源清单对账跳过（${explainError(e)}）`);
+      return;
+    }
+    const onServer = new Set(names);
+    const candidates = this.store
+      .getAll()
+      .filter((it) => it.calendarUrl === cal.url && !it.deleted && !it.dirty && !!it.href);
+    // 服务端一条都没有、本地却有一堆 —— 大概率是查询打到了错地方，别据此清空本地
+    if (!onServer.size && candidates.length) {
+      console.warn(`[caldav] ${cal.displayName}: 服务端清单为空但本地有 ${candidates.length} 条，跳过对账`);
+      return;
+    }
+    const ghosts = candidates.filter((it) => !onServer.has(fileNameOf(it.href)));
+    if (!ghosts.length) return;
+    if (this.store.settings.conflict === "local") {
+      // 本地优先：认定是服务端把它弄丢了，重新上传
+      for (const it of ghosts) {
+        it.dirty = true;
+        report.requeued++;
+      }
+      console.warn(`[caldav] ${cal.displayName}: ${ghosts.length} 条本地条目在服务端已不存在，将重新上传`);
+      return;
+    }
+    // 服务端优先：跟随服务端删除（与用户在设置里选的口径一致）
+    for (const it of ghosts) {
+      this.store.remove(keyOf(it));
+      report.reconciled++;
+    }
+    console.warn(`[caldav] ${cal.displayName}: 已清理 ${ghosts.length} 条服务端不存在的本地条目`);
   }
 
   private async pushDirty(report: SyncReport): Promise<void> {
@@ -307,7 +395,18 @@ export class SyncEngine {
   }
 
   private async pushAndPersist(): Promise<void> {
-    const report: SyncReport = { ok: true, fetched: 0, uploaded: 0, deleted: 0, errors: [], elapsedMs: 0 };
+    // 单条上传/删除后立即落盘。**不做对账** —— 刚建的条目此刻还没被服务端列进清单，
+    // 拿去比对只会把它误判成幽灵。
+    const report: SyncReport = {
+      ok: true,
+      fetched: 0,
+      uploaded: 0,
+      deleted: 0,
+      errors: [],
+      elapsedMs: 0,
+      reconciled: 0,
+      requeued: 0
+    };
     await this.pushDirty(report);
     this.store.lastError = report.errors.length ? report.errors.join("; ") : this.store.lastError;
     await this.store.persist();

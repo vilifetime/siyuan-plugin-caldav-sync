@@ -206,6 +206,50 @@ export async function fetchCalendarItems(
   return { items, syncToken: undefined };
 }
 
+/**
+ * 取 URL / href 的文件名。
+ *
+ * 对账时必须拿它比：服务端 PROPFIND 回的多半是**路径**（`/dav/cal/x.ics`），
+ * 而本地存的是**完整 URL**（`http://host/dav/cal/x.ics`），直接比字符串永远不等。
+ * 同一个日历集合内文件名唯一，比 basename 最稳（也顺手吃掉 %40 之类的转义差异）。
+ */
+export function fileNameOf(url: string): string {
+  // 先切 basename 再解码：畸形转义（如 "%E0%A4%A"）时退回**未解码的 basename**，
+  // 而不是整条 URL —— 否则同一条资源在两处算出的名字不一致，对账会误判。
+  const raw = String(url || "").split("/").filter(Boolean).pop() || "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * 列出日历集合下**所有**资源的文件名（PROPFIND Depth:1，只取 href 不取正文）。
+ *
+ * 用途：同步后的「幽灵条目对账」（见 sync.ts 的 reconcile）——
+ * 本地记着 etag 却被服务端删掉的条目，**不会被任何增量查询报出来**
+ * （deletedHrefs 只在增量路径产出，sync-token 失效回退全量时恒为空）。
+ * 这里直接要一份完整清单来比对，与 sync-token / time-range 都无关。
+ */
+export async function listResourceNames(cal: CalCalendar, channel: Channel, auth: DavAuth): Promise<string[]> {
+  const res = await httpRequest(
+    cal.url,
+    {
+      method: "PROPFIND",
+      headers: { "Content-Type": "application/xml; charset=utf-8", Depth: "1" },
+      body: `<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>`,
+      timeoutMs: 20000
+    },
+    channel,
+    auth
+  );
+  if (res.status >= 400) throw new HttpError(res.status, `列出日历资源失败: HTTP ${res.status}`);
+  return [...res.body.matchAll(/<(?:[A-Za-z0-9_-]+:)?href[^>]*>([^<]*)</g)]
+    .map((m) => fileNameOf(m[1]))
+    .filter((n) => /\.ics$/i.test(n));
+}
+
 /** sync-token 增量拉取：返回 变更条目 + 已删除 href */
 export async function syncCollection(
   cal: CalCalendar,

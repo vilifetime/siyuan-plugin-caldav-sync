@@ -28,5 +28,8 @@ backup/
 .rel-tmp/
 .bz-tmp/
 
+# 覆盖到本地思源插件目录前的备份（个人环境产物）
+.backup-installed/
+
 # 人工审阅用的对照图（不入库）
 .review/

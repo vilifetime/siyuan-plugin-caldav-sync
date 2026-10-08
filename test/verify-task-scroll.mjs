@@ -16,7 +16,9 @@
  *   1. 全页处于溢出状态的纵向滚动容器**有且只有 1 个**；
  *   2. 它是 `.caldav-view`（视图槽），不是 `.cal-task-view`；
  *   3. `.cal-task-view` 不再自己滚动（scrollHeight ≈ clientHeight）；
- *   4. 唯一那条滚动条贴在面板右边缘（距 stage 右边 ≤ 20px）。
+ *   4. 唯一那条滚动条贴在面板右边缘（距 stage 右边 ≤ 20px）；
+ *   5. 内容列宽度钉在 1024px 且在视图槽内居中（雄哥拍板：720 → 1024）。
+ *      钉住是为了防止「宽度一改，居中和滚动条位置跟着漂」这类二次回归。
  *
  * 本机无 Edge/Chrome 时打印提示并退出 0。
  */
@@ -220,12 +222,26 @@ const report = await evalJs(`(() => {
   });
   const tv = document.querySelector('.cal-task-view');
   const cv = document.querySelector('.caldav-view');
+  const tvr = tv.getBoundingClientRect();
+  const cvr = cv.getBoundingClientRect();
+  // 视图槽的可视宽度 = 边框盒减去竖向滚动条宽度（内容列在里面居中）
+  const slotClientW = cv.clientWidth;
+  const leftGap = Math.round(tvr.left - cvr.left);
   return {
     stageRight: Math.round(stage.right),
     scrollContainers: out,
     overflowing: out.filter((x) => x.overflowing),
     taskView: { scrollH: tv.scrollHeight, clientH: tv.clientHeight },
-    caldavView: { scrollH: cv.scrollHeight, clientH: cv.clientHeight }
+    caldavView: { scrollH: cv.scrollHeight, clientH: cv.clientHeight },
+    col: {
+      width: Math.round(tvr.width),
+      leftGap,
+      rightGap: Math.round(slotClientW - tvr.width - leftGap),
+      slotClientW,
+      computedMaxW: getComputedStyle(tv).maxWidth,
+      // 样式表到底有几份、都从哪儿加载的 —— 「改了 CSS 没生效」时第一眼看这个
+      sheets: Array.from(document.styleSheets).map((s) => (s.href || "inline").split("/").pop())
+    }
   };
 })()`);
 
@@ -241,6 +257,8 @@ console.log("");
 console.log(`溢出中的滚动容器数量：${report.overflowing.length}`);
 console.log(`.caldav-view   : scrollH=${report.caldavView.scrollH} clientH=${report.caldavView.clientH}`);
 console.log(`.cal-task-view : scrollH=${report.taskView.scrollH} clientH=${report.taskView.clientH}`);
+console.log(`内容列        : 宽 ${report.col.width}px，槽可视宽 ${report.col.slotClientW}px，左留白 ${report.col.leftGap} / 右留白 ${report.col.rightGap}`);
+console.log(`计算样式      : max-width=${report.col.computedMaxW} | 样式表 ${report.col.sheets.join(", ")}`);
 
 const problems = [];
 if (report.overflowing.length !== 1) {
@@ -253,6 +271,14 @@ if (report.taskView.scrollH > report.taskView.clientH + 1) {
 }
 if (report.overflowing.length === 1 && report.overflowing[0].distToStageRight > 20) {
   problems.push(`唯一滚动条应贴面板右缘，实际距右缘 ${report.overflowing[0].distToStageRight}px`);
+}
+const COL_W = 1024;
+if (report.col.width !== COL_W) {
+  problems.push(`内容列宽度应为 ${COL_W}px，实际 ${report.col.width}px`);
+}
+// 在视图槽的「可视宽度」里居中（左右留白差 ≤2px；不要拿边框盒算，右边被滚动条约 15px 吃掉）
+if (Math.abs(report.col.leftGap - report.col.rightGap) > 2) {
+  problems.push(`内容列未居中：左留白 ${report.col.leftGap}px、右留白 ${report.col.rightGap}px`);
 }
 
 console.log("");

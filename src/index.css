@@ -732,12 +732,24 @@
 }
 
 /* ===== 任务视图 ===== */
+/**
+ * ⚠️ 这里**不能**再写 `height:100% + overflow:auto`（曾如此，导致双滚动条）。
+ *
+ * `.caldav-view`（视图槽）本身就是 `flex:1; overflow:auto` 的滚动容器；
+ * 任务视图再自建一层滚动容器，两层各画一条竖条 —— 用户截图里
+ * 「一条贴着 720px 内容列、一条贴着面板最右」就是这么来的。
+ *
+ * 而且内层 `height:100%` 是 **content-box** 的 100%（本文件没有全局 border-box），
+ * 加上 `padding:16px 20px 40px` 后边框盒比父级高出 56px，
+ * 于是外层 `.caldav-view` 也常年溢出 56px —— 两层都溢出，两条都显形。
+ *
+ * 现在交给 `.caldav-view` 统一滚：滚动条贴面板右缘，与月/周/年视图一致。
+ * 回归 test/verify-task-scroll.mjs（断言「溢出的滚动容器有且只有 1 个」）。
+ */
 .cal-task-view {
   max-width: 720px;
   margin: 0 auto;
   padding: 16px 20px 40px;
-  height: 100%;
-  overflow: auto;
 }
 
 /* 统计条：挂载点在工具条上（`.caldav-toolbar-stats`，见 panel.ts 模板），

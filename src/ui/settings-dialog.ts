@@ -98,6 +98,20 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       /* 仅保存时生效 */
     });
 
+    /**
+     * 「显示日程事件」→「显示已过期的日程」两级联动。
+     *
+     * 关闭主开关时**连带把第二层置 false** —— 否则留着 true，下次打开主开关
+     * 会突然冒出一堆过期日程，看着像出 bug（Obsidian 侧 2026-10-06 定下的规矩）。
+     */
+    const showEventsBox = $("input[data-s='showEvents']") as HTMLInputElement;
+    const showExpiredBox = $("input[data-s='showExpiredEvents']") as HTMLInputElement;
+    const showExpiredRow = el.querySelector<HTMLElement>("[data-sub='showExpired']");
+    showEventsBox.addEventListener("change", () => {
+      if (showExpiredRow) showExpiredRow.hidden = !showEventsBox.checked;
+      if (!showEventsBox.checked) showExpiredBox.checked = false;
+    });
+
     el.querySelector("[data-action='test']")?.addEventListener("click", () => {
       const server = $("input[data-s='server']").value.trim();
       const username = $("input[data-s='username']").value.trim();
@@ -161,6 +175,13 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       s.futureDays = Math.max(30, +$("input[data-s='future']").value || 370);
       const wasRemindOn = s.enableReminders;
       s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement).checked;
+      // 任务视图的两个开关。主开关关闭时第二层必然是 false（change 时已连带置掉，
+      // 这里再与一次是兜底 —— 用户可能直接点保存而没触发 change）。
+      const wasEventsOn = s.showEventsInTaskView === true;
+      const wasExpiredOn = s.showExpiredEventsInTaskView === true;
+      s.showEventsInTaskView = showEventsBox.checked;
+      s.showExpiredEventsInTaskView = showEventsBox.checked && showExpiredBox.checked;
+      const taskViewOptChanged = wasEventsOn !== s.showEventsInTaskView || wasExpiredOn !== s.showExpiredEventsInTaskView;
       // 勾选的日历
       el.querySelectorAll<HTMLElement>(".caldav-set-cal").forEach((row) => {
         const c = s.calendars[+row.dataset.idx!];
@@ -180,6 +201,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       ctx.sync.startAutoSync();
       dialog.destroy();
       resolve();
+      // 设置页保存不会自动重渲染主面板，任务视图的两个开关改了要显式刷一次，
+      // 否则用户回到任务视图看到的还是老样子，以为没生效。
+      if (taskViewOptChanged) ctx.refreshPanels?.();
       // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
       // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
       if (s.enableReminders) {
@@ -297,6 +321,19 @@ function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string
       不提供授权窗口（不会弹窗，内核默认放行），Windows 便携版思源还会因缺少开始菜单快捷方式
       被系统丢弃系统通知 —— 两者都属于已知限制，不影响应用内提醒卡片。
     </p>
+  </div>
+
+  <div class="caldav-section caldav-section--card">
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.taskList}</span>任务视图</div>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="showEvents" ${s.showEventsInTaskView === true ? "checked" : ""}/>
+      <span>显示日程事件（默认只列待办；打开后日程也进同一列表，按「逾期 / 今天 / 明天 / 本周 / 下周后」分组）</span>
+    </label>
+    <label class="caldav-check-row caldav-check-row--sub" data-sub="showExpired"
+           ${s.showEventsInTaskView === true ? "" : "hidden"}>
+      <input type="checkbox" data-s="showExpiredEvents" ${s.showExpiredEventsInTaskView === true ? "checked" : ""}/>
+      <span>显示已过期的日程（过期的按「已完成」处理，默认藏起来以免抢走待办的注意力）</span>
+    </label>
   </div>
 </div>
 

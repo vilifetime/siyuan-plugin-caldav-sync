@@ -656,6 +656,7 @@ export default class CalDavPlugin extends Plugin {
       cursor: todayStamp(),
       sortMode: "start",
       testReminder: () => this.testReminder(),
+      refreshPanels: () => this.refreshPanels(),
       reminderStatus: () => this.reminderStatus()
     };
   }
@@ -671,6 +672,25 @@ export default class CalDavPlugin extends Plugin {
   /** 设置入口 */
   openSetting(): void {
     void openSettingsDialog(this.mainCtx);
+  }
+
+  /**
+   * 让已打开的面板整体重渲染（设置页保存后由 settings-dialog 回调）。
+   *
+   * 两个刷新都单独兜错：面板引用可能还指向已销毁的实例（思源会重建侧栏/页签），
+   * 一处抛错就会把另一处也吞掉 —— 那正是「点了入口没反应」的常见成因。
+   */
+  private refreshPanels(): void {
+    try {
+      this.tabPanel?.refresh();
+    } catch (e) {
+      console.warn("[caldav] 刷新面板失败（已忽略）", e);
+    }
+    try {
+      this.dockMount?.refresh();
+    } catch (e) {
+      console.warn("[caldav] 刷新 Dock 失败（已忽略）", e);
+    }
   }
 
   /** 按设置决定是否启用提醒引擎（开关切换/启动时调用） */

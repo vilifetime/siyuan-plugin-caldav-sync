@@ -33,6 +33,12 @@ export interface PanelCtx {
   testReminder?: () => Promise<string>;
   /** 提醒状态摘要（由入口注入，显示已排程条数与带提醒时间的条目数） */
   reminderStatus?: () => string;
+  /**
+   * 让已打开的面板整体重渲染（由入口注入）。
+   * 设置页保存后主面板不会自动刷新 —— 任务视图的两个开关若改了却不重渲染，
+   * 用户会觉得「点了没生效」。故由设置页显式调一次。
+   */
+  refreshPanels?: () => void;
   unsaved: Set<string>; // 面板实例 key，防重复渲染
   viewMode: ViewMode;
   cursor: string; // 当前聚焦日期 YYYY-MM-DD
@@ -65,6 +71,12 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           <button class="caldav-seg-btn" data-view="day">日</button>
         </div>
       </div>
+      <!--
+        任务视图的统计条挂载点。放在 toolbar-right **之前** —— 任务视图时左中两块
+        被 .is-task 隐藏，统计条自然靠左；日历视图时本元素为空（见 renderView 的清空），
+        不占位。实际内容由 view-task.ts 渲染后写进来（统计数据的来源在那边）。
+      -->
+      <div class="caldav-toolbar-stats" data-slot="task-stats"></div>
       <div class="caldav-toolbar-right">
         <button class="caldav-btn caldav-btn-primary" data-action="new-event">${icons.plus} 日程</button>
         <button class="caldav-btn" data-action="new-todo">${icons.plus} 待办</button>
@@ -203,6 +215,10 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
 
   function renderView(): void {
     renderToolbarState();
+    // 切回日历视图时清空统计条挂载点，否则上一轮任务视图的六项数字会赖在工具条上。
+    if (ctx.viewMode !== "task") {
+      root.querySelector('[data-slot="task-stats"]')?.replaceChildren();
+    }
     const args = { ctx, viewEl, occurrences: visibleOccurrences };
     if (ctx.viewMode === "year") renderYearView(args);
     else if (ctx.viewMode === "month") renderMonthView(args);

@@ -740,25 +740,61 @@
   overflow: auto;
 }
 
-.cal-task-summary {
+/* 统计条：挂载点在工具条上（`.caldav-toolbar-stats`，见 panel.ts 模板），
+   不再是列表上方独占一行的 4 张大卡片 —— 改为一行 6 项紧凑排列。
+   任务视图时工具条的左（导航）与中（年/月/周/日）两块被 .is-task 隐藏，正好腾出位置。
+   空时（切到日历视图的间隙）不占位。 */
+.caldav-toolbar-stats {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
-  gap: 10px;
-  margin-bottom: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  overflow: hidden;
+  margin-right: 16px;
 }
+
+.caldav-toolbar-stats:empty { display: none; }
 
 .cal-task-stat {
-  flex: 1;
-  background: var(--caldav-bg-2);
-  border: 1px solid var(--caldav-border);
-  border-radius: 10px;
-  padding: 10px 14px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 
-.cal-task-stat b { font-size: 20px; font-weight: 700; display: block; }
+/* 各项之间的一根竖线。间距会叠加：容器 gap 落在项与项之间，而 ::before 是
+   「当前项的首个子元素」—— 它右边的 margin 与容器 gap 叠加，左边则直接吃容器 gap。
+   故左侧给 0、右侧给 10px，让「线在左、数字在右」的分组语义更清楚。 */
+.cal-task-stat + .cal-task-stat::before {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 12px;
+  margin: 0 10px 0 0;
+  background: var(--caldav-border);
+  vertical-align: -1px;
+  pointer-events: none;
+}
+
+.cal-task-stat b { font-size: 20px; font-weight: 700; }
 .cal-task-stat span { font-size: 11.5px; color: var(--caldav-text-2); }
+/* 各组配色与分组头的色点一致，保持全页色彩语言统一。
+   「未来」用中性灰蓝、「无日期」用浅灰 —— 二者都不紧急，不该抢注意力，
+   但也不能淡到像已完成那样看不见。 */
+.cal-stat-total b { color: var(--caldav-text); }
 .cal-stat-today b { color: var(--caldav-accent); }
 .cal-stat-overdue b { color: var(--caldav-danger); }
+.cal-stat-future b { color: #378ADD; }
+.cal-stat-nodate b { color: #8A8A85; }
 .cal-stat-done b { color: #10b981; }
+
+/* 窄屏按重要性裁掉次要项（.cal-task-stat 按重要性降序，末尾是「无日期 / 已完成」，
+   它们在分组标题里仍看得到）。用 nth-child 而非逐个 display:none，简化维护。 */
+@media (max-width: 900px) {
+  .caldav-toolbar-stats .cal-task-stat:nth-child(n + 6) { display: none; }
+}
 
 .cal-task-filterbar {
   display: flex;
@@ -863,6 +899,113 @@
   padding: 48px 0;
   font-size: 14px;
 }
+
+/* ===== 任务视图：时间轴分组（逾期 / 今天 / 明天 / 本周 / 下周后 / 无日期 / 已完成） ===== */
+.cal-task-group {
+  margin-bottom: 10px;
+  /* 组间分隔：上边框 + 段内留白，比单靠 margin 更容易辨认边界 */
+  border-top: 1px solid var(--caldav-border);
+  padding-top: 8px;
+}
+
+.cal-task-group:first-child {
+  /* 首个分组不需要上边框，否则紧贴筛选栏显得多余 */
+  border-top: none;
+  padding-top: 0;
+}
+
+.cal-task-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* 三角放大后若不压 padding 会把组头撑得很高、七个分组纵向拉得很散。
+     故压缩上下 padding，并用三角的负外边距「拉回」行高。 */
+  padding: 4px;
+  margin-bottom: 4px;
+  /* 分割线取**该组色点的同色**（--group-color 由模板 inline 传入）——
+     组头与它的分隔线同色，视觉上把「组名」和「组内条目」连成一块。 */
+  border-bottom: 1px solid var(--group-color, var(--caldav-border));
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+}
+
+/* ⚠️ 思源没有根级的 --caldav-inset 变量（它只在弹窗作用域里定义），
+   这里用 --caldav-bg-2 —— 别照抄 Obsidian 侧的 var(--caldav-inset)，会取不到值。 */
+.cal-task-group-head:hover { background: var(--caldav-bg-2); }
+.cal-task-group-head:focus-visible {
+  outline: 2px solid var(--caldav-accent);
+  outline-offset: 1px;
+}
+
+/* 倒三角：负 margin 让它不撑高组头那一行 */
+.cal-task-group-caret {
+  font-size: 24px;
+  color: var(--caldav-text-2);
+  width: 24px;
+  flex: 0 0 auto;
+  line-height: 1;
+  margin: -5px 0;
+  cursor: pointer;
+}
+
+.cal-task-group-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.cal-task-group-label { font-size: 15px; font-weight: 500; }
+
+.cal-task-group-count {
+  font-size: 12px;
+  color: var(--caldav-text-2);
+  background: var(--caldav-bg-3);
+  border-radius: 9px;
+  padding: 1px 7px;
+  line-height: 1.5;
+}
+
+.cal-task-group-body .cal-task:first-child { border-top-left-radius: 4px; border-top-right-radius: 4px; }
+.cal-task-group-body .cal-task:last-child { border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+
+/* 日程事件混排时区别于待办：没有「完成」语义，故不画勾选框，改用左侧小圆点 */
+.cal-task.is-event .cal-task-check--event {
+  width: 8px;
+  height: 8px;
+  margin: 0 4px;
+  border-radius: 50%;
+  background: var(--cal-color, var(--caldav-text-2));
+  flex: 0 0 auto;
+}
+
+/* 条目类型小框（日程 / 待办）—— 混排时才需要区分，故日程关闭时也在，便于一眼分辨 */
+.cal-task-kind {
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-right: 5px;
+  vertical-align: 1px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  border: 0.5px solid;
+}
+
+.cal-task-kind.is-event {
+  color: #378ADD;
+  border-color: color-mix(in srgb, #378ADD 45%, transparent);
+  background: color-mix(in srgb, #378ADD 10%, transparent);
+}
+
+.cal-task-kind.is-todo {
+  color: #BA7517;
+  border-color: color-mix(in srgb, #BA7517 45%, transparent);
+  background: color-mix(in srgb, #BA7517 10%, transparent);
+}
+
+.cal-task.is-done .cal-task-kind { opacity: 0.5; }
 
 /* ===== 弹窗（编辑/设置）—— 跟随思源主题风格 ===== */
 .caldav-editor, .caldav-settings, .caldav-catmgr {
@@ -2254,6 +2397,16 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   flex: 0 0 16px;
   accent-color: var(--caldav-accent);
   cursor: pointer;
+}
+
+/* 嵌套的第二层开关（「显示已过期的日程」从属于「显示日程事件」）：
+   缩进 + 左侧竖线，让它一眼看出是从属项而非并列项。 */
+.caldav-check-row--sub {
+  margin-left: 24px;
+  padding-left: 12px;
+  border-left: 2px solid var(--caldav-border);
+  font-size: 12.5px;
+  color: var(--caldav-text-2);
 }
 
 /* 窄屏（Dock 面板）隐藏侧栏时保底 */

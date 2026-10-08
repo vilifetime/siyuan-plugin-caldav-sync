@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite build --watch --mode dev",
     "build": "vite build && node scripts/make-package.mjs",
-    "test": "npm run test:secret && npm run test:core && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary",
+    "test": "npm run test:secret && npm run test:core && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task",
     "test:storage": "node test/storage.test.mjs",
     "test:loader": "node test/loader.test.mjs",
     "test:reminder": "node test/reminder.test.mjs",
@@ -15,6 +15,7 @@
     "test:mobile": "node test/mobile.test.mjs",
     "test:layout": "node test/layout.test.mjs",
     "test:diary": "node test/diary.test.mjs",
+    "test:task": "node test/task-bucket.test.mjs",
     "test:ui": "node test/ui.test.mjs",
     "test:core": "node test/core.test.mjs",
     "test:secret": "node test/secret.test.mjs",

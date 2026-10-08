@@ -155,6 +155,20 @@ export interface CalSettings {
    * 所以这是一个纯展示开关，不影响数据与同步。
    */
   showTodosInCalendar?: boolean;
+  /**
+   * 任务视图是否把日程事件（VEVENT）也列进来，默认 false（只列待办）。
+   * 打开后才会出现第二层开关 showExpiredEventsInTaskView。
+   */
+  showEventsInTaskView?: boolean;
+  /**
+   * 任务视图是否显示**已过期**的日程，默认 false。
+   * 日程没有「完成」语义，过期的一律归入「已完成」组；默认藏起来是为了
+   * 不让一堆开完的会抢走待办的注意力。
+   *
+   * ⚠️ 主开关 showEventsInTaskView 关闭时必须连带置 false —— 否则留着 true，
+   * 下次打开主开关会突然冒出一批过期日程，看着像出 bug。
+   */
+  showExpiredEventsInTaskView?: boolean;
   /** 任务分类（编辑弹窗药丸选择），空数组时回退 DEFAULT_CATEGORIES */
   categories?: CategoryDef[];
   /** 分类是否允许多选 */
@@ -174,6 +188,8 @@ export const DEFAULT_SETTINGS: CalSettings = {
   futureDays: 370,
   calendars: [],
   showTodosInCalendar: true,
+  showEventsInTaskView: false,
+  showExpiredEventsInTaskView: false,
   categories: DEFAULT_CATEGORIES,
   categoryMulti: false
 };

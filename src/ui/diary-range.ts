@@ -34,8 +34,13 @@ export interface DiarySpan {
 
 export interface DiaryTargetOption {
   key: DiaryTarget;
-  /** 弹窗里的选项文案（「插入到今天的日记」这种完整句式） */
-  label: string;
+  /**
+   * 弹窗里的紧凑文案（「今天的日记」这种）。
+   *
+   * ⚠️ 不能再写成「插入到今天的日记」这种完整长句：子选项现在**跟在「本周 /
+   * 本月」右侧的同一行**（见 diary-range-dialog.ts），长句会把范围行撑爆。
+   */
+  compact: string;
   /** 结果提示里的短文案（「今天」/「本周一（10-05）」） */
   short: string;
 }
@@ -129,14 +134,14 @@ export function spanContains(span: DiarySpan, ms: number): boolean {
  * 顺序即显示顺序，第一项（今天）是默认项 —— 与旧行为「直接插今日」一致。
  */
 export function targetOptionsOf(range: DiaryRange, today: LocalStamp = todayStamp()): DiaryTargetOption[] {
-  const todayOpt: DiaryTargetOption = { key: "today", label: "插入到今天的日记", short: "今天" };
+  const todayOpt: DiaryTargetOption = { key: "today", compact: "今天的日记", short: "今天" };
   if (range === "week") {
     const mon = startOfWeek(today);
-    return [todayOpt, { key: "spanStart", label: `插入到本周一的日记（${mon}）`, short: `本周一（${mon}）` }];
+    return [todayOpt, { key: "spanStart", compact: `本周一的日记（${mon}）`, short: `本周一（${mon}）` }];
   }
   if (range === "month") {
     const first = monthFirst(today);
-    return [todayOpt, { key: "spanStart", label: `插入到本月 1 日的日记（${first}）`, short: `本月 1 日（${first}）` }];
+    return [todayOpt, { key: "spanStart", compact: `本月 1 日的日记（${first}）`, short: `本月 1 日（${first}）` }];
   }
   // day：首日就是今天；all：首日是哨兵 —— 都只有「今天」有意义
   return [todayOpt];

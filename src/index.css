@@ -3757,6 +3757,21 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
    与 Obsidian 侧同一套类名（便于两边对照）。
    注意：思源**没有根级 --caldav-inset**（只在弹窗作用域里定义），
    这里 hover 用 --caldav-bg-2，别照抄 Obsidian 的 var(--caldav-inset)。 */
+
+/* 弹窗是 `new Dialog()` 挂到 **document.body** 的 —— 祖先链里没有 .caldav-root
+   （--caldav-* 全定义在那儿）。所以这里必须自带一份主题变量映射，与
+   .caldav-editor / .caldav-dock / .caldav-reminder-layer 同一套路。
+   漏了这一层：var(--caldav-border) 解析为空 → `border: 1px solid` 退化成
+   currentColor（纯黑细线），子选项的灰字与选中强调色也一起失效
+   —— 桌面端肉眼不容易发现，只能靠真浏览器量（test/verify-diary-range.mjs）。 */
+.caldav-range {
+  --caldav-accent: var(--b3-theme-primary, #3575f0);
+  --caldav-bg: var(--b3-theme-background, #fff);
+  --caldav-bg-2: var(--b3-theme-background-light, #f6f8fa);
+  --caldav-border: var(--b3-border-color, #e4e7ed);
+  --caldav-text: var(--b3-theme-on-background, #1f2329);
+  --caldav-text-2: var(--b3-theme-on-surface, #646a73);
+}
 .caldav-range-lead {
   font-size: 13px;
   color: var(--caldav-text-2);
@@ -3784,14 +3799,17 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   white-space: nowrap;
   border: 0;
 }
+/* 范围行：上排 = 单选（左）＋ 内联子选项（右），下排 = 说明文字。
+   子选项**必须**跟在「本周 / 本月」右侧同一行（雄哥 2026-10-08 要求），
+   所以说明文字不能再和标签同列 —— 把它整行放下方，否则右列会被子选项挤窄、
+   说明文字被迫折成三四行（弹窗只有 420px 宽）。 */
 .caldav-range-opt {
   display: flex;
-  align-items: flex-start;
-  gap: 9px;
+  flex-direction: column;
+  gap: 3px;
   padding: 9px 11px;
   border: 1px solid var(--caldav-border);
   border-radius: 8px;
-  cursor: pointer;
 }
 .caldav-range-opt:hover { background: var(--caldav-bg-2); }
 /* 选中态由 JS 加 .is-checked，不用 CSS `:has(input:checked)` ——
@@ -3805,22 +3823,51 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-range-opt.is-checked:hover {
   background: color-mix(in srgb, var(--caldav-accent) 16%, transparent);
 }
-.caldav-range-opt input { margin: 2px 0 0; flex: 0 0 auto; }
-.caldav-range-opt-body { display: flex; flex-direction: column; gap: 2px; }
-.caldav-range-opt-label { font-size: 13px; font-weight: 500; }
-.caldav-range-opt-hint { font-size: 11.5px; color: var(--caldav-text-2); }
-
-/* 目标子选项区：比主选项缩进一档，视觉上从属于上面的范围。
-   ⚠️ [hidden] 必须自写：虽然 .caldav-range-sub 没设 display，
-   但带上它是防「哪天给它加了 display:flex」的老坑（见 .caldav-switch-line 那条）。 */
-.caldav-range-sub {
-  margin-top: 12px;
-  padding-left: 14px;
-  border-left: 2px solid var(--caldav-border);
+.caldav-range-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.caldav-range-sub[hidden] { display: none; }
-.caldav-range-sub-lead {
+/* 单选 + 范围名：整块都可点（原来 label 包住整行，拆开后要把可点区补回来） */
+.caldav-range-pick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+.caldav-range-pick input { margin: 0; flex: 0 0 auto; }
+.caldav-range-opt-label { font-size: 13px; font-weight: 500; }
+.caldav-range-opt-hint {
+  font-size: 11.5px;
+  color: var(--caldav-text-2);
+  /* 缩进到范围名文字的左缘，视觉上仍从属于本行 */
+  padding-left: 25px;
+}
+
+/* 内联子选项：跟在「本周 / 本月」右侧的同一行。
+   空槽不占位（当日 / 所有没有子选项）。 */
+.caldav-range-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.caldav-range-inline:empty { display: none; }
+.caldav-range-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   color: var(--caldav-text-2);
-  margin-bottom: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.caldav-range-target input { margin: 0; flex: 0 0 auto; }
+.caldav-range-target.is-checked {
+  color: var(--caldav-accent);
+  font-weight: 500;
 }

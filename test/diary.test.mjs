@@ -232,10 +232,29 @@ assert.ok(
 );
 // 当日 / 所有只有「今天」一个目标 → 不该渲染子选项区（问「今天 / 今天」没有意义）
 assert.ok(/return \[todayOpt\];/.test(RANGE_SRC), "targetOptionsOf 对 day/all 应只回一项");
+// 子选项文案要紧凑：长句（「插入到今天的日记」）在范围行右侧放不下
+assert.ok(
+  /compact: "今天的日记"/.test(RANGE_SRC),
+  "targetOptionsOf 必须给紧凑文案（compact），供范围行右侧内联显示"
+);
 const DIALOG_SRC = fs.readFileSync(path.join(ROOT, "src", "ui", "diary-range-dialog.ts"), "utf8");
 assert.ok(
   /opts\.length < 2/.test(DIALOG_SRC),
-  "子选项区在只有一个目标时必须收起（见 diary-range-dialog.ts 的 renderSub）"
+  "子选项在只有一个目标时必须收起（见 diary-range-dialog.ts 的 renderSub）"
+);
+// 子选项渲染进「选中范围行」自己的槽里 —— 不是独立一段
+assert.ok(
+  /data-range-row="\$\{o\.key\}"/.test(DIALOG_SRC) && /\[data-range-row="\$\{pickedRange\}"\] \[data-inline\]/.test(DIALOG_SRC),
+  "子选项必须渲染进被选中那行的 [data-inline] 槽（跟在范围右侧同一行）"
+);
+assert.ok(
+  /querySelectorAll<HTMLElement>\("\[data-inline\]"\)[\s\S]{0,120}innerHTML = ""/.test(DIALOG_SRC),
+  "renderSub 必须**先清空所有行**的槽，否则换范围后旧行的子选项会留在原地"
+);
+// 子选项的 radio 也在 .caldav-range-opt 里，markChecked 不显式限定 scope 会把外层范围行的选中态改掉
+assert.ok(
+  /markChecked\(inputs, r, "\.caldav-range-target"\)/.test(DIALOG_SRC),
+  "目标子选项的选中态必须限定在 .caldav-range-target 内（否则会连带改掉范围行的 is-checked）"
 );
 
 // 面板按钮：不再写死「今日」，且点击走范围弹窗
@@ -262,39 +281,58 @@ assert.ok(range, "点「插入日记」应弹出范围选择框");
 const radios = Array.from(range.querySelectorAll('input[name="caldav-range"]'));
 assert.strictEqual(radios.length, 4, "应有 当日/本周/本月/所有 四个范围");
 assert.strictEqual(radios[0].checked, true, "默认范围应是「当日」");
-assert.strictEqual(range.querySelector("[data-sub]").hidden, true, "默认（当日）不该出现目标子选项");
+assert.strictEqual(
+  range.querySelector("[data-inline]").innerHTML,
+  "",
+  "默认（当日）不该出现目标子选项"
+);
 
 // 切到「本周」：子选项出现，且默认仍是「今天」
 const weekRadio = radios.find((r) => r.value === "week");
 weekRadio.checked = true;
 weekRadio.dispatchEvent(new window.Event("change", { bubbles: true }));
-const sub = range.querySelector("[data-sub]");
-assert.strictEqual(sub.hidden, false, "选「本周」应展开目标子选项");
-const targetRadios = Array.from(sub.querySelectorAll('input[name="caldav-target"]'));
+// 子选项必须挂在「本周」这一行**内部**的槽里（雄哥要求：跟在范围右侧同一行）
+const weekRow = range.querySelector('[data-range-row="week"]');
+const weekInline = weekRow.querySelector("[data-inline]");
+assert.ok(weekRow.contains(weekInline), "「本周」行里应带一个子选项槽");
+const targetRadios = Array.from(weekInline.querySelectorAll('input[name="caldav-target"]'));
 assert.strictEqual(targetRadios.length, 2, "本周应有两个目标可选（今天 / 本周一）");
 assert.strictEqual(targetRadios[0].checked, true, "目标默认是「今天」（与旧行为一致）");
 assert.ok(
-  sub.textContent.includes("本周一"),
-  `子选项应写明「本周一（${monday}）」，实际：${sub.textContent.replace(/\s+/g, " ").trim()}`
+  weekInline.textContent.includes("本周一"),
+  `子选项应写明「本周一（${monday}）」，实际：${weekInline.textContent.replace(/\s+/g, " ").trim()}`
+);
+// 只有选中那一行有子选项：别处不能同时挂着一份
+const otherInline = Array.from(range.querySelectorAll("[data-inline]")).filter((n) => n !== weekInline);
+assert.ok(
+  otherInline.every((n) => n.innerHTML === ""),
+  "子选项只该出现在当前选中的范围行里（其余行的槽必须清空）"
 );
 
-// 切到「本月」：子选项文案随之变成「本月 1 日」（防复用上一份 DOM 造成串味）
+// 切到「本月」：子选项搬到「本月」行，文案随之变成「本月 1 日」（防复用上一份 DOM 造成串味）
 const monthRadio = radios.find((r) => r.value === "month");
 monthRadio.checked = true;
 monthRadio.dispatchEvent(new window.Event("change", { bubbles: true }));
+const monthRow = range.querySelector('[data-range-row="month"]');
+const monthInline = monthRow.querySelector("[data-inline]");
 assert.ok(
-  sub.textContent.includes("本月 1 日"),
-  `切到本月后子选项应写「本月 1 日（${monthFirst}）」，实际：${sub.textContent.replace(/\s+/g, " ").trim()}`
+  monthInline.textContent.includes("本月 1 日"),
+  `切到本月后子选项应写「本月 1 日（${monthFirst}）」，实际：${monthInline.textContent.replace(/\s+/g, " ").trim()}`
 );
-assert.ok(!sub.textContent.includes("本周一"), "切到本月后不该还留着「本周一」的选项");
+assert.ok(!monthInline.textContent.includes("本周一"), "切到本月后不该还留着「本周一」的选项");
 assert.strictEqual(
-  Array.from(sub.querySelectorAll('input[name="caldav-target"]'))[0].checked,
+  weekInline.innerHTML,
+  "",
+  "切走后「本周」行必须被清空（否则同一份子选项会留在两处）"
+);
+assert.strictEqual(
+  Array.from(monthInline.querySelectorAll('input[name="caldav-target"]'))[0].checked,
   true,
   "切范围后目标要回到「今天」（不能残留上次选的 spanStart）"
 );
 
 // 选「本月 1 日」→ 确认插入，参数必须原样透传
-const firstRadio = Array.from(sub.querySelectorAll('input[name="caldav-target"]')).find(
+const firstRadio = Array.from(monthInline.querySelectorAll('input[name="caldav-target"]')).find(
   (r) => r.value === "spanStart"
 );
 firstRadio.checked = true;

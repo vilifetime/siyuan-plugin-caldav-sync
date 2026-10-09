@@ -24,8 +24,15 @@ const root = path.resolve(here, "..");
 const outDir = path.join(root, ".test-dock-tools");
 const cssRel = path.relative(outDir, path.join(root, "dist", "index.css")).replace(/\\/g, "/");
 
-// 与实现一致的骨架：工具行里 日期范围下拉 + 3 个图标按钮；弹层初始 hidden。
-const ICON = '<svg viewBox="1.5 1.5 21 21" width="14" height="14" fill="none" stroke="currentColor" style="fill:none;stroke-width:1.6"><rect x="3.5" y="4.5" width="17" height="16" rx="3"/></svg>';
+// 与 src/ui/icons.ts 的 svg() 完全同形（含内联 style 的 fill:none ——
+// 思源 base.css 有全局 `svg{fill:currentColor}`，不内联会把闭合图形填成实心块）。
+const svg = (p, vb = "0 0 24 24", sw = 2) =>
+  `<svg viewBox="${vb}" width="14" height="14" fill="none" stroke="currentColor" style="fill:none;stroke-width:${sw};stroke-linecap:round;stroke-linejoin:round">${p}</svg>`;
+const ICON = svg('<rect x="3.5" y="4.5" width="17" height="16" rx="3"/>', "1.5 1.5 21 21", 1.6);
+const I_CHEV = svg('<polyline points="9 18 15 12 9 6"/>');
+const I_CAL = svg('<rect x="3.5" y="4.5" width="17" height="16" rx="3.5"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="8.5" y1="3" x2="8.5" y2="6"/><line x1="15.5" y1="3" x2="15.5" y2="6"/><circle cx="12" cy="14.6" r="1.6" style="fill:currentColor;stroke:none"/>', "1.5 1.5 21 21", 1.6);
+const I_TASK = svg('<rect x="3.5" y="4.5" width="6.5" height="6.5" rx="2"/><path d="M5.2 7.9l1.5 1.5 2.4-2.8"/><line x1="13.5" y1="6" x2="20.5" y2="6"/><line x1="13.5" y1="9.5" x2="17.5" y2="9.5"/><rect x="3.5" y="13" width="6.5" height="6.5" rx="2"/><line x1="13.5" y1="14.5" x2="20.5" y2="14.5"/><line x1="13.5" y1="18" x2="17.5" y2="18"/>', "1.5 1.5 21 21", 1.6);
+const I_FILTER = svg('<path d="M3.5 5.5h17l-6.6 7.6v5.2l-3.8 2.2v-7.4z"/>', "1.5 1.5 21 21", 1.6);
 const panel = (width) => `
   <div class="caldav-root caldav-dock" style="width:${width}px;height:440px;display:flex;flex-direction:column">
     <div class="caldav-dock-brand">
@@ -38,13 +45,13 @@ const panel = (width) => `
         <button class="caldav-dock-select" data-dock="filter" data-toggle="dock-filter" type="button">
           <span class="caldav-dock-select-text">未来七天</span>
         </button>
-        <span class="caldav-dock-select-arrow">${ICON}</span>
+        <span class="caldav-dock-select-arrow">${I_CHEV}</span>
         <div class="caldav-dock-pop caldav-dock-filter-pop" data-pop="dock-filter" hidden></div>
       </div>
-      <button class="caldav-dock-act" data-action="cal-view" title="日历视图">${ICON}</button>
-      <button class="caldav-dock-act" data-action="task-view" title="任务视图">${ICON}</button>
+      <button class="caldav-dock-act" data-action="cal-view" title="日历视图">${I_CAL}</button>
+      <button class="caldav-dock-act" data-action="task-view" title="任务视图">${I_TASK}</button>
       <div class="caldav-dock-filter-wrap caldav-dock-filter-wrap--btn">
-        <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）">${ICON}</button>
+        <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）">${I_FILTER}</button>
         <div class="caldav-dock-cat-pop" data-pop="category" hidden>
           <div class="caldav-dock-cat-head">按优先级</div>
           <div class="caldav-dock-prio-list" data-prio-list>

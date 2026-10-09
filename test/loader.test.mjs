@@ -31,7 +31,9 @@ const click = (el) => el.dispatchEvent(new MouseEvent("click", { bubbles: true }
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const css = fs.readFileSync(path.join(ROOT, "src", "index.css"), "utf8");
 
-// ---- Dock：标题 + 一行 5 按钮 ----
+// ---- Dock 工具行（2026-10-10 改版：一行四个操作点）----
+// 布局：日期范围下拉框 + 日历视图 + 任务视图 + 筛选（图标按钮）。
+// 去掉的三个按钮：新建（主窗口工具栏已有）、刷新（同步按钮已有）、排序（任务视图已排序）。
 seedStore(plugin);
 const dockEl = document.createElement("div");
 document.body.appendChild(dockEl);
@@ -40,17 +42,33 @@ reg.dock[0].init.call(dockCustom, dockCustom);
 
 assert.ok(dockEl.classList.contains("caldav-dock"), "Dock 应渲染精简面板");
 assert.match(dockEl.querySelector(".caldav-brand-title")?.textContent || "", /日历任务管理/, "Dock 标题应为「日历任务管理」");
-assert.strictEqual(dockEl.querySelectorAll(".caldav-dock-act").length, 5, "应有 5 个按钮");
+// 工具行里只剩 3 个图标按钮（日历视图 / 任务视图 / 筛选）—— 日期范围下拉不是 .caldav-dock-act
+assert.strictEqual(dockEl.querySelectorAll(".caldav-dock-tools .caldav-dock-act").length, 3, "工具行应有 3 个图标按钮");
 assert.ok(
   Array.from(dockEl.querySelectorAll(".caldav-dock-act")).every((b) => !b.querySelector("span") && !(b.textContent || "").trim()),
-  "Dock 按钮应为纯图标（不含文字标签）"
+  "Dock 图标按钮应为纯图标（不含文字标签）"
 );
-assert.strictEqual(dockEl.querySelectorAll(".caldav-dock-menu[data-menu]").length, 2, "新增/排序 应为带下拉的菜单");
-assert.strictEqual(
-  dockEl.querySelectorAll(".caldav-dock-menu .caldav-dock-popitem").length,
-  9,
-  "新增 2 个 + 排序 7 个共 9 个选项"
-);
+// 反回归：新建 / 排序 / 刷新 三个按钮不得再出现
+assert.strictEqual(dockEl.querySelectorAll(".caldav-dock-menu[data-menu]").length, 0, "「新建 / 排序」下拉菜单应已移除");
+assert.ok(!dockEl.querySelector('[data-toggle="add"]'), "不应再有「新建」按钮");
+assert.ok(!dockEl.querySelector('[data-toggle="sort"]'), "不应再有「排序」按钮");
+assert.ok(!dockEl.querySelector('.caldav-dock-tools [data-action="sync"]'), "工具行不应再有「刷新」按钮");
+assert.ok(!dockEl.querySelector(".caldav-dock-actions"), "旧的 5 按钮行 .caldav-dock-actions 应已移除");
+// 「分类筛选」文字按钮升级为「筛选」图标按钮
+assert.ok(!dockEl.querySelector(".caldav-dock-filter-btn"), "「分类筛选」文字按钮应已移除");
+const filterBtn = dockEl.querySelector('.caldav-dock-tools [data-dock="category"]');
+assert.ok(filterBtn, "工具行应有「筛选」按钮（data-dock=category）");
+assert.match(filterBtn.getAttribute("title") || "", /筛选/, "筛选按钮应有 title");
+assert.match(filterBtn.getAttribute("aria-label") || "", /筛选/, "筛选按钮应有 aria-label");
+assert.ok(filterBtn.querySelector("svg"), "筛选按钮应为图标按钮");
+assert.ok(dockEl.querySelector(".caldav-dock-tools .caldav-dock-filter-wrap"), "日期范围下拉应上移到工具行");
+// 筛选弹层：按优先级 + 选择分类 两块（与 Obsidian 一致）。弹层内容是**点开时**才渲染的，
+// 这里先点一下「筛选」按钮展开（与用户实际操作一致）。
+click(filterBtn);
+assert.strictEqual(dockEl.querySelectorAll("[data-prio-key]").length, 5, "优先级应有 1 全部 + 4 档共 5 项");
+assert.ok(dockEl.querySelector('[data-prio-key="0"]'), "优先级应有「全部」项");
+assert.strictEqual(dockEl.querySelectorAll("[data-cat-list] .caldav-dock-cat-item").length >= 1, true, "分类区应有选项");
+assert.strictEqual(dockEl.querySelectorAll("[data-pop='category'] .caldav-dock-cat-head").length, 2, "筛选弹层应有「按优先级」「选择分类」两个区块标题");
 // 筛选下拉必须是自定义控件：原生 <select> 的弹出列表由系统绘制，选中色永远是系统高亮色，
 // 无法随主题变化（option:hover / :checked 会被浏览器忽略）。
 assert.ok(!dockEl.querySelector("select[data-dock='filter']"), "筛选下拉不应再用原生 select");
@@ -75,7 +93,9 @@ assert.strictEqual(reg.lastOpenTab.custom.id, "siyuan-plugin-caldav-synccaldav-s
 // Dock 下方最近任务/事件列表区
 assert.ok(dockEl.querySelector(".caldav-dock-list"), "Dock 应显示最近任务/事件列表区");
 assert.ok(dockEl.querySelector("[data-dock='filter']"), "Dock 应有筛选下拉");
-assert.ok(dockEl.querySelector("[data-dock='search']"), "Dock 应有搜索框");
+// 搜索框已于 2026-10-09 移除（雄哥要求：Dock 只显示少量条目，搜索入口挪到任务视图），
+// 反向断言防它被顺手加回来 —— 见 test/task-search.test.mjs 的完整契约。
+assert.ok(!dockEl.querySelector("[data-dock='search']"), "Dock 不该再有搜索框（已挪到任务视图）");
 assert.ok(dockEl.querySelector(".caldav-dock-items"), "Dock 应有任务列表容器");
 assert.ok(dockEl.querySelectorAll(".caldav-dock-item").length >= 1, "默认「未来七天」筛选下 Dock 应渲染任务卡片");
 assert.ok(dockEl.querySelector(".caldav-dock-tag"), "任务卡片应包含标签");
@@ -153,8 +173,10 @@ assert.ok(catPop.hidden, "确定后分类弹窗应收起");
 
 // ---- 改了「服务器地址」却没重新发现日历：同步必须报错，而不是静默连旧地址「成功」----
 // （用户实测反馈：地址填错保存后点刷新，Dock 仍显示同步成功）
+// 2026-10-10 起 Dock 工具行里的「刷新」按钮已移除，同步入口改为点击页脚状态条
+// （.caldav-dock-status，仍是 [data-action="sync"]）。
 plugin.store.settings.serverUrl = "http://changed-host:9999/";
-click(dockEl.querySelector('.caldav-dock-act[data-action="sync"]'));
+click(dockEl.querySelector('.caldav-dock-status[data-action="sync"]'));
 // 同步是异步的，等状态栏从「同步中…」落定（轮询比固定 sleep 稳）
 const dockStatus = dockEl.querySelector(".caldav-dock-status");
 for (let i = 0; i < 50 && /同步中/.test(dockStatus.textContent || ""); i++) {
@@ -175,22 +197,13 @@ plugin.store.settings.serverUrl = "http://127.0.0.1:5232/";
 plugin.store.lastError = undefined;
 
 // ---- 新建默认开始时间：落在当前时间的「下一个整点」，不再是固定 9:00 ----
+// 2026-10-10 起 Dock 里的「新建」按钮已移除（主窗口工具栏已有「+日程 / +待办」），
+// 因此这条测试改在**主面板工具栏**的 new-event 按钮上验（见下方页签初始化之后）。
 const nextHourHH = (offset) => {
   const d = new Date();
   d.setHours(d.getHours() + 1 + offset, 0, 0, 0);
   return `${String(d.getHours()).padStart(2, "0")}:00`;
 };
-click(dockEl.querySelector('[data-toggle="add"]'));
-click(dockEl.querySelector('[data-action="add-event"]'));
-const newStartInput = document.querySelector('[data-f="startTime"]');
-assert.ok(newStartInput, "点击「新增事件」应打开编辑弹窗");
-assert.strictEqual(newStartInput.value, nextHourHH(0), "新建日程的开始时间应为当前时间的下一个整点");
-assert.strictEqual(
-  document.querySelector('[data-f="endTime"]').value,
-  nextHourHH(1),
-  "新建日程的结束时间应为开始时间 + 1 小时"
-);
-document.querySelectorAll(".caldav-editor").forEach((e) => e.remove());
 
 // ---- Dock「日历视图」按钮 → 在主窗口打开页签 ----
 click(dockEl.querySelector('[data-action="cal-view"]'));
@@ -213,6 +226,23 @@ assert.strictEqual(tabEl.querySelectorAll(".caldav-seg-btn").length, 4, "应有 
 assert.strictEqual(tabEl.querySelectorAll(".caldav-cal-item").length, 2, "页签日历筛选应包含 2 个日历");
 // 今日单元格应唯一标记（样式靠 .is-today 加深底色与描边）
 assert.strictEqual(tabEl.querySelectorAll(".cal-month-cell.is-today").length, 1, "月视图应恰好一个今日单元格");
+
+// ---- 新建默认开始时间：落在当前时间的「下一个整点」，不再是固定 9:00 ----
+// 走主面板工具栏的「+日程」按钮（Dock 的「新建」已移除）。
+click(tabEl.querySelector('[data-action="new-event"]'));
+const newStartInput = document.querySelector('[data-f="startTime"]');
+assert.ok(newStartInput, "点击主面板「日程」应打开编辑弹窗");
+assert.strictEqual(newStartInput.value, nextHourHH(0), "新建日程的开始时间应为当前时间的下一个整点");
+assert.strictEqual(
+  document.querySelector('[data-f="endTime"]').value,
+  nextHourHH(1),
+  "新建日程的结束时间应为开始时间 + 1 小时"
+);
+assert.ok(
+  !document.querySelector('.caldav-editor-foot [data-action="delete"]'),
+  "新建弹窗不应有删除按钮"
+);
+document.querySelectorAll(".caldav-editor").forEach((e) => e.remove());
 
 // 待办在日历上按「到期日」落位：跨日待办（开始今天/到期明天）不应落在今天
 const cellsWithCross = [...tabEl.querySelectorAll(".cal-month-cell")].filter((c) =>
@@ -498,50 +528,35 @@ click(document.querySelector('[data-action="cancel"]'));
 await settle();
 assert.ok(!document.querySelector(".caldav-editor"), "弹窗应关闭");
 
-// ---- Dock 排序下拉：7 种排序选项 + active 标记 ----
-// 先重置分类筛选为「所有分类」，避免此前步骤留下的筛选导致列表为空、断言失真
+// ---- Dock 排序下拉已移除（2026-10-10，雄哥要求）----
+// 原来这里有 7 种排序 + 高亮 + 排序正确性的断言。现在 Dock 固定按时间轴排序，
+// 反向断言防它被加回来。
+assert.strictEqual(dockEl.querySelectorAll('[data-action^="sort-"]').length, 0, "Dock 不应再有排序选项");
+
+// ---- Dock 筛选面板：优先级 + 分类，且执行「确定」后生效 ----
+// 打开筛选面板（工具栏「筛选」图标按钮）
 click(dockEl.querySelector("[data-dock='category']"));
-click(dockEl.querySelector("[data-cat-key='__all__'] input"));
-click(dockEl.querySelector("[data-cat-action='ok']"));
-for (const m of ["priority", "start", "end", "completed", "created", "category", "title"]) {
-  assert.ok(dockEl.querySelector(`[data-action="sort-${m}"]`), `排序下拉应含 sort-${m} 选项`);
-}
-click(dockEl.querySelector('[data-action="sort-end"]'));
-assert.ok(dockEl.querySelector('[data-action="sort-end"]').classList.contains("is-active"), "结束时间排序应高亮");
-click(dockEl.querySelector('[data-action="sort-start"]'));
-assert.ok(dockEl.querySelector('[data-action="sort-start"]').classList.contains("is-active"), "开始时间排序应高亮");
+const prioPop = dockEl.querySelector("[data-pop='category']");
+assert.ok(prioPop && !prioPop.hidden, "点击「筛选」应展开筛选面板");
+// 先选「全部」优先级 + 「所有分类」，重置为不过滤
+click(prioPop.querySelector('[data-prio-key="0"] input'));
+click(prioPop.querySelector("[data-cat-key='__all__'] input"));
+click(prioPop.querySelector("[data-cat-action='ok']"));
+assert.ok(prioPop.hidden, "确定后筛选面板应收起");
+// 若此前步骤留了筛选，重置后列表应恢复
+assert.ok(dockEl.querySelectorAll(".caldav-dock-item").length >= 1, "清空筛选后列表应正常渲染");
 
-// 按标题排序：列表条目应按 summary 升序排列
-click(dockEl.querySelector('[data-action="sort-title"]'));
-assert.ok(dockEl.querySelector('[data-action="sort-title"]').classList.contains("is-active"), "标题排序应高亮");
-{
-  const titles = Array.from(dockEl.querySelectorAll(".caldav-dock-item-title")).map((e) => e.textContent);
-  // 与实现一致：小写后按码元比较
-  const sorted = [...titles].sort((a, b) => {
-    const la = a.toLowerCase(), lb = b.toLowerCase();
-    return la < lb ? -1 : la > lb ? 1 : 0;
-  });
-  assert.deepStrictEqual(titles, sorted, "按标题排序后条目应按标题升序排列");
-}
+// ---- Dock 新增下拉已移除（2026-10-10）----
+// 新建入口改到主面板工具栏（见上方 new-event 测试）。Dock 里不应再有「新建」下拉。
+assert.strictEqual(dockEl.querySelectorAll('[data-toggle="add"]').length, 0, "Dock 不应再有「新建」下拉");
 
-// 按优先级排序：Dock 列表应正常渲染（无优先级条目视为最低，并列回退开始时间）
-click(dockEl.querySelector('[data-action="sort-priority"]'));
-assert.ok(dockEl.querySelector('[data-action="sort-priority"]').classList.contains("is-active"), "优先级排序应高亮");
-assert.ok(dockEl.querySelectorAll(".caldav-dock-item").length >= 1, "优先级排序下列表应正常渲染");
-click(dockEl.querySelector('[data-action="sort-start"]'));
-
-// ---- Dock 新增下拉：新增事件弹出编辑框 ----
-click(dockEl.querySelector('[data-toggle="add"]'));
-assert.ok(!dockEl.querySelector('[data-pop="add"]').hidden, "点击「新增」应展开下拉");
-click(dockEl.querySelector('[data-action="add-event"]'));
-assert.ok(document.querySelector(".caldav-editor"), "新增事件应打开编辑弹窗");
-assert.ok(
-  !document.querySelector('.caldav-editor-foot [data-action="delete"]'),
-  "新建弹窗不应有删除按钮"
+// ---- Dock 刷新按钮已移除（2026-10-10）----
+// 同步入口改为主面板工具栏的 sync-now 与页脚状态条。Dock 工具行里不应再有刷新图标。
+assert.strictEqual(
+  dockEl.querySelectorAll('.caldav-dock-tools [data-action="sync"]').length,
+  0,
+  "Dock 工具行不应再有「刷新」按钮"
 );
-click(document.querySelector('[data-action="cancel"]'));
-await settle();
-assert.ok(!document.querySelector(".caldav-editor"), "弹窗应关闭");
 
 // ---- 页签已打开时，Dock「日历视图」应直接切回日历（不重复渲染） ----
 click(dockEl.querySelector('[data-action="cal-view"]'));
@@ -1031,13 +1046,20 @@ assert.match(
 );
 assert.match(
   builtCss,
-  /\.caldav-dock-actions\s*\{[^}]*display:\s*grid/,
-  "Dock 按钮行必须用 grid 等分：flex:1 下「新增/排序」外面的 .caldav-dock-menu 不受按钮 max-width 约束，会吃掉剩余宽度，后三个按钮被挤到行尾"
+  /\.caldav-dock-tools\s*\{[^}]*display:\s*grid/,
+  "Dock 工具行必须用 grid 定位：flex 下日期范围下拉框会把剩余宽度吃光，后三个图标按钮被挤到行尾"
 );
-for (const vb of ["1.5 1.5 21 21", "4.4 4.4 15.2 15.2", "2.2 2.2 19.6 19.6"]) {
-  assert.ok(
-    builtJs.includes(vb),
-    `Dock 图标应使用按图形收紧的 viewBox「${vb}」（退回 0 0 24 24 会让图形四周留白、视觉变小）`
-  );
-}
-console.log("[loader] 模拟思源加载链路全部通过（Dock 一行5按钮/下拉 + 年视图 + 分段切换 + 排序 + 编辑弹窗）");
+// 工具行四列：日期范围（1.7fr）+ 日历视图 / 任务视图 / 筛选（各 1fr）
+assert.match(
+  builtCss,
+  /\.caldav-dock-tools\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.7fr\)\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/,
+  "Dock 工具行应为「日期范围 1.7fr + 三个图标按钮各 1fr」四列等距布局"
+);
+// 注：plusThin / refreshThin 两个图标随「新建」「刷新」按钮一起从 Dock 移除后
+// 已被摇树掉，不再断言；此处只钉仍在用的「日历视图 / 任务视图 / 筛选」三个 Dock 图标
+// 的 viewBox（"1.5 1.5 21 21"）。新增的 filter 图标也用同一套收紧策略。
+assert.ok(
+  builtJs.includes("1.5 1.5 21 21"),
+  "Dock 图标应使用按图形收紧的 viewBox「1.5 1.5 21 21」（退回 0 0 24 24 会让图形四周留白、视觉变小）"
+);
+console.log("[loader] 模拟思源加载链路全部通过（Dock 工具行四操作点 + 下拉 + 年视图 + 分段切换 + 筛选面板 + 编辑弹窗）");

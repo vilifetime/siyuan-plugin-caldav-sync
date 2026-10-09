@@ -51,8 +51,16 @@ document.body.appendChild(dockEl);
 const dockCustom = { element: dockEl, data: { key: "dock" } };
 globalThis.__syRegistrations.dock[0].init.call(dockCustom, dockCustom);
 
-click(dockEl.querySelector('[data-toggle="add"]'));
-click(dockEl.querySelector('[data-action="add-event"]'));
+// 打开编辑弹窗取真实标记。2026-10-10 起 Dock 的「新建」按钮已移除，
+// 改走主面板工具栏的「+日程」按钮 —— 先打开主窗口页签，再点它。
+// Dock init 后是**延迟**打开默认页签的（见 loader.test 的 450ms 等待），这里同样稍等。
+await new Promise((r) => setTimeout(r, 450));
+assert.ok(globalThis.__syRegistrations.lastOpenTab, "Dock 初始化后应默认打开页签");
+const tabEl = document.createElement("div");
+document.body.appendChild(tabEl);
+const tabCustom = { element: tabEl, data: globalThis.__syRegistrations.lastOpenTab.custom.data };
+globalThis.__syRegistrations.tab[0].init.call(tabCustom, tabCustom);
+click(tabEl.querySelector('[data-action="new-event"]'));
 const editorEl = document.querySelector(".caldav-editor");
 assert.ok(editorEl, "应能打开编辑弹窗以取得真实标记");
 const editorHtml = editorEl.outerHTML;

@@ -743,9 +743,6 @@ export interface DockPanelOpts {
   /** 返回 Promise 才能被 .finally/.catch 链（写成 () => unknown 会在调用处报 TS2571） */
   onSync: () => Promise<unknown>;
   onSettings: () => void;
-  onAddEvent: () => void;
-  onAddTask: () => void;
-  onSort: (mode: SortMode) => void;
   onOpenEditor: (item: CalItem) => void;
   onToggleDone: (item: CalItem) => void | Promise<void>;
 }
@@ -762,46 +759,38 @@ export function renderDockPanel(
   <span class="caldav-brand-title">日历任务管理</span>
   <button class="caldav-brand-set" data-dock-action="settings" title="设置" aria-label="设置">${icons.gear}</button>
 </div>
-<div class="caldav-dock-actions">
-  <div class="caldav-dock-menu" data-menu="add">
-    <button class="caldav-dock-act" data-toggle="add" title="新增事件、任务" aria-label="新增">${icons.plusThin}</button>
-    <div class="caldav-dock-pop" data-pop="add" hidden>
-      <button class="caldav-dock-popitem" data-action="add-event">新增事件</button>
-      <button class="caldav-dock-popitem" data-action="add-task">新增任务</button>
-    </div>
-  </div>
-  <div class="caldav-dock-menu" data-menu="sort">
-    <button class="caldav-dock-act" data-toggle="sort" title="排序" aria-label="排序">${icons.sortDown}</button>
-    <div class="caldav-dock-pop" data-pop="sort" hidden>
-      <button class="caldav-dock-popitem" data-action="sort-priority">按优先级排序</button>
-      <button class="caldav-dock-popitem" data-action="sort-start">按开始时间排序</button>
-      <button class="caldav-dock-popitem" data-action="sort-end">按结束时间排序</button>
-      <button class="caldav-dock-popitem" data-action="sort-completed">按完成时间排序</button>
-      <button class="caldav-dock-popitem" data-action="sort-created">按创建时间排序</button>
-      <button class="caldav-dock-popitem" data-action="sort-category">按分类排序</button>
-      <button class="caldav-dock-popitem" data-action="sort-title">按标题排序</button>
+<!--
+  Dock 工具行（2026-10-10 雄哥改版）：
+  原来两行 —— 上行 5 个图标按钮（新增/排序/日历视图/任务视图/刷新），
+  下行是日期范围下拉框 + 分类筛选。现合并成**一行四个操作点**：
+  ① 日期范围下拉框（时间窗筛选）② 日历视图 ③ 任务视图 ④ 筛选。
+  去掉的三个按钮各自的去处：
+    · 新建 —— 主窗口工具栏已有「+日程 / +待办」，Dock 不需要重复入口；
+    · 刷新 —— 主窗口工具栏已有「立即同步」按钮，页脚状态条也支持点击同步；
+    · 排序 —— 任务视图本身按时间轴分桶、组内已排序，Dock 里用处不大。
+  「分类筛选」升级为「筛选」：点击弹出与 Obsidian 完全一致的筛选面板
+  （按优先级 + 选择分类 两块），入口用漏斗图标。
+-->
+<div class="caldav-dock-tools">
+  <div class="caldav-dock-filter-wrap">
+    <button class="caldav-dock-select" data-dock="filter" data-toggle="dock-filter" type="button">
+      <span class="caldav-dock-select-text"></span>
+    </button>
+    <span class="caldav-dock-select-arrow">${icons.chevron}</span>
+    <div class="caldav-dock-pop caldav-dock-filter-pop" data-pop="dock-filter" hidden>
+      ${DOCK_FILTERS.map(
+        (f) => `<button class="caldav-dock-popitem" data-dock-filter="${f.key}" type="button">${f.label}</button>`
+      ).join("")}
     </div>
   </div>
   <button class="caldav-dock-act" data-action="cal-view" title="日历视图" aria-label="日历">${icons.calCheck}</button>
   <button class="caldav-dock-act" data-action="task-view" title="任务视图" aria-label="任务">${icons.taskList}</button>
-  <button class="caldav-dock-act" data-action="sync" title="刷新（重新同步）" aria-label="刷新">${icons.refreshThin}</button>
-</div>
-<div class="caldav-dock-list">
-  <div class="caldav-dock-list-head">
-    <div class="caldav-dock-filter-wrap">
-      <button class="caldav-dock-select" data-dock="filter" data-toggle="dock-filter" type="button">
-        <span class="caldav-dock-select-text"></span>
-      </button>
-      <span class="caldav-dock-select-arrow">${icons.chevron}</span>
-      <div class="caldav-dock-pop caldav-dock-filter-pop" data-pop="dock-filter" hidden>
-        ${DOCK_FILTERS.map(
-          (f) => `<button class="caldav-dock-popitem" data-dock-filter="${f.key}" type="button">${f.label}</button>`
-        ).join("")}
-      </div>
-    </div>
-    <button class="caldav-dock-filter-btn" data-dock="category">分类筛选</button>
+  <div class="caldav-dock-filter-wrap caldav-dock-filter-wrap--btn">
+    <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）" aria-label="筛选">${icons.filter}</button>
     <div class="caldav-dock-cat-pop" data-pop="category" hidden>
-      <div class="caldav-dock-cat-head">选择分类</div>
+      <div class="caldav-dock-cat-head">按优先级</div>
+      <div class="caldav-dock-prio-list" data-prio-list></div>
+      <div class="caldav-dock-cat-head caldav-dock-cat-head--second">选择分类</div>
       <div class="caldav-dock-cat-list" data-cat-list></div>
       <div class="caldav-dock-cat-foot">
         <button class="caldav-foot-btn caldav-foot-btn--ghost" data-cat-action="cancel">取消</button>
@@ -809,10 +798,8 @@ export function renderDockPanel(
       </div>
     </div>
   </div>
-  <div class="caldav-dock-search-wrap">
-    <span class="caldav-dock-search-icon">${icons.search}</span>
-    <input class="caldav-dock-search" data-dock="search" placeholder="搜索任务..." />
-  </div>
+</div>
+<div class="caldav-dock-list">
   <div class="caldav-dock-items" data-dock="items"></div>
 </div>
 <div class="caldav-dock-foot">
@@ -824,7 +811,6 @@ export function renderDockPanel(
   const errorEl = root.querySelector("[data-dock='error']") as HTMLElement | null;
   const listEl = root.querySelector("[data-dock='items']") as HTMLElement;
   const pops = Array.from(root.querySelectorAll<HTMLElement>(".caldav-dock-pop"));
-  let localSort: SortMode = "start";
   let destroyed = false;
 
   function closePops(): void {
@@ -836,17 +822,11 @@ export function renderDockPanel(
 
   function openCategoryPop(): void {
     pendingCategoryFilter = [...dockCategoryFilter];
+    pendingPriorityFilter = [...dockPriorityFilter];
+    renderPriorityPop();
     renderCategoryPop();
     const catPop = root.querySelector<HTMLElement>("[data-pop='category']");
-    const btn = root.querySelector<HTMLElement>("[data-dock='category']");
-    if (catPop) {
-      catPop.hidden = false;
-      if (btn) {
-        const r = btn.getBoundingClientRect();
-        catPop.style.top = `${r.top}px`;
-        catPop.style.left = `${r.right + 8}px`;
-      }
-    }
+    if (catPop) catPop.hidden = false;
   }
 
   function togglePop(name: string): void {
@@ -857,12 +837,6 @@ export function renderDockPanel(
     if (pop) pop.hidden = false;
     const btn = root.querySelector(`[data-toggle="${name}"]`);
     btn?.classList.add("is-open");
-  }
-
-  function renderSortActive(): void {
-    root.querySelectorAll<HTMLElement>(".caldav-dock-popitem[data-action^='sort-']").forEach((b) => {
-      b.classList.toggle("is-active", b.dataset.action === `sort-${localSort}`);
-    });
   }
 
   /** 同步筛选触发按钮上的文案，并高亮下拉里的当前项 */
@@ -924,8 +898,9 @@ export function renderDockPanel(
   }
 
   let dockFilter: DockFilter = "next7";
-  let dockSearch = "";
   let dockCategoryFilter: string[] = []; // 空 = 所有分类；"__none__" = 无分类
+  /** 优先级筛选：空 = 不按优先级筛；否则是 1/3/5/9 四档的代表值（与 prioMeta 分档一致） */
+  let dockPriorityFilter: number[] = [];
 
   /** 勾选待办时抑制整列表重建：改状态只改这一行的 class/复选框，列表不闪、滚动不复位 */
   let suppressDockRerender = false;
@@ -993,17 +968,6 @@ export function renderDockPanel(
       default:
         return true;
     }
-  }
-
-  function matchesDockSearch(it: CalItem, q: string): boolean {
-    if (!q.trim()) return true;
-    const s = q.trim().toLowerCase();
-    return (
-      it.summary.toLowerCase().includes(s) ||
-      (it.description || "").toLowerCase().includes(s) ||
-      (it.location || "").toLowerCase().includes(s) ||
-      (it.categories || []).some((c) => c.toLowerCase().includes(s))
-    );
   }
 
   function matchesDockCategoryFilter(it: CalItem, filter: string[]): boolean {
@@ -1082,6 +1046,59 @@ export function renderDockPanel(
   }
 
   let pendingCategoryFilter: string[] = [];
+  let pendingPriorityFilter: number[] = [];
+
+  /**
+   * 优先级筛选的档位定义。
+   *
+   * ⚠️ 分档必须与 prioMeta() 完全一致（p<=2 紧急 / p<=4 高 / p<=6 中 / 其余低），
+   * 否则同一条目在「筛选」里归到某档、在标签上却显示另一档。为此这里不硬编码
+   * 2/4/6，而是复用 prioMeta 的判定：给定每档代表值（2/4/6/9），由 prioMeta
+   * 反推文案与 class —— 一处定义，两处使用。
+   * （与 Obsidian 侧 PRIO_TIERS 同构。）
+   */
+  const PRIO_TIERS: Array<{ value: number }> = [{ value: 2 }, { value: 4 }, { value: 6 }, { value: 9 }];
+
+  function renderPriorityPop(): void {
+    const pop = root.querySelector<HTMLElement>("[data-pop='category']");
+    const prioListEl = pop?.querySelector<HTMLElement>("[data-prio-list]");
+    if (!prioListEl) return;
+    const filter = pendingPriorityFilter;
+    const isAll = filter.length === 0;
+
+    const items = [
+      { value: 0, label: "全部", cls: "" },
+      ...PRIO_TIERS.map((tier) => {
+        const m = prioMeta(tier.value);
+        return { value: tier.value, label: m.label, cls: m.cls };
+      })
+    ];
+
+    prioListEl.innerHTML = items
+      .map((item) => {
+        const checked = item.value === 0 ? isAll : filter.includes(item.value);
+        return `<label class="caldav-dock-prio-item ${checked ? "is-active" : ""}" data-prio-key="${item.value}">
+      <input type="checkbox" ${checked ? "checked" : ""}/>
+      ${item.cls ? `<span class="caldav-dock-prio-dot ${item.cls}"></span>` : ""}<span>${escapeHtml(item.label)}</span>
+    </label>`;
+      })
+      .join("");
+  }
+
+  /**
+   * 优先级筛选判定：与 matchesDockCategoryFilter 同一条过滤链（AND）。
+   *
+   * ⚠️ 必须**按档位**判定，不能拿 priority 值直接 `filter.includes(p)`：
+   * priority 是 1~9 连续取值，筛选是 4 档。用 includes 时 p=1 的条目在选
+   * 「紧急」会被漏掉（1 ≠ 代表值 2）。档位判定复用 prioMeta，两处不漂移。
+   */
+  function matchesDockPriorityFilter(it: CalItem, filter: number[]): boolean {
+    if (!filter.length) return true;
+    // 未设优先级视为最低档（与 dockSort 里 `it.priority > 0 ? it.priority : 9` 一致）
+    const p = it.priority && it.priority > 0 ? it.priority : 9;
+    const tier = prioMeta(p).cls;
+    return filter.some((rep) => prioMeta(rep).cls === tier);
+  }
 
   function renderCategoryPop(): void {
     const pop = root.querySelector("[data-pop='category']") as HTMLElement;
@@ -1110,28 +1127,16 @@ export function renderDockPanel(
       .join("");
   }
 
+  /**
+   * Dock 列表排序：固定按时间轴（待办按到期日、事件按开始时间）。
+   *
+   * 2026-10-10 雄哥把「排序」按钮从 Dock 移除 —— 任务视图本身已按时间分桶、
+   * 组内按日期升序并让高优先级在前，Dock 里再选排序方式用处不大。
+   * 因此这里不再读 localSort，只保留原「按开始时间」这一支（口径与时间归属一致）。
+   */
   function dockSort(a: CalItem, b: CalItem): number {
-    const sv = (it: CalItem): string | number => {
-      switch (localSort) {
-        case "end":
-          // 待办以到期日为准；无到期日的排最后
-          return it.kind === "todo" ? it.end || "9999-12-31T23:59:59" : it.end || it.start;
-        case "priority":
-          return it.priority && it.priority > 0 ? it.priority : 9; // 无优先级视为最低
-        case "completed":
-          return it.completedAt || "9999-12-31T23:59:59"; // 未完成排最后
-        case "created":
-          return it.createdAt || it.start;
-        case "category":
-          return (it.categories && it.categories[0]) || "";
-        case "title":
-          return (it.summary || "").toLowerCase();
-        case "start":
-        default:
-          // 待办按到期时间排序（与时间归属口径一致）
-          return dateKeyOf(it) + "T" + (it.kind === "todo" ? it.end || "" : it.start).slice(11);
-      }
-    };
+    const sv = (it: CalItem): string =>
+      it.kind === "todo" ? it.end || "9999-12-31T23:59:59" : it.end || it.start;
     const av = sv(a);
     const bv = sv(b);
     if (av < bv) return -1;
@@ -1148,24 +1153,22 @@ export function renderDockPanel(
    */
   function hiddenNodateCount(): number {
     if (dockFilter === "nodate" || dockFilter === "undone" || dockFilter.startsWith("done")) return 0;
-    const q = dockSearch.toLowerCase().trim();
     return opts.store
       .getAll()
       .filter((it) => it.kind === "todo" && !it.deleted && it.percent !== 100)
       .filter((it) => isEnabledCalendar(it))
       .filter((it) => !dateKeyOf(it))
       .filter((it) => matchesDockCategoryFilter(it, dockCategoryFilter))
-      .filter((it) => matchesDockSearch(it, q)).length;
+      .filter((it) => matchesDockPriorityFilter(it, dockPriorityFilter)).length;
   }
 
   function renderDockList(): void {
     if (destroyed) return;
-    const q = dockSearch.toLowerCase().trim();
     const items = opts.store
       .getAll()
       .filter((it) => matchesDockFilter(it, dockFilter))
       .filter((it) => matchesDockCategoryFilter(it, dockCategoryFilter))
-      .filter((it) => matchesDockSearch(it, q))
+      .filter((it) => matchesDockPriorityFilter(it, dockPriorityFilter))
       .sort(dockSort)
       .slice(0, 50);
 
@@ -1274,14 +1277,9 @@ export function renderDockPanel(
     if (popItem && root.contains(popItem)) {
       const a = popItem.dataset.action!;
       closePops();
-      if (a === "add-event") return opts.onAddEvent();
-      if (a === "add-task") return opts.onAddTask();
-      if (a.startsWith("sort-")) {
-        localSort = a.slice(5) as SortMode;
-        renderSortActive();
-        renderDockList();
-        return opts.onSort(localSort);
-      }
+      // 注：新增 / 排序 / 刷新三个按钮已从 Dock 工具行移除（见模板顶部说明），
+      // 这里不再有 add-* / sort-* 分支。`sync` 仍保留 —— 页脚状态按钮
+      // （.caldav-dock-status）走的就是它，是 Dock 里剩下的唯一同步入口。
       if (a === "cal-view") return opts.onNav("month");
       if (a === "task-view") return opts.onNav("task");
       if (a === "sync") {
@@ -1294,17 +1292,32 @@ export function renderDockPanel(
       }
     }
 
-    // 分类筛选弹层
+    // 筛选弹层：优先级 + 分类
     const catPopEl = root.querySelector<HTMLElement>("[data-pop='category']");
+    const prioItem = t.closest(".caldav-dock-prio-item") as HTMLElement | null;
     const catItem = t.closest(".caldav-dock-cat-item") as HTMLElement | null;
     const catAction = t.closest("[data-cat-action]") as HTMLElement | null;
-    if (catPopEl && !catPopEl.hidden && (catItem || catAction)) {
+    if (catPopEl && !catPopEl.hidden && (prioItem || catItem || catAction)) {
       if (catAction) {
         if (catAction.dataset.catAction === "ok") {
           dockCategoryFilter = pendingCategoryFilter;
+          dockPriorityFilter = pendingPriorityFilter;
           renderDockList();
         }
         closePops();
+        return;
+      }
+      if (prioItem) {
+        const key = Number(prioItem.dataset.prioKey);
+        if (key === 0) {
+          pendingPriorityFilter = [];
+        } else {
+          const set = new Set(pendingPriorityFilter);
+          if (set.has(key)) set.delete(key);
+          else set.add(key);
+          pendingPriorityFilter = Array.from(set);
+        }
+        renderPriorityPop();
         return;
       }
       if (catItem) {
@@ -1348,15 +1361,7 @@ export function renderDockPanel(
   root.addEventListener("click", onRootClick);
 
   // 筛选下拉已改为自定义控件（原生 <select> 的 change 监听随之移除）
-
-  const onRootInput = (ev: Event) => {
-    const target = ev.target as HTMLElement;
-    if (target.dataset.dock === "search") {
-      dockSearch = (target as HTMLInputElement).value;
-      renderDockList();
-    }
-  };
-  root.addEventListener("input", onRootInput);
+  // Dock 搜索框已于 2026-10-09 移除（雄哥要求），原先唯一的 input 监听随之删除。
 
   const onDocClick = (ev: MouseEvent) => {
     const t = ev.target as HTMLElement;
@@ -1376,7 +1381,6 @@ export function renderDockPanel(
     renderDockList();
   });
   renderStatus();
-  renderSortActive();
   syncDockFilterLabel();
   renderDockList();
 
@@ -1385,7 +1389,6 @@ export function renderDockPanel(
     refresh() {
       if (destroyed) return;
       renderStatus();
-      renderSortActive();
       syncDockFilterLabel();
       renderDockList();
     },
@@ -1394,7 +1397,6 @@ export function renderDockPanel(
       // 先摘掉挂在容器自身上的监听：容器可能被复用（移动端 Dock），
       // 漏掉就会叠加处理器，一次点击触发多次（见 onRootClick 处说明）。
       root.removeEventListener("click", onRootClick);
-      root.removeEventListener("input", onRootInput);
       document.removeEventListener("click", onDocClick, true);
       listScrollEl?.removeEventListener("scroll", onScrollClose);
       window.removeEventListener("resize", onScrollClose);

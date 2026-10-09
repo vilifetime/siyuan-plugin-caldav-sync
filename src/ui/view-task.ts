@@ -23,7 +23,8 @@ import { addDays, defaultStartStamp, diffDays, parseLocalStamp, startOfWeek, tod
 import { occurrencesInRange } from "../core/ics";
 import type { CalItem } from "../core/types";
 import { calEventColor } from "../core/types";
-import { calColorOf, escape, keyOfItem, todoDueOccurrences, type ViewArgs } from "./view-common";
+import { calColorOf, escape, keyOfItem, matchesSearchQuery, todoDueOccurrences, type ViewArgs } from "./view-common";
+import { icons } from "./icons";
 
 type FilterKey =
   | "allitems"
@@ -271,6 +272,22 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     else delete viewEl.dataset.collapsedGroups;
   }
 
+  /**
+   * 当前搜索词。
+   *
+   * 存`viewEl.dataset.taskQuery`，与折叠状态同一套路：**每次重渲染都会重建
+   * `viewEl.innerHTML`**，若把搜索词只放局部变量，用户每输入一个字符
+   * 触发一次重渲染后就把词丢了（框被清空、列表也刷回全量）。
+   */
+  function searchQuery(): string {
+    return viewEl.dataset.taskQuery || "";
+  }
+
+  function setSearchQuery(q: string): void {
+    if (q) viewEl.dataset.taskQuery = q;
+    else delete viewEl.dataset.taskQuery;
+  }
+
   /** 单条渲染；抽成函数是为了让「分组列表」与「不分组的扁平列表」共用同一份标记 */
   function itemHtml({ it, due, isEvent, expired }: Row): string {
     const k = keyOfItem(it);
@@ -318,9 +335,15 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
 
   function listHtml(filterKey: FilterKey): string {
     const f = filters.find((x) => x.key === filterKey)!;
-    const list = todos.filter(f.match);
+    // 搜索在筛选**之后**再过一道 —— 顺序反了的话，
+    // 「所有未完成 (17)」这类计数会与列表对不上（计数是按筛选算的，不含搜索）。
+    // 注意传的是 `row.it`：list 里的元素是 Row 包装（{ it, due, isEvent }），不是裸 CalItem。
+    const list = todos.filter(f.match).filter((row) => matchesSearchQuery(row.it, searchQuery()));
     if (!list.length) {
-      return `<div class="cal-task-empty">该筛选下暂无任务</div>`;
+      // 区分「筛选下没东西」与「筛选有、被搜索过滤光了」——
+      // 后者若也报「暂无任务」，用户会以为数据没了。
+      const q = searchQuery();
+      return `<div class="cal-task-empty">${q ? `没有匹配「${escape(q)}」的任务` : "该筛选下暂无任务"}</div>`;
     }
     /**
      * 只返回列表**内层**内容；外层 `.cal-task-list` 由模板提供。
@@ -384,6 +407,18 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   <div class="cal-task-filterbar">
     <select class="cal-task-filter" data-filter title="按条件筛选">${optsHtml}</select>
     <input class="caldav-input cal-task-quick" placeholder="快速添加待办，回车保存（默认今天）…" data-quickadd/>
+    <!--
+      搜索框（2026-10-09 雄哥要求）：原先搜索框在左侧 Dock 里，
+      但Dock 只显示少量条目、在那儿搜等于「搜一个看不见全貌的列表」。
+      挪到任务视图 —— 这里才是完整清单，搜到了立刻看得见。
+      宽度按 2:1 分给快速添加（flex:2）与搜索（flex:1）：
+      快速添加是高频操作、需要能看清标题全文；搜索是「临时过滤」用途。
+    -->
+    <span class="cal-task-searchwrap">
+      <span class="cal-task-search-icon">${icons.search}</span>
+      <input class="caldav-input cal-task-search" placeholder="搜索..." data-task-search
+             value="${escape(searchQuery())}" />
+    </span>
   </div>
   <div class="cal-task-list">${listHtml(current)}</div>
 </div>`;
@@ -420,6 +455,23 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
    * 折后重渲染一律现读 dataset。
    */
   const curFilter = (): FilterKey => (viewEl.dataset.filter || "allincomplete") as FilterKey;
+
+  /**
+   * 搜索框：每输入一个字符就过滤一次列表。
+   *
+   * ⚠️ 只重渲染 `.cal-task-list`，**绝不重渲染 viewEl 整体** ——
+   * 整体重渲染会把输入框连同用户刚敲进去的字一起换掉，
+   * 于是「每打一个字符框就清空一次」，输入根本打不完（这是最直白的坑）。
+   * 同理不用 `viewEl.innerHTML = ...` 重走模板。
+   *
+   * 搜索词写进 dataset 是为了跨重渲染存活（见 searchQuery 处说明）。
+   */
+  const searchInput = viewEl.querySelector<HTMLInputElement>("[data-task-search]");
+  searchInput?.addEventListener("input", () => {
+    setSearchQuery(searchInput.value);
+    const list = viewEl.querySelector<HTMLElement>(".cal-task-list");
+    if (list) list.innerHTML = listHtml(curFilter());
+  });
 
   /**
    * 组头折叠 / 展开。
@@ -469,6 +521,10 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
         })
         .then(() => {
           input.value = "";
+          // 补刷一次列表：新条目可能在当前搜索词下不匹配（用户往往正搜着别的），
+          // 但统计条与下拉计数已经是全量口径，不刷会出现「计数涨了、列表没动」。
+          const list = viewEl.querySelector<HTMLElement>(".cal-task-list");
+          if (list) list.innerHTML = listHtml(curFilter());
         });
     }
   });

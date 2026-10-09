@@ -150,12 +150,13 @@ const isShown = (box) => {
 const visibleLayers = () => layerBoxes().filter(isShown);
 const allLayers = () => layerBoxes().length;
 
-clickIn(orphanEl, '[data-toggle="add"]');
-clickIn(orphanEl, '.caldav-dock-popitem[data-action="add-event"]');
-assert.strictEqual(visibleLayers().length, 1, "从 Dock 新建条目应只开一层（编辑弹窗）");
-
+// 2026-10-10 起 Dock 的「新建」入口已移除，改用「日历视图 / 任务视图」两个入口
+// 验证同一件事（连点入口不叠层）。
 clickIn(orphanEl, '[data-action="cal-view"]');
-assert.strictEqual(visibleLayers().length, 1, "再点「日历视图」应替换掉编辑弹窗，而不是叠成第二层");
+assert.strictEqual(visibleLayers().length, 1, "从 Dock 点「日历视图」应只开一层（全屏面板）");
+
+clickIn(orphanEl, '[data-action="task-view"]');
+assert.strictEqual(visibleLayers().length, 1, "再点「任务视图」应替换掉上一层，而不是叠成第二层");
 await settle(); // 思源销毁弹层是异步的（先淡出、后移除并回调）
 assert.strictEqual(allLayers(), 1, "被替换的层应被真正销毁，不留残壳");
 

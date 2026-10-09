@@ -829,6 +829,9 @@
 
 .cal-task-filterbar {
   display: flex;
+  /* 三列等高对齐：缺 align-items 时 flex 项顶对齐，
+     而「包裹层 + 内层 input」是两级嵌套，不加这句会明显错位。 */
+  align-items: center;
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -850,7 +853,38 @@
 .cal-task-filter:hover { border-color: var(--caldav-accent); }
 .cal-task-filter:focus { outline: none; border-color: var(--caldav-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--caldav-accent) 20%, transparent); }
 
-.cal-task-quick { flex: 1; }
+/* 快速添加占 2 份、搜索占 1 份（2026-10-09 雄哥要求 2:1）。
+   用 flex 基准而不是写死 px —— 面板宽度随窗口变，写死宽度在窄屏会挤爆。 */
+.cal-task-quick { flex: 2 1 0; min-width: 0; }
+
+/* 搜索框：外层包裹层负责「放大镜压在左边」，内层 input 才是真正的输入框。
+   为什么不用 background-image 直接画在 input 上：那会让宿主/主题的
+   background 声明（.caldav-input 已有背景）把它覆盖掉，而 DOM 图标不受影响。
+   padding-left 32px 给图标让位。 */
+.cal-task-searchwrap {
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.cal-task-search-icon {
+  position: absolute;
+  left: 9px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--caldav-text-2);
+  pointer-events: none;
+}
+.cal-task-search-icon svg { width: 14px; height: 14px; }
+/* ⚠️ 必须双类提特异性：.caldav-input 的 padding 简写定义在本文件**更后面**
+   （同特异性下后写者赢），单类 .cal-task-search 写的 padding-left 会被那个
+   简写整体覆盖回去 → 放大镜压在占位文字上（2026-10-10 雄哥截图）。
+   本文件里已有同款前科：.caldav-calfilter-opt 的 padding 吃掉 padding-left。 */
+.caldav-input.cal-task-search {
+  width: 100%;
+  padding-left: 30px;
+}
 
 .cal-task {
   display: flex;
@@ -2736,18 +2770,34 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .caldav-calfilter-note[hidden] { display: none; }
 
-/* ===== Dock：标题 + 一行 5 个按钮 =====
-   用 grid 等分，不要用 flex:1。「新增 / 排序」是包着下拉菜单的
-   .caldav-dock-menu，它不受按钮 max-width 的约束，在 flex 布局下会把剩余
-   宽度全部吃掉，后面三个按钮被挤到行尾 —— 手机上五个按钮疏密不均就是这个
-   原因。grid 的轨道彼此独立，五项天然等宽等距。 */
-.caldav-dock-actions {
+/* ===== Dock 工具行（2026-10-10 改版）=====
+   一行四个操作点：日期范围下拉框 + 日历视图 + 任务视图 + 筛选。
+   用 grid：`minmax(0, 1.7fr) repeat(3, minmax(0, 1fr))`。
+   - 三个图标按钮各占 1fr（等宽、与 .caldav-dock-act 的 38px 高匹配）；
+   - 日期范围下拉框占 1.7fr —— 文字「未来七天」比图标宽，但整体要能跟三个
+     图标按钮挤在同一行，故只多给 0.7 份，空间不够时自身 min-width:0 主动收窄
+     （文本 overflow ellipsis），不会把后三个按钮挤出可视区。
+   grid 轨道彼此独立，四项天然等高等距（历史坑：flex 下下拉框会把剩余宽度吃光）。 */
+.caldav-dock-tools {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(0, 1fr));
+  align-items: stretch;
   gap: 6px;
   margin-top: 8px;
 }
 .caldav-dock-menu { position: relative; display: flex; }
+
+/* 工具行里的日期范围下拉：撑满自己的网格轨道，垂直居中 */
+.caldav-dock-tools > .caldav-dock-filter-wrap {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.caldav-dock-tools .caldav-dock-select {
+  height: 38px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
 
 .caldav-dock-act {
   display: flex;
@@ -2802,13 +2852,17 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .caldav-dock-pop[hidden] { display: none; }
 
-/* 分类筛选弹层：fixed 定位，弹出到 Dock 右侧外部，避免被左侧栏裁剪 */
+/* 筛选弹层：absolute 定位，锚在「筛选」按钮的包裹层上（该层 position:relative）。
+   2026-10-10 改版：原来用 fixed 并在 JS 里算视口坐标（left = r.right + 8），但
+   Dock 宿主容器带 overflow:hidden，fixed 后代会被裁掉 —— 弹层已打开却整块在可视区外，
+   表现为「点筛选没反应」。现改为纯 CSS 定位，JS 只翻 hidden（与 Obsidian 侧一致）。 */
 .caldav-dock-cat-pop {
-  position: fixed;
-  top: 0;
-  left: 0;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
   z-index: 1000;
   width: 260px;
+  max-width: min(260px, calc(100vw - 24px));
   background: var(--d-card);
   border: 1px solid var(--d-border);
   border-radius: 12px;
@@ -2825,6 +2879,48 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   color: var(--d-text);
   padding-bottom: 4px;
   border-bottom: 1px solid var(--d-border);
+}
+/* 第二块标题（「选择分类」）：与上一块（「按优先级」）之间加一条分隔线，
+   让它看起来是同一弹层的第二个分区，而不是紧贴着优先级列表。 */
+.caldav-dock-cat-head--second {
+  margin-top: 2px;
+}
+
+/* 「按优先级」选项：与分类选项同款药丸，但更紧凑、可换行排列 */
+.caldav-dock-prio-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.caldav-dock-prio-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--d-border);
+  border-radius: 8px;
+  background: var(--d-input);
+  color: var(--d-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.caldav-dock-prio-item:hover { background: var(--d-input-hover); border-color: color-mix(in srgb, var(--d-accent) 45%, var(--d-border)); }
+.caldav-dock-prio-item.is-active { border-color: var(--d-accent); background: color-mix(in srgb, var(--d-accent) 10%, var(--d-card)); color: var(--d-accent); }
+.caldav-dock-prio-item input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--d-accent);
+  margin: 0;
+  cursor: pointer;
+}
+/* 优先级色点：与条目标签里的 prio-* 同色（紧急红 / 高橙 / 中紫 / 低灰） */
+.caldav-dock-prio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
 }
 .caldav-dock-cat-list {
   display: flex;
@@ -2893,8 +2989,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-dock-popitem.is-active { color: var(--caldav-accent); font-weight: 600; }
 
 /* ===== Dock：最近任务/事件列表 ===== */
-.caldav-dock-list {
-  /* 跟随思源主题变量，深浅色自动适配 */
+/* 主题变量提到 .caldav-dock 上：筛选弹层现在挂在 .caldav-dock-tools（不在
+   .caldav-dock-list 里），若变量只在 list 上定义，弹层里所有 var(--d-*) 都会
+   落空 —— 弹层边框退化成 currentColor、选中底色消失。放上一层两边都能取到。 */
+.caldav-dock {
   --d-page: var(--b3-theme-background, #fff);
   --d-card: var(--b3-theme-surface, var(--b3-theme-background, #fff));
   --d-input: var(--b3-theme-background-light, var(--b3-theme-surface, #f6f8fa));
@@ -2904,7 +3002,8 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   --d-text-2: var(--b3-theme-on-surface, #646a73);
   --d-accent: var(--b3-theme-primary, #3575f0);
   --d-danger: var(--b3-theme-error, #d23f31);
-
+}
+.caldav-dock-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -2968,16 +3067,12 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   scrollbar-color: color-mix(in srgb, var(--b3-theme-on-surface, #646a73) 45%, transparent) transparent;
 }
 
-/* 列表头：筛选 + 分类 */
-.caldav-dock-list-head {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+/* 筛选下拉的包裹层：position:relative 供弹层锚定；flex:1 让它在旧版横排里
+   占满剩余宽（工具行里由 grid 轨道决定宽度，见 .caldav-dock-tools）。 */
 .caldav-dock-filter-wrap {
   position: relative;
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
 }
@@ -3028,55 +3123,8 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   overflow-y: auto;
 }
 
-.caldav-dock-filter-btn {
-  flex: 0 0 auto;
-  padding: 7px 10px;
-  border: 1px solid var(--d-border);
-  border-radius: 10px;
-  background: var(--d-card);
-  color: var(--d-accent);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.caldav-dock-filter-btn:hover {
-  border-color: var(--d-accent);
-  background: color-mix(in srgb, var(--d-accent) 8%, var(--d-card));
-}
-
-/* 搜索框 */
-.caldav-dock-search-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.caldav-dock-search-icon {
-  position: absolute;
-  left: 10px;
-  display: inline-flex;
-  align-items: center;
-  color: var(--d-text-2);
-  pointer-events: none;
-}
-.caldav-dock-search-icon svg { width: 14px; height: 14px; }
-.caldav-dock-search {
-  width: 100%;
-  border: 1px solid var(--d-border);
-  border-radius: 10px;
-  background: var(--d-input);
-  color: var(--d-text);
-  padding: 7px 11px 7px 32px;
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-}
-.caldav-dock-search::placeholder { color: var(--d-text-2); opacity: 0.7; }
-.caldav-dock-search:hover { background: var(--d-input-hover); border-color: color-mix(in srgb, var(--d-accent) 45%, var(--d-border)); }
-.caldav-dock-search:focus {
-  border-color: var(--d-accent);
-  background: var(--d-card);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--d-accent) 16%, transparent);
-}
+/* 注：「分类筛选」文字按钮（.caldav-dock-filter-btn）已于 2026-10-10 移除，
+   改为工具行里的「筛选」图标按钮（复用 .caldav-dock-act）。对应的 CSS 一并删除。 */
 
 /* 列表 */
 .caldav-dock-items {
@@ -3510,9 +3558,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 
 /* Dock 工具栏在触摸端整体放大一档：命中区更友好，宽高比也更协调 */
-.caldav-touch .caldav-dock-actions { gap: 8px; }
+.caldav-touch .caldav-dock-tools { gap: 8px; }
 .caldav-touch .caldav-dock-act { height: 42px; }
 .caldav-touch .caldav-dock-act svg { width: 22px; height: 22px; }
+.caldav-touch .caldav-dock-tools .caldav-dock-select { height: 42px; }
 
 /* ---- 触摸端：日期 / 时间挤进一行（含两个清除按钮） ----
    手机弹层里「开始 / 结束」行的可用宽只有 vw-60（编辑器 form 左右各 14 + 卡片左右各 16）。

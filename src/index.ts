@@ -284,13 +284,6 @@ export default class CalDavPlugin extends Plugin {
       onNav: (m) => this.openPanelTab(m),
       onSync: () => this.runSync(false),
       onSettings: () => this.openSetting(),
-      // 只给日期，具体时刻由编辑弹窗按「下一个整点」补（见 core/date.defaultStartStamp）
-      onAddEvent: () => openEditor(this.mainCtx, { kind: "event", start: this.mainCtx.cursor }),
-      onAddTask: () => openEditor(this.mainCtx, { kind: "todo" }),
-      onSort: (mode) => {
-        this.mainCtx.sortMode = mode;
-        this.tabPanel?.refresh();
-      },
       onOpenEditor: (item) => openEditor(this.mainCtx, { item }),
       onToggleDone: (item) => toggleTodoDone(this.mainCtx, item)
     });

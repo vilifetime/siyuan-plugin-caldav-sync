@@ -6,6 +6,7 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { setupBrowserDom, loadBuiltPlugin, seedStore, settle } from "./helpers.mjs";
 
 setupBrowserDom();
@@ -24,6 +25,11 @@ assert.ok(reg.icons[0].includes("iconCalDavSync"), "应注册图标");
 assert.strictEqual(reg.commands.length, 4, "应注册 4 个命令");
 
 const click = (el) => el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+// 按钮等高是**纯 CSS** 的事，jsdom 不做布局，只能读源码断言
+//（真正验几何的活儿交给 test/verify-toolbar-btns.mjs 的真浏览器测量）。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const css = fs.readFileSync(path.join(ROOT, "src", "index.css"), "utf8");
 
 // ---- Dock：标题 + 一行 5 按钮 ----
 seedStore(plugin);
@@ -227,7 +233,7 @@ assert.ok(tabEl.querySelector(".cal-month-grid"), "点击月份标题应跳转�
 // ---- 工具栏「视图切换」按钮：日历视图 ↔ 任务视图 互切 ----
 const viewToggle = tabEl.querySelector('[data-action="toggle-view"]');
 assert.ok(viewToggle, "工具栏应有视图切换按钮");
-// 工具栏右侧按钮顺序：新建日程 / 新建待办 / 日历筛选 / 视图切换
+// 工具栏右侧按钮顺序：新建日程 / 新建待办 / 手动同步 / 日历筛选 / 视图切换
 const rightGroup = tabEl.querySelector(".caldav-toolbar-right");
 assert.strictEqual(
   rightGroup.lastElementChild,
@@ -238,9 +244,24 @@ assert.deepStrictEqual(
   Array.from(rightGroup.children).map(
     (n) => n.dataset.action || n.querySelector("[data-action]")?.dataset.action
   ),
-  ["new-event", "new-todo", "calfilter", "toggle-view"],
-  "工具栏右侧按钮顺序应为：新建日程 / 新建待办 / 日历筛选 / 视图切换"
+  ["new-event", "new-todo", "sync-now", "calfilter", "toggle-view"],
+  "工具栏右侧按钮顺序应为：新建日程 / 新建待办 / 手动同步 / 日历筛选 / 视图切换"
 );
+// 手动同步按钮：必须在「新建」右边紧邻（用户要求加在新建按钮右边），
+// 且图标按钮与文字按钮共用同一个高度变量，否则同一排会高低不齐。
+const syncBtn = tabEl.querySelector('[data-action="sync-now"]');
+assert.ok(syncBtn, "工具栏应有手动同步按钮");
+assert.strictEqual(
+  syncBtn.previousElementSibling?.dataset.action,
+  "new-todo",
+  "同步按钮应紧跟在「新建待办」右边"
+);
+assert.ok(/height:\s*var\(--caldav-btn-h\)/.test(css), "图标按钮必须用 --caldav-btn-h 定高");
+assert.ok(
+  /\.caldav-btn\s*\{[^}]*height:\s*var\(--caldav-btn-h\)/.test(css),
+  "文字按钮必须用同一个 --caldav-btn-h（否则与图标按钮不等高）"
+);
+assert.ok(/box-sizing:\s*border-box/.test(css), "按钮必须 border-box（否则 34px + 边框 = 36px）");
 assert.ok(
   !tabEl.classList.contains("caldav-touch") && !dockEl.classList.contains("caldav-touch"),
   "桌面端不应带 caldav-touch（把窗口拖窄也应保留条目时间）"

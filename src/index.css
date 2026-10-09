@@ -2,6 +2,8 @@
 
 .caldav-root {
   --caldav-accent: var(--b3-theme-primary, #3575f0);
+  /* 工具栏控件的统一高度（文字按钮与图标按钮共用）。 */
+  --caldav-btn-h: 34px;
   --caldav-bg: var(--b3-theme-background, #fff);
   --caldav-bg-2: var(--b3-theme-background-light, #f6f8fa);
   --caldav-bg-3: var(--b3-theme-surface, #eef1f5);
@@ -210,6 +212,7 @@
 
 .caldav-toolbar-right {
   display: flex;
+  align-items: center;
   gap: 6px;
 }
 
@@ -219,7 +222,12 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 7px 14px;
+  box-sizing: border-box;
+  /* ⚠️ 高度必须**显式**写死，不能只靠 padding 撑 —— 宿主（思源 base.css）
+   * 给 button 定了 line-height/height，不写 height 时同一排按钮会差几像素，
+   * 且都是顶对齐，看上去就是「没居中」（2026-10-09 雄哥截图）。 */
+  height: var(--caldav-btn-h);
+  padding: 0 14px;
   border: 1px solid var(--caldav-border);
   border-radius: 8px;
   background: var(--caldav-bg);
@@ -1129,9 +1137,12 @@
   border-color: var(--caldav-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--caldav-accent) 14%, transparent);
 }
+/* 与 .caldav-btn 共用同一个高度变量，两者才会严格等高。
+   box-sizing: border-box —— 不加则 34px + 上下边框 = 36px，又会比文字按钮高 2px。 */
 .caldav-icon-btn {
+  box-sizing: border-box;
   width: 34px;
-  height: 34px;
+  height: var(--caldav-btn-h);
   flex: 0 0 34px;
   display: inline-flex;
   align-items: center;
@@ -1149,6 +1160,30 @@
   transform: translateY(-1px);
 }
 .caldav-icon-btn svg { width: 16px; height: 16px; }
+
+/* 工具栏这一排不加 hover 上浮：一排按钮同时被鼠标扫过时，
+   唯一浮起来的那个会显得「没对齐」（2026-10-09 雄哥反馈的就是这一眼）。 */
+.caldav-toolbar .caldav-icon-btn:hover,
+.caldav-toolbar .caldav-btn:hover {
+  transform: none;
+}
+
+/* 同步按钮：点下去转一圈 + 禁用，给「正在同步」一个明确反馈。 */
+.caldav-icon-btn.is-syncing svg { animation: caldav-btn-spin 0.9s linear infinite; }
+.caldav-icon-btn.is-syncing,
+.caldav-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.caldav-icon-btn.is-syncing:hover,
+.caldav-icon-btn:disabled:hover {
+  transform: none;
+  border-color: var(--caldav-border);
+  background: var(--caldav-bg);
+}
+@keyframes caldav-btn-spin {
+  to { transform: rotate(360deg); }
+}
 
 /* Tabs */
 .caldav-tabs {
@@ -2632,7 +2667,9 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-app.is-task .caldav-toolbar-center { display: none; }
 
 /* 日历筛选浮层（右上角） */
-.caldav-calfilter-wrap { position: relative; }
+/* 包裹层自身是 flex 项，不设 align 的话里面的按钮会被拉高/顶对齐，
+   与旁边直排的按钮对不齐。 */
+.caldav-calfilter-wrap { position: relative; display: inline-flex; align-items: center; }
 .caldav-calfilter-pop {
   position: absolute;
   top: 34px;
@@ -3585,7 +3622,8 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 
 @media (max-width: 480px) {
-  .caldav-toolbar-right .caldav-btn { padding: 7px 10px; }
+  /* 只收横向内边距：竖向由固定高度 + flex 居中管，写回 7px 会把文字挤出中心 */
+  .caldav-toolbar-right .caldav-btn { padding: 0 10px; }
   .cal-month-weeklabel { font-size: 10px; }
 }
 

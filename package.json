@@ -1,13 +1,13 @@
 {
   "name": "siyuan-plugin-caldav-sync",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Two-way sync calendar events and todos with CalDAV servers (Radicale / Nextcloud / Baikal). Month/Week/Day calendar views, task view, editor and daily note integration.",
   "repository": "https://github.com/vilifetime/siyuan-plugin-caldav-sync",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode dev",
     "build": "vite build && node scripts/make-package.mjs",
-    "test": "npm run test:secret && npm run test:core && npm run test:reconcile && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task",
+    "test": "npm run test:secret && npm run test:core && npm run test:reconcile && npm run test:synctoken && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task",
     "test:storage": "node test/storage.test.mjs",
     "test:loader": "node test/loader.test.mjs",
     "test:reminder": "node test/reminder.test.mjs",
@@ -19,6 +19,7 @@
     "test:ui": "node test/ui.test.mjs",
     "test:core": "node test/core.test.mjs",
     "test:reconcile": "node test/reconcile.test.mjs",
+    "test:synctoken": "node test/sync-token.test.mjs",
     "test:secret": "node test/secret.test.mjs",
     "test:e2e": "node test/e2e.test.mjs",
     "e2e:radicale": "node scripts/radicale.mjs"

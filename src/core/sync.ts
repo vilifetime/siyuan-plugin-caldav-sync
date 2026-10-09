@@ -158,6 +158,21 @@ export class SyncEngine {
         try {
           let items: CalItem[] = [];
           let deletedHrefs: string[] = [];
+          // ⚠️ sync-token 的语义是「服务端截至该 token 时刻的全量，我本地已经全都有了」。
+          // 本地若是空的，这个前提就不成立 ⇒ 增量拉取会「正确地」返回 0 条，
+          // 于是界面一片空白、日志无报错，而且**不会自愈**（只要服务端没再变动，
+          // 那个 token 就一直有效、一直返回 0 条）。reconcile 也兜不住——
+          // 它只清理「本地有 href 而服务端没有」的幽灵条目，本地空时无事可做。
+          //
+          // 触发场景（不止「从备份恢复」一种）：
+          //   · 数据文件被云同步覆盖成旧版本 / 被手删
+          //   · 换设备、换工作区后本地条目为空但token 还在
+          //   · 多端并用同一台服务器时，另一端的进度本端无从知晓
+          // 所以做成**通用护栏**而不是只在某条路径清 token：以服务端为准全量拉一次，
+          // 拿到条目后 token 会重新写回（tryGetSyncToken），下一轮就恢复增量。
+          if (cal.syncToken && this.store.isCalendarLocallyEmpty(cal.url)) {
+            cal.syncToken = undefined;
+          }
           if (cal.syncToken) {
             try {
               const r = await syncCollection(cal, this.channel(), this.auth(), cal.syncToken);

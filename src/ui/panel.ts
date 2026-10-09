@@ -38,6 +38,11 @@ export interface PanelCtx {
   insertTodayToDiary: (range?: DiaryRange, target?: DiaryTarget) => Promise<string>;
   /** 发送一条测试提醒（由入口注入，用于自检提醒投递通道） */
   testReminder?: () => Promise<string>;
+  /**
+   * 手动触发一次同步（工具栏同步按钮），由入口注入。
+   * 面板只负责触发，状态提示/重绘/重排提醒都在入口那侧统一做。
+   */
+  syncNow?: () => Promise<unknown>;
   /** 提醒状态摘要（由入口注入，显示已排程条数与带提醒时间的条目数） */
   reminderStatus?: () => string;
   /**
@@ -87,6 +92,13 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       <div class="caldav-toolbar-right">
         <button class="caldav-btn caldav-btn-primary" data-action="new-event">${icons.plus} 日程</button>
         <button class="caldav-btn" data-action="new-todo">${icons.plus} 待办</button>
+        <!--
+          手动同步按钮（2026-10-09 雄哥要求，与 Obsidian 侧对齐）：
+          原来只有 Dock 里的刷新键与命令面板里有同步入口，主面板工具栏没有 ——
+          想立刻拉一次得先切到 Dock。图标用icons.sync。
+        -->
+        <button class="caldav-icon-btn" data-action="sync-now" title="立即同步 CalDAV"
+                aria-label="立即同步 CalDAV">${icons.sync}</button>
         <div class="caldav-calfilter-wrap">
           <button class="caldav-icon-btn" data-action="calfilter" title="日历筛选">${icons.layers}</button>
           <div class="caldav-calfilter-pop" data-pop="calfilter" hidden>
@@ -158,6 +170,9 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   const ctxMenu = root.querySelector(".caldav-ctxmenu") as HTMLElement;
   const segBtns = Array.from(root.querySelectorAll(".caldav-seg-btn")) as HTMLElement[];
   const viewToggleBtn = root.querySelector('[data-action="toggle-view"]') as HTMLElement;
+  const syncBtn = root.querySelector('[data-action="sync-now"]') as HTMLButtonElement;
+  /** 同步按钮的「正在同步」闸：连点时直接忽略第二次 */
+  let syncBusy = false;
   let destroyed = false;
   /** 右键菜单当前指向的条目 key */
   let ctxMenuKey: string | null = null;
@@ -591,6 +606,23 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     }
     if (action === "calfilter") {
       calfilterPop.hidden = !calfilterPop.hidden;
+      return;
+    }
+    if (action === "sync-now") {
+      // 防重复点击：同步中直接 return，否则连点会并发跑 syncAll
+      //（引擎内部有 syncing闸，但用户看到的是「点了没反应」）。
+      if (syncBusy || !ctx.syncNow) return;
+      syncBusy = true;
+      syncBtn.classList.add("is-syncing");
+      syncBtn.disabled = true;
+      void ctx
+        .syncNow()
+        .catch(() => undefined)
+        .finally(() => {
+          syncBusy = false;
+          syncBtn.classList.remove("is-syncing");
+          syncBtn.disabled = false;
+        });
       return;
     }
   });

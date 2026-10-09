@@ -93,6 +93,12 @@ export default class CalDavPlugin extends Plugin {
    * 卸载时要把标记摘掉 —— 那是思源的元素，不能留。
    */
   private dockScrollHost: HTMLElement | null = null;
+  /**
+   * 正在跑的同步（null = 空闲）。
+   * 用 promise 而非 boolean：并发调用方要能**等**上一轮跑完再接上，
+   * 单纯`if (busy) return` 会把请求静默丢弃（见 runSync）。
+   */
+  private inflight: Promise<unknown> | null = null;
 
   async onload(): Promise<void> {
     const self = this;
@@ -199,7 +205,7 @@ export default class CalDavPlugin extends Plugin {
       langKey: "syncNow",
       langText: "立即同步 CalDAV",
       hotkey: "",
-      callback: () => void this.sync.syncAll()
+      callback: () => void this.runSync(true)
     });
     this.addCommand({
       langKey: "addTask",
@@ -235,7 +241,7 @@ export default class CalDavPlugin extends Plugin {
 
     if (this.store.isConfigured()) {
       this.sync.startAutoSync(() => this.reminder?.reschedule());
-      setTimeout(() => void this.sync.syncAll().then(() => this.reminder?.reschedule()), 3000);
+      setTimeout(() => void this.runSync(false), 3000);
     }
     // 按当前设置决定是否启动提醒引擎（设置可能已开启）
     this.reconcileReminders();
@@ -276,7 +282,7 @@ export default class CalDavPlugin extends Plugin {
     const panel = renderDockPanel(target, {
       store: this.store,
       onNav: (m) => this.openPanelTab(m),
-      onSync: () => this.sync.syncAll(),
+      onSync: () => this.runSync(false),
       onSettings: () => this.openSetting(),
       // 只给日期，具体时刻由编辑弹窗按「下一个整点」补（见 core/date.defaultStartStamp）
       onAddEvent: () => openEditor(this.mainCtx, { kind: "event", start: this.mainCtx.cursor }),
@@ -669,8 +675,54 @@ export default class CalDavPlugin extends Plugin {
       sortMode: "start",
       testReminder: () => this.testReminder(),
       refreshPanels: () => this.refreshPanels(),
-      reminderStatus: () => this.reminderStatus()
+      reminderStatus: () => this.reminderStatus(),
+      // 工具栏同步按钮（2026-10-09）：走 runSync，提示/重绘/重排提醒统一在入口做
+      syncNow: () => this.runSync(true),
     };
+  }
+
+  /**
+   * 执行一次同步。
+   *
+   * 已有同步在跑时**排队等它跑完**再跑一轮，而不是直接返回：静默丢弃的代价很实在
+   * ——「命令面板点同步」与「自动同步」撞车时，用户看着像点了没反应。
+   */
+  async runSync(manual: boolean): Promise<unknown> {
+    if (this.inflight) {
+      try {
+        await this.inflight;
+      } catch {
+        /* 上一轮的结果与本次无关，忽略 */
+      }
+    }
+    const task = this.doRunSync(manual);
+    this.inflight = task;
+    try {
+      return await task;
+    } finally {
+      if (this.inflight === task) this.inflight = null;
+    }
+  }
+
+  private async doRunSync(manual: boolean): Promise<unknown> {
+    try {
+      const report = await this.sync.syncAll();
+      this.refreshPanels();
+      this.reminder?.reschedule();
+      if (manual) {
+        if (report.errors.length > 0) {
+          this.notify(`同步完成，但有 ${report.errors.length} 处出错：${report.errors[0] ?? ""}`, "error");
+        } else {
+          this.notify(
+            `同步完成：拉取 ${report.fetched} 条，上传 ${report.uploaded} 条，删除 ${report.deleted} 条（${report.elapsedMs}ms）`
+          );
+        }
+      }
+      return report;
+    } catch (e) {
+      this.notify(`同步失败：${String((e as Error)?.message || e)}`, "error");
+      return undefined;
+    }
   }
 
   /** 提醒状态摘要：让用户能区分「数据侧没设提醒」与「投递通道不通」 */

@@ -765,7 +765,8 @@ export function renderDockPanel(
 <!--
   Dock 工具行（2026-10-10 雄哥改版，同日二次调整）：
   原两行（上行 5 个图标按钮 + 下行日期范围/分类筛选）→ 现在**一行三个操作点**：
-  ① 日期范围下拉框 ② 打开视图 ③ 筛选。
+  ① 日期范围下拉框 ② 筛选 ③ 打开视图（2026-10-10 二次调整：筛选与打开视图左右互换，
+  筛选靠前、打开视图居末）。
   去掉的按钮与去处：
     · 新建 / 刷新 —— 主窗口工具栏已有（+日程 / +待办 / 立即同步），
       Dock 页脚状态条也能点击同步；
@@ -786,10 +787,10 @@ export function renderDockPanel(
       ).join("")}
     </div>
   </div>
-  <button class="caldav-dock-act" data-action="open-view" title="打开上次视图" aria-label="打开上次视图">${icons.calCheck}</button>
   <div class="caldav-dock-filter-wrap caldav-dock-filter-wrap--btn">
     <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）" aria-label="筛选">${icons.filter}</button>
   </div>
+  <button class="caldav-dock-act" data-action="open-view" title="打开上次视图" aria-label="打开上次视图">${icons.calCheck}</button>
 </div>
 <div class="caldav-dock-list">
   <div class="caldav-dock-items" data-dock="items"></div>

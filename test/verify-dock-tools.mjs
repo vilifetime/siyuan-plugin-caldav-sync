@@ -1,9 +1,9 @@
 /**
  * Dock 工具行的真实渲染验证（手动跑）。2026-10-10 / 0.2.19 改版：
  *
- *   一行三个操作点：日期范围下拉框（占 2.7fr）+ 打开视图（打勾日历图标）+ 筛选（漏斗图标）。
+ *   一行三个操作点：日期范围下拉框（占 2.7fr）+ 筛选（漏斗图标）+ 打开视图（打勾日历图标）。
  *   日历视图 / 任务视图两个按钮已合并为「打开视图」，点击打开主窗口上次用的视图；
- *   腾出的空间让日期范围下拉框能完整显示文案。
+ *   腾出的空间让日期范围下拉框能完整显示文案。筛选与打开视图左右已互换（筛选靠前）。
  *
  *   筛选弹层（.caldav-dock-cat-pop）现为 **body 级、position:fixed**，由 JS 算坐标定位，
  *   默认贴按钮右侧；右侧放不下时自动翻到左侧（自动检测视口边距）。本脚本验的是：
@@ -36,8 +36,8 @@ const svg = (p, vb = "0 0 24 24", sw = 2) =>
   `<svg viewBox="${vb}" width="14" height="14" fill="none" stroke="currentColor" style="fill:none;stroke-width:${sw};stroke-linecap:round;stroke-linejoin:round">${p}</svg>`;
 const ICON = svg('<rect x="3.5" y="4.5" width="17" height="16" rx="3"/>', "1.5 1.5 21 21", 1.6);
 const I_CHEV = svg('<polyline points="9 18 15 12 9 6"/>');
-// 合并后的「打开视图」按钮：打勾的日历（icons.calCheck）
-const I_CALCHECK = svg('<rect x="3.5" y="4.5" width="17" height="16" rx="3.5"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="8.5" y1="3" x2="8.5" y2="6"/><line x1="15.5" y1="3" x2="15.5" y2="6"/><circle cx="12" cy="14.6" r="1.6" style="fill:currentColor;stroke:none"/>', "1.5 1.5 21 21", 1.6);
+// 合并后的「打开视图」按钮：打勾的日历（icons.calCheck）——勾为描边折线
+const I_CALCHECK = svg('<rect x="3.5" y="4.5" width="17" height="16" rx="3.5"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="8.5" y1="3" x2="8.5" y2="6"/><line x1="15.5" y1="3" x2="15.5" y2="6"/><polyline points="8.8 15.1 10.9 17.2 15.2 12.6"/>', "1.5 1.5 21 21", 1.6);
 const I_FILTER = svg('<path d="M3.5 5.5h17l-6.6 7.6v5.2l-3.8 2.2v-7.4z"/>', "1.5 1.5 21 21", 1.6);
 
 // 单个 Dock 面板（不含筛选弹层 —— 弹层是 body 级，单独挂）。
@@ -56,10 +56,10 @@ const panel = (width) => `
         <span class="caldav-dock-select-arrow">${I_CHEV}</span>
         <div class="caldav-dock-pop caldav-dock-filter-pop" data-pop="dock-filter" hidden></div>
       </div>
-      <button class="caldav-dock-act" data-action="open-view" title="打开上次视图" aria-label="打开上次视图">${I_CALCHECK}</button>
       <div class="caldav-dock-filter-wrap caldav-dock-filter-wrap--btn">
         <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）" aria-label="筛选">${I_FILTER}</button>
       </div>
+      <button class="caldav-dock-act" data-action="open-view" title="打开上次视图" aria-label="打开上次视图">${I_CALCHECK}</button>
     </div>
     <div class="caldav-dock-list">
       <div class="caldav-dock-items"></div>
@@ -182,6 +182,8 @@ const probe = await evalJs(`(() => {
       toolW: tr.w, toolRight: tr.right,
       itemCount: items.length,
       sameRow: Math.max(...tops) - Math.min(...tops) <= 1,
+      // 左右顺序：日期范围 < 筛选 < 打开视图（筛选与打开视图已互换）
+      orderOk: items[0].r.x < items[1].r.x && items[1].r.x < items[2].r.x,
       toolH: tr.h,
       itemW: items.map((it) => it.r.w),
       itemH: items.map((it) => it.r.h),
@@ -249,6 +251,7 @@ const checks = [
   ["工具行恰有 2 个图标按钮（打开视图 / 筛选）", probe.every((p) => p.actCount === 2)],
   ["工具行恰有 3 个操作点（日期范围 + 2 图标）", probe.every((p) => p.itemCount === 3)],
   ["存在合并后的「打开视图」按钮", probe.every((p) => p.hasOpenView)],
+  ["操作点左右顺序为 日期范围 → 筛选 → 打开视图", probe.every((p) => p.orderOk)],
   ["三个操作点同一行（top 对齐）", probe.every((p) => p.sameRow)],
   ["两个图标按钮等宽（±1px）", Math.max(...left.itemW.slice(1)) - Math.min(...left.itemW.slice(1)) <= 1],
   ["两个图标按钮等高（±1px）", Math.max(...left.itemH.slice(1)) - Math.min(...left.itemH.slice(1)) <= 1],

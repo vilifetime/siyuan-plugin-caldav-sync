@@ -78,6 +78,18 @@ assert.ok(viewBtn.querySelector("svg"), "「打开视图」按钮应为图标按
 assert.match(viewBtn.getAttribute("title") || "", /视图/, "「打开视图」按钮的 title 应说明视图");
 // 工具行正好 3 个操作点（2 图标 + 1 下拉），一行放得下
 assert.strictEqual(dockEl.querySelectorAll(".caldav-dock-tools > *").length, 3, "工具行应恰好 3 个操作点");
+// 左右顺序锁定（2026-10-10 二次调整）：「日期范围 → 筛选 → 打开视图」，筛选在打开视图左侧
+{
+  const kids = Array.from(dockEl.querySelectorAll(".caldav-dock-tools > *"));
+  const idxCat = kids.findIndex((el) => !!el.querySelector("[data-dock='category']"));
+  const idxView = kids.findIndex(
+    (el) => el.matches('[data-action="open-view"]') || !!el.querySelector('[data-action="open-view"]')
+  );
+  assert.ok(
+    idxCat >= 0 && idxView >= 0 && idxCat < idxView,
+    "工具行左右顺序应为「日期范围 → 筛选 → 打开视图」（筛选靠前、打开视图居末）"
+  );
+}
 // 筛选弹层：按优先级 + 选择分类 两块（与 Obsidian 一致）。弹层内容是**点开时**才渲染的，
 // 这里先点一下「筛选」按钮展开（与用户实际操作一致）。
 click(filterBtn);
@@ -331,7 +343,7 @@ click(viewToggle);
 assert.strictEqual(plugin.mainCtx.viewMode, "task", "点击后应切到任务视图");
 assert.ok(tabEl.querySelector(".cal-task-view"), "点击后应渲染任务视图");
 assert.strictEqual(viewToggle.title, "切换到日历视图", "任务视图下按钮提示应指向日历视图");
-assert.ok(viewToggle.innerHTML.includes("14.6"), "任务视图下按钮图标应为日历");
+assert.ok(viewToggle.innerHTML.includes("8.8 15.1 10.9 17.2 15.2 12.6"), "任务视图下按钮图标应为带勾的日历");
 click(viewToggle);
 assert.strictEqual(plugin.mainCtx.viewMode, "month", "再次点击应切回日历视图");
 assert.ok(tabEl.querySelector(".cal-month-grid"), "切回后应渲染月视图");
@@ -1078,8 +1090,8 @@ assert.ok(
   "图标 svg 必须用内联 style 声明 fill:none（属性形式会被思源 base.css 的 svg{fill:currentColor} 覆盖，闭合图形会变成实心黑块）"
 );
 assert.ok(
-  builtJs.includes('style="fill:currentColor;stroke:none"'),
-  "日历图标内的日期点应保持实心（用内联 style，避免被父级 fill:none 继承覆盖）"
+  builtJs.includes("8.8 15.1 10.9 17.2 15.2 12.6"),
+  "带勾日历图标的勾必须是 polyline 描边图形（不可用实心圆点，否则会被父级 fill:none 继承覆盖而看不见）"
 );
 
 // ---- Dock 图标比例防回归：视觉大小 = 画布像素尺寸 × 图形在 viewBox 中的占比。
@@ -1107,4 +1119,4 @@ assert.ok(
   builtJs.includes("1.5 1.5 21 21"),
   "Dock 图标应使用按图形收紧的 viewBox「1.5 1.5 21 21」（退回 0 0 24 24 会让图形四周留白、视觉变小）"
 );
-console.log("[loader] 模拟思源加载链路全部通过（Dock 工具行四操作点 + 下拉 + 年视图 + 分段切换 + 筛选面板 + 编辑弹窗）");
+console.log("[loader] 模拟思源加载链路全部通过（Dock 工具行三操作点 + 下拉 + 年视图 + 分段切换 + 筛选面板 + 编辑弹窗）");

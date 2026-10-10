@@ -1,6 +1,6 @@
 {
   "name": "siyuan-plugin-caldav-sync",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "description": "Two-way sync calendar events and todos with CalDAV servers (Radicale / Nextcloud / Baikal). Month/Week/Day calendar views, task view, editor and daily note integration.",
   "repository": "https://github.com/vilifetime/siyuan-plugin-caldav-sync",
   "type": "module",

@@ -218,6 +218,13 @@ export class SyncEngine {
 
       // 使用本地时区墙上时间（东八区等），避免 toISOString() 输出 UTC 导致显示偏差
       this.store.lastSync = stampOfMs(Date.now()).replace("T", " ");
+      // 合并「自上次全量同步以来的即时推送」：单条新建/编辑/删除走 pushAndPersist
+      // 立刻上云，计数攒在 pending 里。这里并进报告，用户才能看到「上传 1 / 删除 1」，
+      // 而不是以为改动没同步（2026-10-10 实测）。合并后清零，避免下一轮重复计。
+      report.uploaded += this.store.pendingUploaded;
+      report.deleted += this.store.pendingDeleted;
+      this.store.pendingUploaded = 0;
+      this.store.pendingDeleted = 0;
       // 对账是**正常自愈，不是失败**（2026-10-10 实测：原先塞进 lastError，
       // Dock 状态栏显示「同步失败」、面板挂红色报错横幅，把一次成功同步报成失败）。
       // 「本地凭空少了 N 条」仍要让用户看得见，故走独立的中性提示通道。
@@ -433,6 +440,16 @@ export class SyncEngine {
       requeued: 0
     };
     await this.pushDirty(report);
+    // 这一轮的成功数不能就这么丢掉 —— 用户随后点全量同步时已无事可做，
+    // 会看到「上传 0 · 删除 0」，以为改动没同步（2026-10-10 实测）。
+    // 先攒进 pending，等下一轮 syncAll 合并进报告再清零。
+    this.store.pendingUploaded += report.uploaded;
+    this.store.pendingDeleted += report.deleted;
+    // 立刻给一次反馈：用户点完保存/删除要看得到「已经上云了」
+    const pushed: string[] = [];
+    if (report.uploaded) pushed.push(`已同步到服务端：上传 ${report.uploaded} 条`);
+    if (report.deleted) pushed.push(`已同步到服务端：删除 ${report.deleted} 条`);
+    if (pushed.length) this.store.lastNote = pushed.join("; ");
     this.store.lastError = report.errors.length ? report.errors.join("; ") : this.store.lastError;
     await this.store.persist();
     this.store.notify();

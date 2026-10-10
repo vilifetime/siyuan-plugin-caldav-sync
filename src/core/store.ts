@@ -24,6 +24,9 @@ export class CalStore {
   lastError?: string;
   /** 上次同步的中性提示（对账自愈等），**不是错误**，见 types.ts 的 SyncState */
   lastNote?: string;
+  /** 即时推送累计的上传/删除数，下一轮 syncAll 合并进报告后清零（见 types.ts） */
+  pendingUploaded = 0;
+  pendingDeleted = 0;
   /** 密码解密失败（本地密钥丢失/损坏），需要用户重新输入密码 */
   secretBroken = false;
   /** 密钥尚未就绪导致的「暂时解不开」——不是密码损坏，稍后可重试 */
@@ -47,6 +50,8 @@ export class CalStore {
       this.lastSync = data.sync?.lastSync;
       this.lastError = data.sync?.lastError;
       this.lastNote = data.sync?.lastNote;
+      this.pendingUploaded = data.sync?.pendingUploaded ?? 0;
+      this.pendingDeleted = data.sync?.pendingDeleted ?? 0;
       this.keyring = (data as any).keyring || "";
     }
     // 先注入主密钥再解密：密钥的权威副本随数据走，新生成的由 sink 回写持久化
@@ -135,7 +140,13 @@ export class CalStore {
       keyring: getKeyring() || this.keyring,
       settings: { ...this.settings, password },
       items: Array.from(this.items.values()),
-      sync: { lastSync: this.lastSync, lastError: this.lastError, lastNote: this.lastNote }
+      sync: {
+        lastSync: this.lastSync,
+        lastError: this.lastError,
+        lastNote: this.lastNote,
+        pendingUploaded: this.pendingUploaded,
+        pendingDeleted: this.pendingDeleted
+      }
     });
   }
 

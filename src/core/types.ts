@@ -220,6 +220,16 @@ export interface SyncState {
    * （2026-10-10 实测）。两者必须分通道。
    */
   lastNote?: string;
+  /**
+   * 自上次全量同步以来，**即时推送**（新建/编辑/删除单条）累计的上传数。
+   *
+   * 为什么要有这个：单条编辑走 `pushAndPersist()` 立刻上云，它的计数原先被
+   * 整个丢弃。用户随后点全量同步时会看到「上传 0 · 删除 0」，以为改动没同步
+   * （2026-10-10 实测）。故这里先攒着，等下一轮 syncAll 合并进报告再清零。
+   */
+  pendingUploaded?: number;
+  /** 同上，即时推送累计的删除数 */
+  pendingDeleted?: number;
 }
 
 export interface PersistData {

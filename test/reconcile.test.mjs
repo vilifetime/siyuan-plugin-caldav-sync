@@ -448,4 +448,43 @@ await t("Dock 状态栏对 lastNote 用中性样式，不复用「同步失败�
   );
 });
 
+// ---- 2026-10-10 第二轮：即时推送（新建/编辑/删除单条）的计数被整个丢弃，
+//      用户随后点全量同步看到「上传 0 · 删除 0」，以为改动没同步 ----
+
+await t("即时推送的 uploaded/deleted 要攒进 pending，不能丢", () => {
+  const body = srcSync.slice(srcSync.indexOf("private async pushAndPersist"));
+  assert.ok(/pendingUploaded \+= report\.uploaded/.test(body), "上传数要攒进 pendingUploaded");
+  assert.ok(/pendingDeleted \+= report\.deleted/.test(body), "删除数要攒进 pendingDeleted");
+  // 攒了不合并 = 白攒
+  assert.ok(
+    /report\.uploaded \+= this\.store\.pendingUploaded/.test(srcSync),
+    "syncAll 要把 pendingUploaded 并进报告"
+  );
+  assert.ok(
+    /report\.deleted \+= this\.store\.pendingDeleted/.test(srcSync),
+    "syncAll 要把 pendingDeleted 并进报告"
+  );
+});
+
+await t("pending 合并后必须清零（否则下一轮重复计数、数字越滚越大）", () => {
+  const i = srcSync.indexOf("report.uploaded += this.store.pendingUploaded");
+  assert.ok(i > 0, "先找到合并点");
+  const body = srcSync.slice(i, i + 400);
+  assert.ok(/pendingUploaded = 0/.test(body), "合并后 pendingUploaded 要清零");
+  assert.ok(/pendingDeleted = 0/.test(body), "合并后 pendingDeleted 要清零");
+});
+
+await t("即时推送后立刻给反馈（用户点完删除要看得到「已上云」）", () => {
+  const body = srcSync.slice(srcSync.indexOf("private async pushAndPersist"));
+  assert.ok(/已同步到服务端/.test(body), "要有即时反馈文案");
+  assert.ok(/if \(pushed\.length\) this\.store\.lastNote = pushed\.join/.test(body), "反馈写 lastNote 中性通道");
+});
+
+await t("pending 有完整的存取盘链路（重启就丢 = 计数凭空消失）", () => {
+  assert.ok(/pendingUploaded\?: number/.test(srcTypes), "SyncState 要有 pendingUploaded");
+  assert.ok(/pendingDeleted\?: number/.test(srcTypes), "SyncState 要有 pendingDeleted");
+  assert.ok(/this\.pendingUploaded = data\.sync\?\.pendingUploaded/.test(srcStore), "load 要读 pending");
+  assert.ok(/pendingUploaded: this\.pendingUploaded/.test(srcStore), "persist 要写 pending");
+});
+
 console.log(`\n[reconcile] ${passed} 项通过`);

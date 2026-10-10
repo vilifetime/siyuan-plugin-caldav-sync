@@ -431,6 +431,54 @@ await t("applied 只在真写入时 ++（same 判定跳过的条目不能算拉�
   assert.ok(iApplied > iSet, "applied++ 要紧跟在真写入之后");
 });
 
+// 这条是真正的守门员：逐字段比对会被服务端规范化的 raw 打败，
+// 只有「etag 相同即跳过」能挡住自环回显。光有源码级断言不够 ——
+// 源码里写了 etag 判定，也可能因为顺序/条件写错而实际不生效。
+await t("自环回显：服务端推回同 etag、但 raw 被规范化过的条目 → 不写入、不算拉取", async () => {
+  const local = mkItem({
+    uid: "loop@test",
+    href: CAL_URL + "loop.ics",
+    summary: "我刚建的",
+    etag: "server-etag",
+    // 本地是生成的原文
+    raw: "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//local//EN\r\nEND:VCALENDAR\r\n"
+  });
+  const st = await mkStore([local]);
+  // 服务端把它规范化后推回：uid/summary/etag 全一样，只有 raw 不同
+  const echoed = {
+    ...local,
+    raw: "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//server//EN\nX-EXTRA:1\nEND:VCALENDAR\n"
+  };
+  const r = st.mergeServerItems([echoed], []);
+  assert.strictEqual(
+    r.applied,
+    0,
+    "etag 相同就该判定为无变化，不算拉取 —— 否则新建一条会显示「上传1 拉取1」"
+  );
+  assert.strictEqual(r.changed, false, "不该触发 emit/重渲染");
+  // 本地内容保持原样（本地版本才是权威，不该被服务端的规范化版本覆盖）
+  assert.strictEqual(st.getAll()[0].raw, local.raw, "本地 raw 不该被服务端版本覆盖");
+});
+
+await t("etag 不同 → 确实要写入并计入拉取（别把真实变更也挡掉）", async () => {
+  const local = mkItem({ uid: "chg@test", href: CAL_URL + "chg.ics", summary: "旧标题", etag: "old-etag" });
+  const st = await mkStore([local]);
+  const r = st.mergeServerItems([{ ...local, summary: "新标题", etag: "new-etag" }], []);
+  assert.strictEqual(r.applied, 1, "etag 变了就是真变更，必须计入拉取");
+  assert.strictEqual(st.getAll()[0].summary, "新标题", "本地要跟着更新");
+});
+
+await t("etag 缺失时退回逐字段比对（老数据不能因此每轮都算拉取）", async () => {
+  const local = mkItem({ uid: "noetag@test", href: CAL_URL + "noetag.ics", summary: "标题", etag: undefined });
+  const st = await mkStore([local]);
+  const r = st.mergeServerItems([{ ...local, etag: undefined, raw: "DIFFERENT" }], []);
+  assert.strictEqual(
+    r.applied,
+    0,
+    "没 etag 且字段都相同 → 不该写入（否则老数据每轮都虚报拉取 1）"
+  );
+});
+
 await t("对账提示走 lastNote 中性通道，绝不塞进 lastError", () => {
   assert.ok(/this\.store\.lastNote = notes\.join\("; "\) \|\| undefined/.test(srcSync), "对账提示要写 lastNote");
   assert.ok(

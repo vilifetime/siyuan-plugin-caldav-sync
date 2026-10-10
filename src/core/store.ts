@@ -218,9 +218,16 @@ export class CalStore {
       if (existing?.dirty) continue;
       const cur = existing;
       if (cur && cur.href === inc.href) {
-        // 同一资源：保留本地字段引用判断是否实质变化
+        // etag 是服务端对**内容**算的指纹：相同即代表服务端内容与本地上次同步时
+        // 一致，没有实质变化，不必写入。
+        //
+        // 这是挡住「自环回显」唯一可靠的判据。逐字段比对做不到 —— 其中最脆弱的
+        // `raw`：本地是生成的 ICS 原文，服务端返回的是它规范化过的版本（换行、
+        // 属性顺序、补 PRODID/DTSTAMP 等），几乎必然不等，于是自己刚推上去的
+        // 条目每轮都被判成「有变化」，拉取永远虚增 1（2026-10-10 实测）。
+        if (cur.etag && inc.etag && cur.etag === inc.etag) continue;
+        // etag 缺失（老数据 / 服务端不返回）时才退回逐字段比对
         const same =
-          cur.etag === inc.etag &&
           cur.summary === inc.summary &&
           cur.start === inc.start &&
           cur.end === inc.end &&
@@ -229,7 +236,6 @@ export class CalStore {
           cur.priority === inc.priority &&
           cur.percent === inc.percent &&
           cur.status === inc.status &&
-          cur.raw === inc.raw &&
           JSON.stringify(cur.rrule || null) === JSON.stringify(inc.rrule || null) &&
           JSON.stringify(cur.alarms || null) === JSON.stringify(inc.alarms || null) &&
           JSON.stringify(cur.categories || null) === JSON.stringify(inc.categories || null) &&

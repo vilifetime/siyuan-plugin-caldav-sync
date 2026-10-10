@@ -201,7 +201,10 @@ export class SyncEngine {
           const deletedKeys = deletedHrefs
             .map((h) => this.findKeyByHref(h, cal.url))
             .filter(Boolean) as string[];
-          this.store.mergeServerItems(items, deletedKeys);
+          // 服务端删掉的条目（deletedKeys 命中的）也算「本地删除」——
+          // 少了这个计数，用户在另一端删除后同步会看到「删除 0 条」，
+          // 以为删除没同步过来（2026-10-10 实测）。
+          report.deleted += this.store.mergeServerItems(items, deletedKeys).removed;
           // 拉取成功了才做对账 —— 上一步抛错说明与服务端的对话不完整，
           // 此时拿到的清单不可信，宁可这一轮不做（见 reconcile 的安全约束）
           await this.reconcile(cal, report);
@@ -215,18 +218,22 @@ export class SyncEngine {
 
       // 使用本地时区墙上时间（东八区等），避免 toISOString() 输出 UTC 导致显示偏差
       this.store.lastSync = stampOfMs(Date.now()).replace("T", " ");
-      // 对账结果虽然不算「错误」，但「本地凭空少了 N 条」必须让用户看得见，
-      // 否则会以为数据丢了。措辞带「对账」前缀，与真正的失败区分开。
+      // 对账是**正常自愈，不是失败**（2026-10-10 实测：原先塞进 lastError，
+      // Dock 状态栏显示「同步失败」、面板挂红色报错横幅，把一次成功同步报成失败）。
+      // 「本地凭空少了 N 条」仍要让用户看得见，故走独立的中性提示通道。
       const notes: string[] = [];
       if (report.reconciled) notes.push(`对账：已清理 ${report.reconciled} 条服务端不存在的本地条目`);
       if (report.requeued) notes.push(`对账：${report.requeued} 条本地条目在服务端已丢失，已重新上传`);
-      this.store.lastError = [...report.errors, ...notes].join("; ") || undefined;
+      this.store.lastNote = notes.join("; ") || undefined;
+      this.store.lastError = report.errors.join("; ") || undefined;
     } catch (e: any) {
       // 兜底：try 内部若抛出未捕获的异常（例如 pushDirty 直接抛错），原先会跳过上面两行赋值，
       // 于是 lastError 保持旧值（空）→ 界面继续显示「上次同步 XX」，看起来像同步成功了。
       report.ok = false;
       if (!report.errors.length) report.errors.push(explainError(e));
       this.store.lastError = report.errors.join("; ");
+      // 这一轮没能正常走完，对账结论不可信 → 清掉上一轮的中性提示，避免过期信息一直挂着
+      this.store.lastNote = undefined;
     } finally {
       this.syncing = false;
       report.elapsedMs = Date.now() - t0;
@@ -332,6 +339,9 @@ export class SyncEngine {
     for (const it of ghosts) {
       this.store.remove(keyOf(it));
       report.reconciled++;
+      // 对账清理掉的条目，本地确实少了一条 → 同样计入「删除」，
+      // 否则用户在另一端删除后同步，本地条目消失了却报「删除 0 条」。
+      report.deleted++;
     }
     console.warn(`[caldav] ${cal.displayName}: 已清理 ${ghosts.length} 条服务端不存在的本地条目`);
   }

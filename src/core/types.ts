@@ -212,6 +212,14 @@ export const DEFAULT_SETTINGS: CalSettings = {
 export interface SyncState {
   lastSync?: string;
   lastError?: string;
+  /**
+   * 上次同步的**中性提示**（如「对账清理了 N 条幽灵条目」）。
+   *
+   * 为什么不能塞进 `lastError`：对账是正常自愈，不是失败。塞进去会让状态栏
+   * 显示「同步失败」、面板挂红色报错横幅，把一次成功同步报成失败
+   * （2026-10-10 实测）。两者必须分通道。
+   */
+  lastNote?: string;
 }
 
 export interface PersistData {

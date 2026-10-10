@@ -202,7 +202,11 @@ await t("幽灵条目被清掉，服务端仍有的与无关条目不动", async
     assert.ok(!uids.includes("ghost@test"), "幽灵条目应被清掉，实际剩 " + JSON.stringify(uids));
     assert.ok(uids.includes("alive@test"), "服务端还存在的必须保留");
     assert.ok(uids.includes("foreign@test"), "别的日历的条目不受本轮对账影响");
-    assert.ok(/对账：已清理 1 条/.test(st.lastError || ""), "清理动作要让用户看得见，实际 lastError=" + st.lastError);
+    // 2026-10-10 起：对账提示走 lastNote 中性通道，**不进 lastError**
+    // （原先塞进 lastError 会让状态栏显示「同步失败」，把成功同步报成失败）
+    assert.ok(/对账：已清理 1 条/.test(st.lastNote || ""), "清理动作要让用户看得见，实际 lastNote=" + st.lastNote);
+    assert.strictEqual(st.lastError, undefined, "对账不是错误，lastError 必须为空，实际=" + st.lastError);
+    assert.strictEqual(rep.deleted, 1, "本地少了一条，删除计数应为 1，实际 " + rep.deleted);
   } finally {
     restore();
   }
@@ -256,7 +260,8 @@ await t("conflict=local 时把丢失的条目重新排队上传", async () => {
     const left = st.getAll().find((i) => i.uid === "ghost@test");
     assert.ok(left, "本地条目必须还在");
     assert.strictEqual(left.dirty, true, "应被置脏，下一轮 pushDirty 才会带上它");
-    assert.ok(/重新上传/.test(st.lastError || ""), "实际 lastError=" + st.lastError);
+    assert.ok(/重新上传/.test(st.lastNote || ""), "实际 lastNote=" + st.lastNote);
+    assert.strictEqual(st.lastError, undefined, "对账不是错误，lastError 必须为空，实际=" + st.lastError);
   } finally {
     restore();
   }
@@ -324,6 +329,9 @@ console.log("[reconcile] 源码级断言（防止后续重构把对账悄悄摘�
 
 const srcSync = fs.readFileSync(path.join(root, "src/core/sync.ts"), "utf8");
 const srcCaldav = fs.readFileSync(path.join(root, "src/core/caldav.ts"), "utf8");
+const srcStore = fs.readFileSync(path.join(root, "src/core/store.ts"), "utf8");
+const srcTypes = fs.readFileSync(path.join(root, "src/core/types.ts"), "utf8");
+const srcPanel = fs.readFileSync(path.join(root, "src/ui/panel.ts"), "utf8");
 
 await t("syncAll 每个日历拉取成功后都要调 reconcile", () => {
   assert.ok(/await this\.reconcile\(cal, report\)/.test(srcSync), "缺 reconcile 调用");
@@ -367,6 +375,77 @@ await t("caldav.ts 暴露 fileNameOf / listResourceNames 且用 Depth:1 取全�
   const body = srcCaldav.slice(i, i + 900);
   assert.ok(/Depth: "1"/.test(body), "必须 Depth:1 才能拿到集合内全部资源");
   assert.ok(/\.ics\$/i.test(body), "只要 .ics，集合自身与非日历文件要滤掉");
+});
+
+// ---- 2026-10-10 实测回归：思源删一条 → Obsidian 同步显示「删除 0 条」，
+//      且 Obsidian 侧报「同步失败：对账：已清理 1 条…」。思源侧是同构代码，同样要修。 ----
+
+await t("服务端删除要计入 report.deleted（否则用户以为删除没同步过来）", () => {
+  assert.ok(
+    /report\.deleted \+= this\.store\.mergeServerItems\(items, deletedKeys\)\.removed/.test(srcSync),
+    "mergeServerItems 的 removed 返回值必须累加进 report.deleted"
+  );
+  const recon = srcSync.slice(srcSync.indexOf("private async reconcile"), srcSync.indexOf("private async pushDirty"));
+  assert.ok(
+    /report\.reconciled\+\+;[\s\S]{0,200}?report\.deleted\+\+/.test(recon),
+    "对账清理的条目也要计入 report.deleted（否则仍是「删除 0 条」）"
+  );
+});
+
+await t("mergeServerItems 返回 removed 计数（store 侧真的实现了吗）", () => {
+  assert.ok(
+    /mergeServerItems\(incoming: CalItem\[\], deletedKeys: string\[\] = \[\]\): \{ changed: boolean; removed: number \}/.test(
+      srcStore
+    ),
+    "签名要改成返回 { changed, removed }"
+  );
+  const body = srcStore.slice(srcStore.indexOf("mergeServerItems(incoming"));
+  assert.ok(/let removed = 0/.test(body), "要有 removed 计数");
+  assert.ok(
+    /this\.items\.delete\(key\);\s*changed = true;\s*removed\+\+/.test(body),
+    "deletedKeys 命中时必须 removed++"
+  );
+  assert.ok(/return \{ changed, removed \}/.test(body), "要返回 removed");
+});
+
+await t("对账提示走 lastNote 中性通道，绝不塞进 lastError", () => {
+  assert.ok(/this\.store\.lastNote = notes\.join\("; "\) \|\| undefined/.test(srcSync), "对账提示要写 lastNote");
+  assert.ok(
+    /this\.store\.lastError = report\.errors\.join\("; "\) \|\| undefined/.test(srcSync),
+    "lastError 只装真错误"
+  );
+  assert.ok(
+    !/lastError = \[\.\.\.report\.errors, \.\.\.notes\]/.test(srcSync),
+    "绝不能让对账说明混进 lastError（会把成功同步显示成「同步失败」）"
+  );
+});
+
+await t("lastNote 有完整的存取盘链路（加了字段但没存 = 重启即丢）", () => {
+  assert.ok(/lastNote\?: string/.test(srcTypes), "SyncState 要有 lastNote");
+  assert.ok(/lastNote\?: string/.test(srcStore), "CalStore 要有 lastNote 字段");
+  assert.ok(/this\.lastNote = data\.sync\?\.lastNote/.test(srcStore), "load 要读 lastNote");
+  assert.ok(/lastNote: this\.lastNote/.test(srcStore), "persist 要写 lastNote");
+});
+
+await t("同步抛异常时要清掉过期 lastNote（否则报错后中性提示一直挂着）", () => {
+  // 用 lastNote 赋值点定位兜底 catch —— 文件里有多处 catch，按序号数位置会随重构漂移
+  const iAssign = srcSync.indexOf("this.store.lastNote = notes.join");
+  assert.ok(iAssign > 0, "先找到正常路径的 lastNote 赋值点");
+  const iCatch = srcSync.indexOf("} catch (e: any) {", iAssign);
+  assert.ok(iCatch > iAssign, "正常路径之后应紧跟兜底 catch");
+  assert.ok(
+    /this\.store\.lastNote = undefined/.test(srcSync.slice(iCatch, iCatch + 600)),
+    "异常路径要清 lastNote"
+  );
+});
+
+await t("Dock 状态栏对 lastNote 用中性样式，不复用「同步失败」前缀", () => {
+  assert.ok(/opts\.store\.lastNote/.test(srcPanel), "面板要消费 lastNote");
+  assert.ok(/showNote/.test(srcPanel), "要有独立的中性提示渲染");
+  assert.ok(
+    /} else if \(opts\.store\.lastNote\)/.test(srcPanel),
+    "lastNote 分支必须在 lastError 分支之后，且不显示「同步失败」"
+  );
 });
 
 console.log(`\n[reconcile] ${passed} 项通过`);

@@ -22,6 +22,8 @@ export class CalStore {
   private items = new Map<string, CalItem>();
   lastSync?: string;
   lastError?: string;
+  /** 上次同步的中性提示（对账自愈等），**不是错误**，见 types.ts 的 SyncState */
+  lastNote?: string;
   /** 密码解密失败（本地密钥丢失/损坏），需要用户重新输入密码 */
   secretBroken = false;
   /** 密钥尚未就绪导致的「暂时解不开」——不是密码损坏，稍后可重试 */
@@ -44,6 +46,7 @@ export class CalStore {
       this.items = new Map((data.items || []).map((it) => [keyOf(it), it]));
       this.lastSync = data.sync?.lastSync;
       this.lastError = data.sync?.lastError;
+      this.lastNote = data.sync?.lastNote;
       this.keyring = (data as any).keyring || "";
     }
     // 先注入主密钥再解密：密钥的权威副本随数据走，新生成的由 sink 回写持久化
@@ -132,7 +135,7 @@ export class CalStore {
       keyring: getKeyring() || this.keyring,
       settings: { ...this.settings, password },
       items: Array.from(this.items.values()),
-      sync: { lastSync: this.lastSync, lastError: this.lastError }
+      sync: { lastSync: this.lastSync, lastError: this.lastError, lastNote: this.lastNote }
     });
   }
 
@@ -189,8 +192,11 @@ export class CalStore {
   }
 
   /** 用一批服务端条目合并替换同日历的远端态（保留本地脏数据） */
-  mergeServerItems(incoming: CalItem[], deletedKeys: string[] = []): boolean {
+  mergeServerItems(incoming: CalItem[], deletedKeys: string[] = []): { changed: boolean; removed: number } {
     let changed = false;
+    // 本地实际消失的条目数。**必须报给上层**，否则服务端删掉的条目在同步报告里
+    // 表现为「删除 0 条」，用户会以为删除没同步过来（2026-10-10 实测）。
+    let removed = 0;
     for (const inc of incoming) {
       // 本地脏数据优先：等上传后再被服务端确认覆盖
       const existing = this.items.get(keyOf(inc));
@@ -222,6 +228,7 @@ export class CalStore {
       if (this.items.has(key)) {
         this.items.delete(key);
         changed = true;
+        removed++;
       }
     }
     // 清理标记 deleted 且已处理完的
@@ -232,7 +239,7 @@ export class CalStore {
       }
     }
     if (changed) this.emit();
-    return changed;
+    return { changed, removed };
   }
 
   /** 待上传的脏条目 */

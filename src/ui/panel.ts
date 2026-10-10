@@ -924,12 +924,33 @@ export function renderDockPanel(
       statusEl.title = `错误: ${err}`;
       statusEl.classList.add("has-error");
       showError(err);
+    } else if (opts.store.lastNote) {
+      // 对账提示是**中性信息**，不是失败 —— 不能复用「同步失败」的前缀，
+      // 否则一次成功同步会被报成失败（2026-10-10 实测）。
+      statusEl.textContent = `上次同步 ${time}`;
+      statusEl.title = opts.store.lastNote;
+      statusEl.classList.remove("has-error");
+      showNote(opts.store.lastNote);
     } else {
       statusEl.textContent = `上次同步 ${time}`;
       statusEl.title = "点击立即同步";
       statusEl.classList.remove("has-error");
       showError("");
     }
+  }
+
+  /** 页脚提示行：把提示正文摊开显示，而不是只放在悬停提示里 */
+  function showNote(text: string): void {
+    if (!errorEl) return;
+    if (!text) {
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+      return;
+    }
+    errorEl.hidden = false;
+    errorEl.textContent = text.length > 90 ? text.slice(0, 90) + "…" : text;
+    errorEl.title = text;
+    errorEl.classList.remove("has-error");
   }
 
   /** 页脚错误行：把错误正文摊开显示，而不是只放在悬停提示里 */

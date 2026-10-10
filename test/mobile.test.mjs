@@ -150,23 +150,23 @@ const isShown = (box) => {
 const visibleLayers = () => layerBoxes().filter(isShown);
 const allLayers = () => layerBoxes().length;
 
-// 2026-10-10 起 Dock 的「新建」入口已移除，改用「日历视图 / 任务视图」两个入口
-// 验证同一件事（连点入口不叠层）。
-clickIn(orphanEl, '[data-action="cal-view"]');
-assert.strictEqual(visibleLayers().length, 1, "从 Dock 点「日历视图」应只开一层（全屏面板）");
+// Dock 的「日历视图 / 任务视图」已合并为单个「打开视图」入口（open-view），
+// 它打开主窗口上次用的视图。验证同一件事（连点入口不叠层）。
+clickIn(orphanEl, '[data-action="open-view"]');
+assert.strictEqual(visibleLayers().length, 1, "从 Dock 点「打开视图」应只开一层（全屏面板）");
 
-clickIn(orphanEl, '[data-action="task-view"]');
-assert.strictEqual(visibleLayers().length, 1, "再点「任务视图」应替换掉上一层，而不是叠成第二层");
+clickIn(orphanEl, '[data-action="open-view"]');
+assert.strictEqual(visibleLayers().length, 1, "再点「打开视图」应复用同一层，而不是叠成第二层");
 await settle(); // 思源销毁弹层是异步的（先淡出、后移除并回调）
 assert.strictEqual(allLayers(), 1, "被替换的层应被真正销毁，不留残壳");
 
-clickIn(orphanEl, '[data-action="task-view"]');
-assert.strictEqual(visibleLayers().length, 1, "再点「任务视图」应复用同一层，仍然只有一层");
-assert.ok(document.querySelector(".caldav-mobile-host .cal-task"), "最后一层应是任务视图");
+clickIn(orphanEl, '[data-action="open-view"]');
+assert.strictEqual(visibleLayers().length, 1, "再点「打开视图」应复用同一层，仍然只有一层");
+assert.ok(document.querySelector(".caldav-mobile-host .caldav-view"), "最后一层应是某个日历/任务视图");
 // 旧层的 destroyCallback 是**异步**的：若它把新一层的引用清掉，这一步之后页面就空了
 await settle();
 assert.ok(
-  document.querySelector(".caldav-mobile-host .cal-task"),
+  document.querySelector(".caldav-mobile-host .caldav-view"),
   "异步回调不得波及被复用的页面层（否则切一次视图就变空白，且守卫失效后每点一次都会新建一层）"
 );
 assert.strictEqual(visibleLayers().length, 1, "复用页面层后仍应只有一层");
@@ -176,7 +176,7 @@ makeLeftover("page");
 makeLeftover("page");
 makeLeftover("sheet");
 assert.strictEqual(visibleLayers().length, 4, "先摆出「当前页 + 两个残留页面 + 一个残留编辑层」的现场");
-clickIn(orphanEl, '[data-action="cal-view"]');
+clickIn(orphanEl, '[data-action="open-view"]');
 assert.strictEqual(visibleLayers().length, 1, "点一次入口就该把残留层收干净，只剩当前这一层");
 await settle();
 assert.strictEqual(allLayers(), 1, "残留层应被摘掉，而不是留在 DOM 里等着顶上来");

@@ -33,6 +33,34 @@ const DOCK_TYPE = "caldav-sync-dock";
 const TAB_TYPE = "caldav-sync-tab";
 /** 插件数据文件名：带 .json 后缀，便于在文件管理器里直接双击查看/编辑 */
 const DATA_FILE = "caldav-sync.json";
+
+/**
+ * 「主窗口上次用的视图」的本地存储键。
+ *
+ * 存 localStorage 而不是设置里：它是**本机偏好**（桌面端可能是宽屏看周视图、
+ * 手机端只想看任务列表），没必要跟着设置参与云同步，也避免每切一次视图就写盘。
+ */
+const LAST_VIEW_KEY = "siyuan-plugin-caldav-sync:last-view";
+const VIEW_MODES: ViewMode[] = ["year", "month", "week", "day", "task"];
+
+/** 读上次视图（非法值/读不到一律回落 month）。localStorage 可能被禁用，全部兜住。 */
+function readLastView(): ViewMode {
+  try {
+    const v = globalThis.localStorage?.getItem(LAST_VIEW_KEY) as ViewMode | null | undefined;
+    return v && VIEW_MODES.includes(v) ? v : "month";
+  } catch {
+    return "month";
+  }
+}
+
+/** 记上次视图。写失败（隐私模式 / 配额）不影响功能，静默忽略。 */
+function writeLastView(mode: ViewMode): void {
+  try {
+    globalThis.localStorage?.setItem(LAST_VIEW_KEY, mode);
+  } catch {
+    /* 存不下就算了：本次会话内 mainCtx.viewMode 仍然是对的 */
+  }
+}
 /**
  * 0.2.12 及更早版本的数据文件名（无扩展名，历史上直接复用了 DOCK_TYPE 的值）。
  * 这里刻意写成字面量而不是 `= DOCK_TYPE` —— 它是**冻结的历史值**，
@@ -82,7 +110,15 @@ export default class CalDavPlugin extends Plugin {
     dispose: () => void;
   } | null = null;
   private viewChangeHandler: ((e: Event) => void) | null = null;
-  /** Dock 面板的挂载记录（思源可能重建侧栏容器，需按「当前活着的元素」重新挂载） */
+
+  /**
+   * 主窗口「上次用的视图」。
+   *
+   * Dock 里原来有「日历视图 / 任务视图」两个按钮，现合并成一个（2026-10-10 雄哥要求）：
+   * 点它就打开**这里记着的那个视图**，所以必须跨会话记住 —— 初始化时从
+   * localStorage 读，之后每次视图变化（见 viewChangeHandler）写回。
+   */
+  private lastViewMode: ViewMode = readLastView();  /** Dock 面板的挂载记录（思源可能重建侧栏容器，需按「当前活着的元素」重新挂载） */
   private dockMount: { el: HTMLElement; refresh: () => void; destroy: () => void } | null = null;
   /** 移动端侧栏 DOM 观察器：插件 Dock 容器空着被显示出来时补挂面板 */
   private dockObserver: MutationObserver | null = null;
@@ -148,13 +184,15 @@ export default class CalDavPlugin extends Plugin {
       type: DOCK_TYPE,
       init: function (this: Custom | MobileCustom) {
         self.mountDock(this.element as HTMLElement);
-        // 点击插件图标展开 Dock 时，默认在主窗口打开日历视图
+        // 点击插件图标展开 Dock 时，默认在主窗口打开面板 —— 用**上次用过的视图**
+        // （与 Dock 里那个「打开上次视图」按钮口径一致，否则展开是月视图、
+        // 点按钮又跳回周视图，自相矛盾）。
         // 延迟执行：init 阶段 SiYuan 布局尚未完全就绪，立即 openTab 可能被忽略；
         // 等布局稳定（约 350ms）后再开，确保「日历」页签稳定弹出。
         // 移动端跳过：侧栏抽屉刚展开就被全屏面板盖住会让人摸不着北，
-        // 改由抽屉内的「日历视图 / 任务视图」按钮或顶部「插件」菜单触发。
+        // 改由抽屉内的按钮或顶部「插件」菜单触发。
         if (!isMobile()) {
-          setTimeout(() => self.openPanelTab("month"), 350);
+          setTimeout(() => self.openPanelTab(self.lastViewMode), 350);
         }
       },
       update: function (this: Custom | MobileCustom) {
@@ -197,6 +235,9 @@ export default class CalDavPlugin extends Plugin {
       }
       const header = self.mobilePanel?.dialog.element.querySelector(".b3-dialog__header");
       if (header) header.textContent = title;
+      // 记住这次视图：Dock 的合并按钮（打开上次视图）下次要用
+      if (mode) self.lastViewMode = mode;
+      writeLastView(mode);
     };
     document.addEventListener(VIEW_CHANGE_EVENT, this.viewChangeHandler);
 
@@ -281,9 +322,11 @@ export default class CalDavPlugin extends Plugin {
     this.unmountDock();
     const panel = renderDockPanel(target, {
       store: this.store,
-      onNav: (m) => this.openPanelTab(m),
+      // 不传 mode 时用主窗口当前视图 —— Dock 的合并按钮（打开上次视图）走这条
+      onNav: (m) => this.openPanelTab(m ?? this.mainCtx.viewMode),
       onSync: () => this.runSync(false),
       onSettings: () => this.openSetting(),
+      viewMode: () => this.mainCtx.viewMode,
       onOpenEditor: (item) => openEditor(this.mainCtx, { item }),
       onToggleDone: (item) => toggleTodoDone(this.mainCtx, item)
     });
@@ -456,7 +499,10 @@ export default class CalDavPlugin extends Plugin {
       this.openMobilePanel();
       return;
     }
-    const title = mode && mode !== "task" ? "日历" : mode === "task" ? "任务" : "日历与任务";
+    // 页签是单例、标题要跟内容一致。没传 mode 时（命令面板的「打开日历与任务」）
+    // 按 mainCtx 里当前生效的视图定标题 —— 面板渲染的就是那个视图。
+    const effective = mode ?? this.mainCtx.viewMode;
+    const title = effective === "task" ? "任务" : "日历";
     const tabPromise = openTab({
       app: this.app,
       custom: {
@@ -663,7 +709,8 @@ export default class CalDavPlugin extends Plugin {
       // 症状：选了「本周」却提示「当日没有日程或待办」（Obsidian 侧 2026-10-07 实测踩过）。
       insertTodayToDiary: (range, target) => this.insertTodayToDiary(range, target),
       unsaved: new Set(),
-      viewMode: "month" as ViewMode,
+      // 恢复上次用的视图：Dock 的合并按钮点下去打开的就是它（见 lastViewMode 注释）
+      viewMode: this.lastViewMode,
       cursor: todayStamp(),
       sortMode: "start",
       testReminder: () => this.testReminder(),

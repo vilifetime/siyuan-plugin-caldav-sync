@@ -739,10 +739,13 @@ const DOCK_FILTERS: Array<{ key: DockFilter; label: string }> = [
 
 export interface DockPanelOpts {
   store: CalStore;
-  onNav: (mode: ViewMode) => void;
+  /** 打开主窗口页签。**不传 mode** ＝ 打开「主窗口上次用的视图」（合并后的那个按钮走这条） */
+  onNav: (mode?: ViewMode) => void;
   /** 返回 Promise 才能被 .finally/.catch 链（写成 () => unknown 会在调用处报 TS2571） */
   onSync: () => Promise<unknown>;
   onSettings: () => void;
+  /** 主窗口当前视图（合并按钮的悬停提示要用它说明「点下去会去哪个视图」） */
+  viewMode: () => ViewMode;
   onOpenEditor: (item: CalItem) => void;
   onToggleDone: (item: CalItem) => void | Promise<void>;
 }
@@ -760,16 +763,16 @@ export function renderDockPanel(
   <button class="caldav-brand-set" data-dock-action="settings" title="设置" aria-label="设置">${icons.gear}</button>
 </div>
 <!--
-  Dock 工具行（2026-10-10 雄哥改版）：
-  原来两行 —— 上行 5 个图标按钮（新增/排序/日历视图/任务视图/刷新），
-  下行是日期范围下拉框 + 分类筛选。现合并成**一行四个操作点**：
-  ① 日期范围下拉框（时间窗筛选）② 日历视图 ③ 任务视图 ④ 筛选。
-  去掉的三个按钮各自的去处：
-    · 新建 —— 主窗口工具栏已有「+日程 / +待办」，Dock 不需要重复入口；
-    · 刷新 —— 主窗口工具栏已有「立即同步」按钮，页脚状态条也支持点击同步；
-    · 排序 —— 任务视图本身按时间轴分桶、组内已排序，Dock 里用处不大。
-  「分类筛选」升级为「筛选」：点击弹出与 Obsidian 完全一致的筛选面板
-  （按优先级 + 选择分类 两块），入口用漏斗图标。
+  Dock 工具行（2026-10-10 雄哥改版，同日二次调整）：
+  原两行（上行 5 个图标按钮 + 下行日期范围/分类筛选）→ 现在**一行三个操作点**：
+  ① 日期范围下拉框 ② 打开视图 ③ 筛选。
+  去掉的按钮与去处：
+    · 新建 / 刷新 —— 主窗口工具栏已有（+日程 / +待办 / 立即同步），
+      Dock 页脚状态条也能点击同步；
+    · 排序 —— 任务视图本身按时间轴分桶、组内已排序，Dock 里用处不大；
+    · **日历视图 / 任务视图两个按钮合并成一个**（图标用打勾的日历 calCheck）：
+      点击打开「主窗口上次用的那个视图」，省下的一格让日期范围下拉显示完整。
+  筛选弹层见下方 catPop 的注释 —— 它挂在 body 上，不在这个模板里。
 -->
 <div class="caldav-dock-tools">
   <div class="caldav-dock-filter-wrap">
@@ -783,20 +786,9 @@ export function renderDockPanel(
       ).join("")}
     </div>
   </div>
-  <button class="caldav-dock-act" data-action="cal-view" title="日历视图" aria-label="日历">${icons.calCheck}</button>
-  <button class="caldav-dock-act" data-action="task-view" title="任务视图" aria-label="任务">${icons.taskList}</button>
+  <button class="caldav-dock-act" data-action="open-view" title="打开上次视图" aria-label="打开上次视图">${icons.calCheck}</button>
   <div class="caldav-dock-filter-wrap caldav-dock-filter-wrap--btn">
     <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）" aria-label="筛选">${icons.filter}</button>
-    <div class="caldav-dock-cat-pop" data-pop="category" hidden>
-      <div class="caldav-dock-cat-head">按优先级</div>
-      <div class="caldav-dock-prio-list" data-prio-list></div>
-      <div class="caldav-dock-cat-head caldav-dock-cat-head--second">选择分类</div>
-      <div class="caldav-dock-cat-list" data-cat-list></div>
-      <div class="caldav-dock-cat-foot">
-        <button class="caldav-foot-btn caldav-foot-btn--ghost" data-cat-action="cancel">取消</button>
-        <button class="caldav-foot-btn caldav-foot-btn--primary" data-cat-action="ok">确定</button>
-      </div>
-    </div>
   </div>
 </div>
 <div class="caldav-dock-list">
@@ -813,10 +805,65 @@ export function renderDockPanel(
   const pops = Array.from(root.querySelectorAll<HTMLElement>(".caldav-dock-pop"));
   let destroyed = false;
 
+  /**
+   * 筛选弹层 —— **挂到 document.body**，而不是留在 Dock 内部。
+   *
+   * 为什么不留在 Dock 内：Dock 是左侧栏（默认宽仅 240px），宿主容器带
+   * `overflow: hidden`。弹层要往「筛选」按钮**右侧**弹出、伸进主编辑区才放得下，
+   * 留在 Dock 里无论 absolute 还是 fixed 都会被裁（fixed 还会被带 transform 的
+   * 祖先重新锚定），症状是「点筛选后弹层缺半边」。挂 body 后彻底跳出裁剪链。
+   *
+   * 代价：祖先链里没有 `.caldav-dock` 了，拿不到它上面的 `--caldav-*` / `--d-*`。
+   * 已在样式里把这两组变量同时声明到 `.caldav-dock-cat-pop` 上（见 index.css）。
+   */
+  const POP_GAP = 8;   // 弹层与锚点按钮之间的间距
+  const VIEW_PAD = 8;  // 弹层与视口边缘的最小留白
+  const catPop = document.createElement("div");
+  catPop.className = "caldav-dock-cat-pop";
+  catPop.dataset.pop = "category";
+  catPop.hidden = true;
+  catPop.innerHTML = `
+  <div class="caldav-dock-cat-head">按优先级</div>
+  <div class="caldav-dock-prio-list" data-prio-list></div>
+  <div class="caldav-dock-cat-head caldav-dock-cat-head--second">选择分类</div>
+  <div class="caldav-dock-cat-list" data-cat-list></div>
+  <div class="caldav-dock-cat-foot">
+    <button class="caldav-foot-btn caldav-foot-btn--ghost" data-cat-action="cancel">取消</button>
+    <button class="caldav-foot-btn caldav-foot-btn--primary" data-cat-action="ok">确定</button>
+  </div>`;
+  document.body.appendChild(catPop);
+
+  /**
+   * 定位弹层：默认贴按钮**右侧**；右侧放不下就自动翻到**左侧**；
+   * 两侧都不够则夹在视口内（宁可压住按钮也不越界）。
+   * 垂直与按钮顶部对齐，底部越界则上移。
+   * ⚠️ 必须先把 hidden 置 false 再调用 —— 否则 offsetWidth/Height 恒为 0，量不出尺寸。
+   */
+  function placeCatPop(): void {
+    const btn = root.querySelector<HTMLElement>("[data-dock='category']");
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const w = catPop.offsetWidth;
+    const h = catPop.offsetHeight;
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+
+    let left = r.right + POP_GAP;                  // 首选：按钮右侧（伸进主编辑区）
+    if (left + w > vw - VIEW_PAD) {
+      const onLeft = r.left - POP_GAP - w;         // 右侧放不下 → 试着翻到左侧
+      left = onLeft >= VIEW_PAD ? onLeft : Math.max(VIEW_PAD, vw - VIEW_PAD - w);
+    }
+    let top = r.top;
+    if (top + h > vh - VIEW_PAD) top = vh - VIEW_PAD - h;
+    if (top < VIEW_PAD) top = VIEW_PAD;
+
+    catPop.style.left = `${Math.round(left)}px`;
+    catPop.style.top = `${Math.round(top)}px`;
+  }
+
   function closePops(): void {
     pops.forEach((p) => (p.hidden = true));
-    const catPop = root.querySelector<HTMLElement>("[data-pop='category']");
-    if (catPop) catPop.hidden = true;
+    catPop.hidden = true;
     root.querySelectorAll(".caldav-dock-act.is-open").forEach((b) => b.classList.remove("is-open"));
   }
 
@@ -825,8 +872,8 @@ export function renderDockPanel(
     pendingPriorityFilter = [...dockPriorityFilter];
     renderPriorityPop();
     renderCategoryPop();
-    const catPop = root.querySelector<HTMLElement>("[data-pop='category']");
-    if (catPop) catPop.hidden = false;
+    catPop.hidden = false; // 先显示再量尺寸（placeCatPop 依赖 offsetWidth/Height）
+    placeCatPop();
   }
 
   function togglePop(name: string): void {
@@ -1060,8 +1107,8 @@ export function renderDockPanel(
   const PRIO_TIERS: Array<{ value: number }> = [{ value: 2 }, { value: 4 }, { value: 6 }, { value: 9 }];
 
   function renderPriorityPop(): void {
-    const pop = root.querySelector<HTMLElement>("[data-pop='category']");
-    const prioListEl = pop?.querySelector<HTMLElement>("[data-prio-list]");
+    // 弹层挂在 body 上，不在 root 里 —— 直接从 catPop 取节点（见 catPop 注释）
+    const prioListEl = catPop.querySelector<HTMLElement>("[data-prio-list]");
     if (!prioListEl) return;
     const filter = pendingPriorityFilter;
     const isAll = filter.length === 0;
@@ -1101,8 +1148,8 @@ export function renderDockPanel(
   }
 
   function renderCategoryPop(): void {
-    const pop = root.querySelector("[data-pop='category']") as HTMLElement;
-    const listEl = pop.querySelector("[data-cat-list]") as HTMLElement;
+    const listEl = catPop.querySelector<HTMLElement>("[data-cat-list]");
+    if (!listEl) return;
     const cats = opts.store.settings.categories?.length ? opts.store.settings.categories : DEFAULT_CATEGORIES;
     const filter = pendingCategoryFilter;
     const isAll = filter.length === 0;
@@ -1277,11 +1324,11 @@ export function renderDockPanel(
     if (popItem && root.contains(popItem)) {
       const a = popItem.dataset.action!;
       closePops();
-      // 注：新增 / 排序 / 刷新三个按钮已从 Dock 工具行移除（见模板顶部说明），
+      // 注：新增 / 排序 / 刷新三个动作已从 Dock 移除（见模板顶部说明），
       // 这里不再有 add-* / sort-* 分支。`sync` 仍保留 —— 页脚状态按钮
       // （.caldav-dock-status）走的就是它，是 Dock 里剩下的唯一同步入口。
-      if (a === "cal-view") return opts.onNav("month");
-      if (a === "task-view") return opts.onNav("task");
+      // 不传 mode = 打开「主窗口上次用的视图」（日历/任务两个按钮已合并，见模板注释）。
+      if (a === "open-view") return opts.onNav();
       if (a === "sync") {
         statusEl.textContent = "同步中…";
         void opts.onSync().finally(() => {
@@ -1292,51 +1339,9 @@ export function renderDockPanel(
       }
     }
 
-    // 筛选弹层：优先级 + 分类
-    const catPopEl = root.querySelector<HTMLElement>("[data-pop='category']");
-    const prioItem = t.closest(".caldav-dock-prio-item") as HTMLElement | null;
-    const catItem = t.closest(".caldav-dock-cat-item") as HTMLElement | null;
-    const catAction = t.closest("[data-cat-action]") as HTMLElement | null;
-    if (catPopEl && !catPopEl.hidden && (prioItem || catItem || catAction)) {
-      if (catAction) {
-        if (catAction.dataset.catAction === "ok") {
-          dockCategoryFilter = pendingCategoryFilter;
-          dockPriorityFilter = pendingPriorityFilter;
-          renderDockList();
-        }
-        closePops();
-        return;
-      }
-      if (prioItem) {
-        const key = Number(prioItem.dataset.prioKey);
-        if (key === 0) {
-          pendingPriorityFilter = [];
-        } else {
-          const set = new Set(pendingPriorityFilter);
-          if (set.has(key)) set.delete(key);
-          else set.add(key);
-          pendingPriorityFilter = Array.from(set);
-        }
-        renderPriorityPop();
-        return;
-      }
-      if (catItem) {
-        const key = catItem.dataset.catKey!;
-        if (key === "__all__") {
-          pendingCategoryFilter = [];
-        } else {
-          const set = new Set(pendingCategoryFilter);
-          if (set.has(key)) set.delete(key);
-          else set.add(key);
-          pendingCategoryFilter = Array.from(set);
-        }
-        renderCategoryPop();
-        return;
-      }
-    }
+    // 「筛选」按钮：开/关弹层（弹层本身的点击由 catPop 自己的监听处理）
     if (t.closest("[data-dock='category']")) {
-      const catPopEl2 = root.querySelector<HTMLElement>("[data-pop='category']");
-      if (catPopEl2?.hidden) openCategoryPop();
+      if (catPop.hidden) openCategoryPop();
       else closePops();
       return;
     }
@@ -1360,19 +1365,82 @@ export function renderDockPanel(
   };
   root.addEventListener("click", onRootClick);
 
+  /**
+   * 筛选弹层内的交互（优先级 / 分类 / 取消 / 确定）。
+   *
+   * 弹层挂在 body 上，点击**不会冒泡到 root**，所以由弹层自己的监听调用这里；
+   * 拆成独立函数是为了让「弹层在哪」与「点了做什么」解耦。
+   * 返回 true 表示这一下已被消费。
+   */
+  function handleCatPopClick(t: HTMLElement): boolean {
+    const prioItem = t.closest(".caldav-dock-prio-item") as HTMLElement | null;
+    const catItem = t.closest(".caldav-dock-cat-item") as HTMLElement | null;
+    const catAction = t.closest("[data-cat-action]") as HTMLElement | null;
+    if (!prioItem && !catItem && !catAction) return false;
+
+    if (catAction) {
+      if (catAction.dataset.catAction === "ok") {
+        dockCategoryFilter = pendingCategoryFilter;
+        dockPriorityFilter = pendingPriorityFilter;
+        renderDockList();
+      }
+      closePops();
+      return true;
+    }
+    if (prioItem) {
+      const key = Number(prioItem.dataset.prioKey);
+      if (key === 0) {
+        pendingPriorityFilter = [];
+      } else {
+        const set = new Set(pendingPriorityFilter);
+        if (set.has(key)) set.delete(key);
+        else set.add(key);
+        pendingPriorityFilter = Array.from(set);
+      }
+      renderPriorityPop();
+      placeCatPop(); // 内容可能换行导致高度变化，重新定位
+      return true;
+    }
+    // catItem 非空
+    const key = catItem!.dataset.catKey!;
+    if (key === "__all__") {
+      pendingCategoryFilter = [];
+    } else {
+      const set = new Set(pendingCategoryFilter);
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
+      pendingCategoryFilter = Array.from(set);
+    }
+    renderCategoryPop();
+    placeCatPop();
+    return true;
+  }
+
+  const onCatPopClick = (ev: MouseEvent) => {
+    if (handleCatPopClick(ev.target as HTMLElement)) ev.stopPropagation();
+  };
+  catPop.addEventListener("click", onCatPopClick);
+
   // 筛选下拉已改为自定义控件（原生 <select> 的 change 监听随之移除）
   // Dock 搜索框已于 2026-10-09 移除（雄哥要求），原先唯一的 input 监听随之删除。
 
   const onDocClick = (ev: MouseEvent) => {
     const t = ev.target as HTMLElement;
-    if (!root.contains(t)) closePops();
+    // catPop 挂在 body 上，不在 root 里，必须单独放行 —— 否则点弹层内的标签
+    // 会先被这里关掉（document 捕获阶段早于弹层自身的 click 监听）。
+    if (root.contains(t) || catPop.contains(t)) return;
+    closePops();
   };
   document.addEventListener("click", onDocClick, true);
 
   const listScrollEl = root.querySelector<HTMLElement>(".caldav-dock-list");
   const onScrollClose = () => closePops();
   listScrollEl?.addEventListener("scroll", onScrollClose);
-  window.addEventListener("resize", onScrollClose);
+  // 视口尺寸变化（含思源侧栏拖拽）：弹层是 fixed 定位，重算一次而不是关掉
+  const onWinResize = () => {
+    if (!catPop.hidden) placeCatPop();
+  };
+  window.addEventListener("resize", onWinResize);
 
   const unsub = opts.store.onChange(() => {
     // 勾选引发的变更跳过重建：DOM 已就地更新，重建只会闪一下并把滚动打回顶部
@@ -1380,8 +1448,24 @@ export function renderDockPanel(
     renderStatus();
     renderDockList();
   });
+
+  /**
+   * 合并后的「打开视图」按钮：悬停提示跟随主窗口当前（即上次）的视图，
+   * 让人一眼知道点下去会去哪。视图在主窗口被切换时通过 VIEW_CHANGE_EVENT 通知。
+   */
+  const syncViewBtnLabel = () => {
+    const btn = root.querySelector<HTMLElement>('[data-action="open-view"]');
+    if (!btn) return;
+    const label = opts.viewMode() === "task" ? "任务视图" : "日历视图";
+    btn.title = `打开${label}（上次打开的视图）`;
+    btn.setAttribute("aria-label", `打开${label}`);
+  };
+  const onViewChange = () => syncViewBtnLabel();
+  document.addEventListener(VIEW_CHANGE_EVENT, onViewChange);
+
   renderStatus();
   syncDockFilterLabel();
+  syncViewBtnLabel();
   renderDockList();
 
   return {
@@ -1390,6 +1474,7 @@ export function renderDockPanel(
       if (destroyed) return;
       renderStatus();
       syncDockFilterLabel();
+      syncViewBtnLabel();
       renderDockList();
     },
     destroy() {
@@ -1398,9 +1483,14 @@ export function renderDockPanel(
       // 漏掉就会叠加处理器，一次点击触发多次（见 onRootClick 处说明）。
       root.removeEventListener("click", onRootClick);
       document.removeEventListener("click", onDocClick, true);
+      document.removeEventListener(VIEW_CHANGE_EVENT, onViewChange);
+      catPop.removeEventListener("click", onCatPopClick);
       listScrollEl?.removeEventListener("scroll", onScrollClose);
-      window.removeEventListener("resize", onScrollClose);
+      window.removeEventListener("resize", onWinResize);
       unsub();
+      // 弹层挂在 body 上，不随 root.innerHTML 一起清掉 —— 必须显式移除，
+      // 否则每次重建 Dock 都会在 body 里堆一个孤儿节点。
+      catPop.remove();
       root.innerHTML = "";
     }
   };

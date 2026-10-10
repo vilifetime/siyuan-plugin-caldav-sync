@@ -2502,8 +2502,12 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   .caldav-sidebar { display: none; }
 }
 
-/* ===== Dock 精简导航面板（左侧栏） ===== */
-.caldav-dock {
+/* Dock 与它的筛选弹层共用同一套 CSS 变量。
+   弹层挂在 body 上（见 .caldav-dock-cat-pop 注释），祖先链里没有 .caldav-dock，
+   所以变量必须在弹层自身上也能解析 —— 否则弹层里的 var(--d-*) / var(--caldav-*)
+   全部落空：边框退化成 currentColor、选中底色消失、页脚按钮变成无边框灰字。 */
+.caldav-dock,
+.caldav-dock-cat-pop {
   --caldav-accent: var(--b3-theme-primary, #3575f0);
   --caldav-bg: var(--b3-theme-background, #faf9f6);
   --caldav-bg-2: var(--b3-theme-background-light, #f6f8fa);
@@ -2512,6 +2516,19 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   --caldav-text: var(--b3-theme-on-background, #1f2329);
   --caldav-text-2: var(--b3-theme-on-surface, #646a73);
   --caldav-danger: var(--b3-theme-error, #d23f31);
+  --d-page: var(--b3-theme-background, #fff);
+  --d-card: var(--b3-theme-surface, var(--b3-theme-background, #fff));
+  --d-input: var(--b3-theme-background-light, var(--b3-theme-surface, #f6f8fa));
+  --d-input-hover: color-mix(in srgb, var(--b3-theme-background-light, #f6f8fa) 90%, var(--b3-theme-on-background, #1f2329) 10%);
+  --d-border: var(--b3-border-color, #e4e7ed);
+  --d-text: var(--b3-theme-on-background, #1f2329);
+  --d-text-2: var(--b3-theme-on-surface, #646a73);
+  --d-accent: var(--b3-theme-primary, #3575f0);
+  --d-danger: var(--b3-theme-error, #d23f31);
+}
+
+/* ===== Dock 精简导航面板（左侧栏） ===== */
+.caldav-dock {
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -2770,22 +2787,22 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .caldav-calfilter-note[hidden] { display: none; }
 
-/* ===== Dock 工具行（2026-10-10 改版）=====
-   一行四个操作点：日期范围下拉框 + 日历视图 + 任务视图 + 筛选。
-   用 grid：`minmax(0, 1.7fr) repeat(3, minmax(0, 1fr))`。
-   - 三个图标按钮各占 1fr（等宽、与 .caldav-dock-act 的 38px 高匹配）；
-   - 日期范围下拉框占 1.7fr —— 文字「未来七天」比图标宽，但整体要能跟三个
-     图标按钮挤在同一行，故只多给 0.7 份，空间不够时自身 min-width:0 主动收窄
-     （文本 overflow ellipsis），不会把后三个按钮挤出可视区。
-   grid 轨道彼此独立，四项天然等高等距（历史坑：flex 下下拉框会把剩余宽度吃光）。 */
+/* ===== Dock 工具行（2026-10-10 改版，同日二次调整）=====
+   一行三个操作点：日期范围下拉框 + 打开视图 + 筛选。
+   用 grid：`minmax(0, 2.7fr) repeat(2, minmax(0, 1fr))`。
+   - 两个图标按钮各占 1fr（等宽、与 .caldav-dock-act 的 38px 高匹配）；
+   - 日期范围下拉框占 2.7fr —— 原来「日历视图 / 任务视图」两个按钮合并成一个后
+     空出一整份，全给日期范围，让「未来七天」这类文案能完整显示；
+   - 空间仍不够时自身 min-width:0 主动收窄（文本 overflow ellipsis），
+     绝不把另外两个按钮挤出可视区（历史坑：flex 下下拉框会把剩余宽度吃光）。
+   grid 轨道彼此独立，三项天然等高等距。 */
 .caldav-dock-tools {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 2.7fr) repeat(2, minmax(0, 1fr));
   align-items: stretch;
   gap: 6px;
   margin-top: 8px;
 }
-.caldav-dock-menu { position: relative; display: flex; }
 
 /* 工具行里的日期范围下拉：撑满自己的网格轨道，垂直居中 */
 .caldav-dock-tools > .caldav-dock-filter-wrap {
@@ -2852,17 +2869,21 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .caldav-dock-pop[hidden] { display: none; }
 
-/* 筛选弹层：absolute 定位，锚在「筛选」按钮的包裹层上（该层 position:relative）。
-   2026-10-10 改版：原来用 fixed 并在 JS 里算视口坐标（left = r.right + 8），但
-   Dock 宿主容器带 overflow:hidden，fixed 后代会被裁掉 —— 弹层已打开却整块在可视区外，
-   表现为「点筛选没反应」。现改为纯 CSS 定位，JS 只翻 hidden（与 Obsidian 侧一致）。 */
+/* 筛选弹层（2026-10-10 二次调整）。
+   定位：**挂 body + position:fixed**，坐标由 JS 算（placeCatPop）——
+   默认贴「筛选」按钮右侧、伸进主编辑区；右侧放不下会自动翻到左侧。
+   为什么必须脱离 Dock：Dock 是左侧栏（默认 240px）、宿主带 overflow:hidden，
+   弹层宽 260px 在 Dock 内无论怎么定位都会被裁掉左边（旧版 `right:0` 就是这样，
+   表现为「优先级」被切掉半个字）。挂 body 后不再受任何祖先裁剪/transform 影响。
+   坐标初值给 0，避免首帧闪到左上角外。 */
 .caldav-dock-cat-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 1000;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2000;
   width: 260px;
-  max-width: min(260px, calc(100vw - 24px));
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
   background: var(--d-card);
   border: 1px solid var(--d-border);
   border-radius: 12px;
@@ -2988,21 +3009,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-dock-popitem:hover { background: var(--caldav-bg-3); }
 .caldav-dock-popitem.is-active { color: var(--caldav-accent); font-weight: 600; }
 
-/* ===== Dock：最近任务/事件列表 ===== */
-/* 主题变量提到 .caldav-dock 上：筛选弹层现在挂在 .caldav-dock-tools（不在
-   .caldav-dock-list 里），若变量只在 list 上定义，弹层里所有 var(--d-*) 都会
-   落空 —— 弹层边框退化成 currentColor、选中底色消失。放上一层两边都能取到。 */
-.caldav-dock {
-  --d-page: var(--b3-theme-background, #fff);
-  --d-card: var(--b3-theme-surface, var(--b3-theme-background, #fff));
-  --d-input: var(--b3-theme-background-light, var(--b3-theme-surface, #f6f8fa));
-  --d-input-hover: color-mix(in srgb, var(--b3-theme-background-light, #f6f8fa) 90%, var(--b3-theme-on-background, #1f2329) 10%);
-  --d-border: var(--b3-border-color, #e4e7ed);
-  --d-text: var(--b3-theme-on-background, #1f2329);
-  --d-text-2: var(--b3-theme-on-surface, #646a73);
-  --d-accent: var(--b3-theme-primary, #3575f0);
-  --d-danger: var(--b3-theme-error, #d23f31);
-}
+/* ===== Dock：最近任务/事件列表 =====
+   （--caldav-* / --d-* 两套变量统一声明在文件上方的
+   `.caldav-dock, .caldav-dock-cat-pop` 规则里 —— 弹层挂在 body 上，
+   变量必须也能在弹层自身上解析。） */
 .caldav-dock-list {
   flex: 1;
   min-height: 0;

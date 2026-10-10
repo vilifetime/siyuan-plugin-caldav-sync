@@ -2,7 +2,7 @@
   "name": "siyuan-plugin-caldav-sync",
   "author": "vilifetime",
   "url": "https://github.com/vilifetime/siyuan-plugin-caldav-sync",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "minAppVersion": "3.2.0",
   "backends": [
     "all"

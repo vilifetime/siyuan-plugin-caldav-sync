@@ -197,14 +197,18 @@ export class SyncEngine {
             // 尝试获取 sync-token 供下次增量（RFC 6578：PROPFIND sync-token）
             cal.syncToken = await this.tryGetSyncToken(cal);
           }
-          report.fetched += items.length;
           const deletedKeys = deletedHrefs
             .map((h) => this.findKeyByHref(h, cal.url))
             .filter(Boolean) as string[];
+          const merged = this.store.mergeServerItems(items, deletedKeys);
+          // 「拉取 N 条」取**本地实际写入数**，不能取 items.length ——
+          // 自己刚推上去的条目会被服务端当变更推回（自环回显），
+          // 取后者会让「新建一条」显示成「上传1 拉取1」（2026-10-10 实测）。
+          report.fetched += merged.applied;
           // 服务端删掉的条目（deletedKeys 命中的）也算「本地删除」——
           // 少了这个计数，用户在另一端删除后同步会看到「删除 0 条」，
           // 以为删除没同步过来（2026-10-10 实测）。
-          report.deleted += this.store.mergeServerItems(items, deletedKeys).removed;
+          report.deleted += merged.removed;
           // 拉取成功了才做对账 —— 上一步抛错说明与服务端的对话不完整，
           // 此时拿到的清单不可信，宁可这一轮不做（见 reconcile 的安全约束）
           await this.reconcile(cal, report);

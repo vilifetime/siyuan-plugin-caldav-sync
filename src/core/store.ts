@@ -203,11 +203,15 @@ export class CalStore {
   }
 
   /** 用一批服务端条目合并替换同日历的远端态（保留本地脏数据） */
-  mergeServerItems(incoming: CalItem[], deletedKeys: string[] = []): { changed: boolean; removed: number } {
+  mergeServerItems(incoming: CalItem[], deletedKeys: string[] = []): { changed: boolean; removed: number; applied: number } {
     let changed = false;
     // 本地实际消失的条目数。**必须报给上层**，否则服务端删掉的条目在同步报告里
     // 表现为「删除 0 条」，用户会以为删除没同步过来（2026-10-10 实测）。
     let removed = 0;
+    // 本地**实际写入**的条目数。上层要用它当「拉取 N 条」——
+    // 不能用 incoming.length，否则自己刚推上去的条目被服务端当变更推回时，
+    // 会被重复计入拉取（自环回显，2026-10-10 实测：新建一条显示「上传1 拉取1」）。
+    let applied = 0;
     for (const inc of incoming) {
       // 本地脏数据优先：等上传后再被服务端确认覆盖
       const existing = this.items.get(keyOf(inc));
@@ -234,6 +238,7 @@ export class CalStore {
       }
       this.items.set(keyOf(inc), { ...inc, dirty: false, deleted: false });
       changed = true;
+      applied++;
     }
     for (const key of deletedKeys) {
       if (this.items.has(key)) {
@@ -250,7 +255,7 @@ export class CalStore {
       }
     }
     if (changed) this.emit();
-    return { changed, removed };
+    return { changed, removed, applied };
   }
 
   /** 待上传的脏条目 */

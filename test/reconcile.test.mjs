@@ -381,10 +381,12 @@ await t("caldav.ts 暴露 fileNameOf / listResourceNames 且用 Depth:1 取全�
 //      且 Obsidian 侧报「同步失败：对账：已清理 1 条…」。思源侧是同构代码，同样要修。 ----
 
 await t("服务端删除要计入 report.deleted（否则用户以为删除没同步过来）", () => {
+  // 调用点现在是先接住返回值再取 .removed，不是链式直取
   assert.ok(
-    /report\.deleted \+= this\.store\.mergeServerItems\(items, deletedKeys\)\.removed/.test(srcSync),
-    "mergeServerItems 的 removed 返回值必须累加进 report.deleted"
+    /const merged = this\.store\.mergeServerItems\(items, deletedKeys\)/.test(srcSync),
+    "mergeServerItems 的返回值必须先接住"
   );
+  assert.ok(/report\.deleted \+= merged\.removed/.test(srcSync), "removed 要累加进 report.deleted");
   const recon = srcSync.slice(srcSync.indexOf("private async reconcile"), srcSync.indexOf("private async pushDirty"));
   assert.ok(
     /report\.reconciled\+\+;[\s\S]{0,200}?report\.deleted\+\+/.test(recon),
@@ -392,20 +394,41 @@ await t("服务端删除要计入 report.deleted（否则用户以为删除没�
   );
 });
 
-await t("mergeServerItems 返回 removed 计数（store 侧真的实现了吗）", () => {
+await t("mergeServerItems 返回 removed / applied 计数（store 侧真的实现了吗）", () => {
   assert.ok(
-    /mergeServerItems\(incoming: CalItem\[\], deletedKeys: string\[\] = \[\]\): \{ changed: boolean; removed: number \}/.test(
+    /mergeServerItems\(incoming: CalItem\[\], deletedKeys: string\[\] = \[\]\): \{ changed: boolean; removed: number; applied: number \}/.test(
       srcStore
     ),
-    "签名要改成返回 { changed, removed }"
+    "签名要返回 { changed, removed, applied }"
   );
   const body = srcStore.slice(srcStore.indexOf("mergeServerItems(incoming"));
   assert.ok(/let removed = 0/.test(body), "要有 removed 计数");
+  assert.ok(/let applied = 0/.test(body), "要有 applied 计数（拉取用）");
   assert.ok(
-    /this\.items\.delete\(key\);\s*changed = true;\s*removed\+\+/.test(body),
-    "deletedKeys 命中时必须 removed++"
+    /if \(this\.items\.has\(key\)\) \{\s*this\.items\.delete\(key\);\s*changed = true;\s*removed\+\+/.test(body),
+    "deletedKeys 命中时才 removed++（命中不存在的 key 不能计数）"
   );
-  assert.ok(/return \{ changed, removed \}/.test(body), "要返回 removed");
+  assert.ok(/return \{ changed, removed, applied \}/.test(body), "要返回 removed + applied");
+});
+
+// ---- 2026-10-10 第三轮：新建一条显示「上传1 拉取1」——自环回显 ----
+
+await t("fetched 取实际写入数，不能取 items.length（否则自环回显让拉取虚增）", () => {
+  assert.ok(/report\.fetched \+= merged\.applied/.test(srcSync), "拉取要取 merged.applied");
+  assert.ok(
+    !/report\.fetched \+= items\.length/.test(srcSync),
+    "绝不能再取 items.length —— 自己刚推的会被当变更推回，重复计入拉取"
+  );
+});
+
+await t("applied 只在真写入时 ++（same 判定跳过的条目不能算拉取）", () => {
+  const body = srcStore.slice(srcStore.indexOf("mergeServerItems(incoming"));
+  // same → continue 必须排在 applied++ 之前，否则自环条目照样被计
+  const iSet = body.indexOf("this.items.set(keyOf(inc)");
+  const iApplied = body.indexOf("applied++");
+  const iSame = body.indexOf("if (same) continue;");
+  assert.ok(iSame > 0 && iSame < iSet, "same 判定要在写入之前（自环条目靠它挡掉）");
+  assert.ok(iApplied > iSet, "applied++ 要紧跟在真写入之后");
 });
 
 await t("对账提示走 lastNote 中性通道，绝不塞进 lastError", () => {

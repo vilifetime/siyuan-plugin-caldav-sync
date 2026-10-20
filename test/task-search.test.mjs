@@ -20,7 +20,8 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
+// ⚠️ 本仓库 CRLF 行尾：源码断言禁写死 `\n`，读进来先统一成 LF（2026-10-20）
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
 const stripComments = (s) =>
   s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
 

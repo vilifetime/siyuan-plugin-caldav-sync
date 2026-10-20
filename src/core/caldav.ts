@@ -2,8 +2,8 @@
  * 极简 CalDAV 客户端：发现 / 拉取 / 上传 / 删除 / sync-token 增量
  */
 import type { CalCalendar, CalItem } from "./types";
-import { httpRequest, HttpError, isNetworkLevelError, type HttpResult, type Channel } from "./http";
-import { itemsFromICS } from "./ics";
+import { httpRequest, HttpError, isNetworkLevelError, uploadTimeoutMs, type HttpResult, type Channel } from "./http";
+import { itemsFromICS, ICS_SIZE_MAX_MB, mbToBytes } from "./ics";
 
 export interface DavAuth {
   username: string;
@@ -301,20 +301,31 @@ async function multiget(cal: CalCalendar, channel: Channel, auth: DavAuth, hrefs
   return items;
 }
 
-function parseMultistatus(xml: string, cal: CalCalendar): CalItem[] {
+export function parseMultistatus(xml: string, cal: CalCalendar): CalItem[] {
   const items: CalItem[] = [];
   const chunks = xml.split(/<(?:[A-Za-z0-9_-]+:)?response>/i).slice(1);
   for (const chunk of chunks) {
-    const href = pickHrefXml(chunk)[0] || "";
-    const etag = pickTextXml(chunk, "getetag")[0] || "";
+    const href = unescapeXml(pickHrefXml(chunk)[0] || "");
+    // 服务端（Baïkal/sabre）的 getetag 以 XML 转义形态返回：&quot;xxxx&quot;，
+    // 必须先反解码成 "xxxx" 再剥引号；否则本地 etag 残留 &quot;，发出
+    // If-Match: ""&quot;xxxx&quot;"" 会让所有条件 PUT/DELETE 返回 412（长期固有 bug）。
+    const etag = sanitizeEtag(pickTextXml(chunk, "getetag")[0] || "");
     const calDataM = /<(?:[A-Za-z0-9_-]+:)?calendar-data[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_-]+:)?calendar-data>/i.exec(chunk);
     if (!href || !calDataM) continue;
-    let ics = calDataM[1];
-    // XML 实体还原
-    ics = ics.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
-    items.push(...itemsFromICS(ics, cal.url, toAbsolute(cal.url, href), etag.replace(/^"|"$/g, "")));
+    const ics = unescapeXml(calDataM[1]);
+    items.push(...itemsFromICS(ics, cal.url, toAbsolute(cal.url, href), etag));
   }
   return items;
+}
+
+function unescapeXml(s: string): string {
+  // 顺序很关键：&amp; 必须最后替换，否则 &amp;lt; 会先变 &lt; 再变 <。
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+
+/** 还原 etag 的 XML 转义并剥掉 DAV 引用字符串的引号，得到纯 hex（与 putItem 响应头一致）。 */
+export function sanitizeEtag(etag: string): string {
+  return unescapeXml(etag).replace(/^"|"$/g, "");
 }
 
 function escapeXml(s: string): string {
@@ -325,17 +336,50 @@ export interface PutResult {
   etag?: string;
 }
 
-/** 上传/修改条目；etag 提供 If-Match */
-export async function putItem(item: CalItem, ics: string, channel: Channel, auth: DavAuth): Promise<PutResult> {
+/** 上传/修改条目；etag 提供 If-Match。icsSizeMaxMB 取设置里的「单个ICS文件限制」 */
+export async function putItem(
+  item: CalItem,
+  ics: string,
+  channel: Channel,
+  auth: DavAuth,
+  icsSizeMaxMB?: number
+): Promise<PutResult> {
+  // 超大直接拒，请求都不发：Radicale 默认 max_resource_size=10MB、PHP 默认
+  // post_max_size=8MB，超了必然 413。而且 auto 通道会先把超大 body 塞进内核代理
+  // （还要再 base64 一遍，74MB 文件 → ~132MB JSON），代理层就失败，最后报出来的是
+  // 含糊的「网络请求失败，建议改为内核代理」——把用户往错方向引（2026-10-15 实测）。
+  const icsBytes = new TextEncoder().encode(ics).length;
+  const maxMB = typeof icsSizeMaxMB === "number" && Number.isFinite(icsSizeMaxMB) && icsSizeMaxMB > 0 ? icsSizeMaxMB : ICS_SIZE_MAX_MB;
+  const maxBytes = mbToBytes(maxMB, ICS_SIZE_MAX_MB);
+  if (icsBytes > maxBytes) {
+    throw new HttpError(
+      413,
+      `内容过大（ICS ${(icsBytes / 1024 / 1024).toFixed(1)}MB），超过「单个ICS文件限制」${maxMB}MB，未上传。` +
+        `请删除该条目的大附件或改用外链；如确认服务器允许更大体积，可到设置里调高该上限。`
+    );
+  }
   const headers: Record<string, string> = { "Content-Type": "text/calendar; charset=utf-8" };
   if (item.etag) headers["If-Match"] = `"${item.etag}"`;
+  // 超时按 ICS 实际字节数放宽：附件是 base64 内联的，5MB 图片 → ICS 约 7MB，
+  // 家庭宽带上行传完要一分多钟，固定 30s 必然超时（2026-10-15 实测卡死）。
   const res = await httpRequest(
     item.href,
-    { method: "PUT", body: ics, headers, timeoutMs: 30000 },
+    { method: "PUT", body: ics, headers, timeoutMs: uploadTimeoutMs(icsBytes) },
     channel,
     auth
   );
   if (res.status === 412) throw new HttpError(412, "服务端已变更（412 冲突）");
+  if (res.status === 413) {
+    // 别把插件的设置值说成「服务器默认」：真实上限各不相同——nginx 反代常见
+    // 默认仅 1MB（client_max_body_size），Radicale 默认 10MB，PHP 默认 8MB。
+    // 2026-10-18 雄哥的 Baïkal 前有 nginx，413 就来自反代而非 CalDAV 服务器。
+    throw new HttpError(
+      413,
+      `上传失败：内容过大，服务器拒绝（HTTP 413）。` +
+        `服务器（或其反向代理）对单条日历数据有上限——nginx 反代常见默认仅 1MB，Radicale 默认 10MB。` +
+        `请删除该待办的大附件或改用外链后重试。`
+    );
+  }
   if (res.status >= 400) throw new HttpError(res.status, `上传失败: HTTP ${res.status}`);
   const etag = (res.headers["etag"] || res.headers["etag".toLowerCase()] || "").replace(/^"|"$/g, "");
   return { etag: etag || undefined };

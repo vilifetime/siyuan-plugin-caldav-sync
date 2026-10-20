@@ -249,26 +249,38 @@ const firstDocId = monthFirst === today ? "doc-today" : "doc-1st";
 // ---- 缺失的日记必须建在笔记本配置的路径下，并补上日记属性 ----
 // 回归「插进去了但不在 daily note 里」：旧实现丢在笔记本根目录 /<日期>。
 // 用雄哥实际的**多层模板**（年/月/日三段）：/daily note/2026/10/2026-10-14
+// ⚠️ 周一运行：本周首日就是今天 → 走内核 createDailyNote（与上文「找不到今天的日记」
+//    同路），手建分支根本不执行。两组断言必须按 monday===today 二选一，
+//    否则周一必误报（2026-10-19 00:xx 跨午夜跑到周一，实测挂过一次）。
 diaryDocs = [];
 calls.length = 0;
 await plugin.insertTodayToDiary("week", "spanStart");
-const createdDoc = calls.find((c) => c.url === "/api/filetree/createDocWithMd");
-assert.ok(createdDoc, "非今天的日记缺失时应按路径手建");
-assert.strictEqual(
-  createdDoc.body.path,
-  renderTpl(dailyNoteSavePath, monday),
-  `新建路径必须逐段落在笔记本配置的日记目录下（期望 ${renderTpl(dailyNoteSavePath, monday)}），不能丢在笔记本根目录`
-);
-assert.ok(
-  !String(createdDoc.body.path).includes("{{") && !String(createdDoc.body.path).includes("}}"),
-  `新建路径不能残留模板占位符（否则建出垃圾文档）：${createdDoc.body.path}`
-);
-const setAttr = calls.find((c) => c.url === "/api/attr/setBlockAttrs");
-assert.ok(setAttr, "手动建日记后必须补上 custom-dailynote-* 属性（否则识别不出是日记）");
-assert.ok(
-  Object.keys(setAttr.body.attrs || {}).some((k) => k.startsWith("custom-dailynote-")),
-  `补的属性名应是 custom-dailynote-yyyymmdd，实际：${JSON.stringify(setAttr.body.attrs)}`
-);
+if (monday === today) {
+  const createdByKernel = calls.find((c) => c.url === "/api/filetree/createDailyNote");
+  assert.ok(createdByKernel, "周一运行时本周首日＝今天，应走内核 createDailyNote");
+  assert.ok(
+    !calls.some((c) => c.url === "/api/filetree/createDocWithMd"),
+    "今天的日记不该手建（会建出没有日记属性的副本）"
+  );
+} else {
+  const createdDoc = calls.find((c) => c.url === "/api/filetree/createDocWithMd");
+  assert.ok(createdDoc, "非今天的日记缺失时应按路径手建");
+  assert.strictEqual(
+    createdDoc.body.path,
+    renderTpl(dailyNoteSavePath, monday),
+    `新建路径必须逐段落在笔记本配置的日记目录下（期望 ${renderTpl(dailyNoteSavePath, monday)}），不能丢在笔记本根目录`
+  );
+  assert.ok(
+    !String(createdDoc.body.path).includes("{{") && !String(createdDoc.body.path).includes("}}"),
+    `新建路径不能残留模板占位符（否则建出垃圾文档）：${createdDoc.body.path}`
+  );
+  const setAttr = calls.find((c) => c.url === "/api/attr/setBlockAttrs");
+  assert.ok(setAttr, "手动建日记后必须补上 custom-dailynote-* 属性（否则识别不出是日记）");
+  assert.ok(
+    Object.keys(setAttr.body.attrs || {}).some((k) => k.startsWith("custom-dailynote-")),
+    `补的属性名应是 custom-dailynote-yyyymmdd，实际：${JSON.stringify(setAttr.body.attrs)}`
+  );
+}
 
 // ---- 模板认不全时：绝不能渲染出带 {{ }} 的路径（否则建出垃圾文档）----
 // ⚠️ 这里**直接加载生产模块真实调用**，不靠 insertTodayToDiary 间接覆盖：
@@ -321,6 +333,8 @@ for (const [name, tpl] of [
   assert.ok(!out.includes("{{"), `模板（${name}）结果绝不能残留 {{ 占位符`);
 }
 // 补一条端到端：残缺模板下走「非今天」的手建分支，也不能建出垃圾路径
+// （注：模板残缺 → hPath 空 → 走兜底「根目录 /<日期>」手建，与目标是否今天无关，
+//  本断言任意星期几都成立，不需要日期守卫）
 diaryDocs = [];
 calls.length = 0;
 const savedTpl = dailyNoteSavePath;

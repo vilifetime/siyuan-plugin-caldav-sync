@@ -21,6 +21,34 @@ export interface Alarm {
 }
 
 /** 本地缓存的一条日历条目（事件或待办） */
+/**
+ * 附件（iCalendar ATTACH，2026-10-14）。
+ *
+ * ⚠️ 省力版**只认 URI 形式**（`ATTACH:https://…/a.pdf`），即「文件放在别处、这里存个链接」。
+ * 二进制内嵌形式（`VALUE=BINARY;ENCODING=BASE64`）**不解析也不展示** ——
+ * 但它仍然被 `raw` 原文带着、`rebuildComponent` 会原样保留，**不会因为编辑而丢失**。
+ * 想丢的话得显式改 ATTACH 白名单，目前没有这样的操作。
+ */
+export interface CalAttachment {
+  /**
+   * URI 形式（外链）。与 `b64` **二选一**，两者都空 = 无效条目（保存时忽略）。
+   */
+  uri?: string;
+  /**
+   * 二进制内联形式：base64 载荷（**未折行**，折行由序列化时统一做）。
+   * 对应 RFC 5545 的 `ATTACH;VALUE=BINARY;ENCODING=BASE64:…`。
+   *
+   * 为什么走这条路：用户的 Radicale 把每个 PUT 进日历集合的文件都当 iCalendar 解析，
+   * 传 .txt/.pdf 一律 400（实测，服务端日志 `Failed to parse line`）。所以附件不能
+   * 单独放一个文件，只能内联进条目本身、跟着 ICS 一起同步。
+   */
+  b64?: string;
+  /** 文件名：URI 形式取末段，二进制件用上传时的文件名 */
+  name: string;
+  /** MIME 类型（FMTTYPE / FBTYPE 参数），可能为空 */
+  fmttype?: string;
+}
+
 export interface CalItem {
   uid: string;
   kind: CalKind;
@@ -43,6 +71,14 @@ export interface CalItem {
   recurId?: LocalStamp;
   exdates?: LocalStamp[];
   alarms?: Alarm[];
+  /**
+   * 附件：URI 形式（外链）与二进制内联形式（`b64`，见 CalAttachment）并存。
+   *
+   * ⚠️ 这个字段**就是权威来源** —— 解析时把所有 ATTACH 都收进来，编辑时按它重写。
+   * 唯一的例外：字段为 `undefined` 时（老数据，解析发生在本次改动之前），
+   * `rebuildComponent` 仍会把原文里的二进制件原样带回，避免升级后第一次编辑就丢附件。
+   */
+  attachments?: CalAttachment[];
   /** 待办：0 无 9 低 5 中 3 高 1 紧急 */
   priority?: number;
   /** 待办状态：needs-action / in-process / completed */
@@ -56,7 +92,17 @@ export interface CalItem {
   dirty?: boolean;
   /** 本地删除标记：同步时执行服务端删除 */
   deleted?: boolean;
-  /** 服务端 ICS 原文，编辑时在其基础上修改 */
+  /**
+   * 该条目的 **ICS 资源原文**（服务端返回的整份 calendar-data）。
+   *
+   * 这是「编辑不丢数据」的唯一凭据：`itemToEditedICS()` 重新解析它、只重建 UID
+   * （+RECURRENCE-ID）匹配的那个组件，其余内容原样带回 —— VTIMEZONE、同资源内的
+   * 其它组件、ATTACH 二进制件、ORGANIZER、ATTENDEE、X- 扩展属性全靠它活着。
+   *
+   * ⚠️ 缺失即退化：`itemToEditedICS` 会退成 `itemToNewICS` 从 CalItem 整份重拼，
+   * 上面那些**全部丢失**。所以拉取时必须赋值（`itemsFromICS` 负责），
+   * 新建条目在上传成功后也要立刻补上（`sync.ts` pushDirty）。
+   */
   raw?: string;
   /** 编辑器会话态：粘贴标题时自动识别其中的日期时间（仅编辑器内使用，不持久化到 ICS） */
   aiParse?: boolean;
@@ -184,6 +230,20 @@ export interface CalSettings {
    * 会在「日程与待办」小节最前面追加一个 `### 逾期待办` 子节。
    */
   includeOverdueTodos?: boolean;
+  /**
+   * 单个内联附件的硬上限（MB），超过在挑选时直接拒绝、不给确认机会。默认 5。
+   *
+   * 附件以 base64 内联进 ICS 同步，体积会涨约 1/3；服务端普遍限制单条日历数据
+   * 大小（Radicale 默认 10MB、PHP 默认 post_max_size 8MB），超了必然 413。
+   */
+  attachSizeMaxMB?: number;
+  /**
+   * 整份 ICS（含全部 base64 附件）的硬上限（MB），超过拒绝保存/上传。默认 10。
+   *
+   * 单文件上限挡不住「多个 4MB 凑 12MB」，所以按真实序列化结果卡总账。
+   * 自己的服务器上限更大就把这里调大（报错文案里的数字也取此值）。
+   */
+  icsSizeMaxMB?: number;
 }
 
 /**
@@ -218,7 +278,9 @@ export const DEFAULT_SETTINGS: CalSettings = {
   showExpiredEventsInTaskView: false,
   categories: DEFAULT_CATEGORIES,
   categoryMulti: false,
-  includeOverdueTodos: false
+  includeOverdueTodos: false,
+  attachSizeMaxMB: 5,
+  icsSizeMaxMB: 10
 };
 
 export interface SyncState {
@@ -233,15 +295,19 @@ export interface SyncState {
    */
   lastNote?: string;
   /**
-   * 自上次全量同步以来，**即时推送**（新建/编辑/删除单条）累计的上传数。
+   * 自上次全量同步以来，**即时推送**（新建/编辑/删除单条）成功上传的**条目 key**。
    *
-   * 为什么要有这个：单条编辑走 `pushAndPersist()` 立刻上云，它的计数原先被
-   * 整个丢弃。用户随后点全量同步时会看到「上传 0 · 删除 0」，以为改动没同步
+   * 为什么要有这个：单条编辑走 `pushAndPersist()` 立刻上云，它的计数原先被整个
+   * 丢弃。用户随后点全量同步时会看到「上传 0 · 删除 0」，以为改动没同步
    * （2026-10-10 实测）。故这里先攒着，等下一轮 syncAll 合并进报告再清零。
+   *
+   * 为什么按 key 存而不是按条数（2026-10-19 雄哥实测：同一事件打勾/编辑几次，
+   * 同步就报「上传 N 条」——虚胖）：旧实现按推送轮次累加，同一条目被操作 N 次
+   * 就计 N。改成按 key 去重，同一条目只算一条。
    */
-  pendingUploaded?: number;
-  /** 同上，即时推送累计的删除数 */
-  pendingDeleted?: number;
+  pendingUploadedKeys?: string[];
+  /** 同上，即时推送成功删除的条目 key */
+  pendingDeletedKeys?: string[];
 }
 
 export interface PersistData {

@@ -339,10 +339,11 @@
 .cal-month-cell:nth-child(7n) { border-right: none; }
 .cal-month-cell:hover { background: var(--caldav-bg-2); }
 .cal-month-cell.is-out { opacity: 0.45; }
-/* 今日单元格：加深底色 + 内描边加粗（用 inset 阴影避免挤动网格布局） */
+/* 今日单元格：只留背景色，不要框线（2026-10-20 雄哥要求）。
+   原实现是「底色 + inset 2px 描边」，描边在密集格子里的视觉噪声大于收益，
+   且与年视图今日格（纯底色）语言不一致。三端（年/月/周）统一为淡 accent 底。 */
 .cal-month-cell.is-today {
   background: color-mix(in srgb, var(--caldav-accent) 14%, transparent);
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--caldav-accent) 70%, transparent);
 }
 .cal-month-cell.is-today:hover {
   background: color-mix(in srgb, var(--caldav-accent) 20%, transparent);
@@ -643,10 +644,15 @@
   min-height: 0;
 }
 
+/* 今日表头：与月视图今日格同款淡 accent 底；日期数字用文字色强调，
+   不再用实心圆点（2026-10-20 雄哥要求「只要背景色，不要框线」——
+   圆点是实心块，与描边同属框线状标记，一并去掉）。 */
+.cal-wk-dayhead.is-today {
+  background: color-mix(in srgb, var(--caldav-accent) 14%, transparent);
+}
 .cal-wk-dayhead.is-today .cal-wk-num {
-  background: var(--caldav-accent);
-  color: #fff;
-  border-radius: 50%;
+  color: var(--caldav-accent);
+  font-weight: 700;
 }
 
 .cal-wk-wd { color: var(--caldav-text-2); font-size: 11px; line-height: 14px; }
@@ -1066,6 +1072,56 @@
 
 .cal-task-meta > span { flex: 0 0 auto; }
 .cal-task-desc { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto !important; min-width: 0; }
+
+/* 附件链接（2026-10-14）：任务视图里跟在备注之后，点击打开链接而非编辑器 */
+.cal-task-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 220px;
+  color: var(--caldav-text-2);
+}
+.cal-task-attach svg { flex: 0 0 auto; width: 13px; height: 13px; }
+.cal-task-attach-link {
+  color: var(--caldav-accent);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cal-task-attach-link:hover { text-decoration: underline; }
+/* 二进制内联件：不是外链，点击是下载。用虚线下划线区分，避免误以为会跳网页 */
+.cal-task-attach-link--bin {
+  color: var(--caldav-text);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.cal-task-attach-link--bin:hover { text-decoration: underline dotted; }
+.cal-task-attach-more {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--caldav-bg-3);
+  color: var(--caldav-text-2);
+}
+
+/* 编辑器附件区（2026-10-14） */
+.caldav-attach { display: flex; flex-direction: column; gap: 8px; }
+.caldav-attach-rows { display: flex; flex-direction: column; gap: 6px; }
+.caldav-attach-empty { font-size: 12px; color: var(--caldav-text-2); }
+.caldav-attach-row { display: flex; align-items: center; gap: 6px; }
+.caldav-attach-input { flex: 1 1 auto; min-width: 0; }
+.caldav-attach-actions { display: flex; align-items: center; gap: 8px; }
+.caldav-attach-hint { font-size: 11px; color: var(--caldav-text-2); line-height: 1.5; }
+.caldav-attach-msg { font-size: 12px; color: var(--caldav-text-2); min-height: 0; }
+.caldav-attach-msg:empty { display: none; }
+.caldav-attach-msg.is-error { color: var(--caldav-danger); }
+.caldav-btn--sm { padding: 3px 8px; font-size: 12px; }
+.caldav-btn--danger { color: var(--caldav-danger); }
 
 .cal-task-cal { display: inline-flex; align-items: center; gap: 4px; }
 .cal-task-cal i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
@@ -2864,15 +2920,6 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .caldav-dock-status:hover::before { opacity: .85; }
 
-/* 同步错误正文：直接摊在页脚，不再只藏在悬停提示里 */
-.caldav-dock-error {
-  padding: 0 8px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--caldav-danger, var(--b3-theme-error, #d23f31));
-  overflow-wrap: anywhere;
-  cursor: default;
-}
 /* 出错时只是「红字 + 红点」，不铺底色，保持低调但能一眼看到 */
 .caldav-dock-status.has-error {
   color: var(--caldav-danger);
@@ -4185,3 +4232,51 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   color: var(--caldav-accent);
   font-weight: 500;
 }
+
+/** 二进制内联附件的行（2026-10-14）：没有输入框，只有文件名 + 大小 + 删除 */
+.caldav-attach-row--bin {
+  padding: 4px 8px;
+  border: 1px solid var(--caldav-border);
+  border-radius: 6px;
+  background: var(--caldav-bg-2);
+}
+.caldav-attach-bin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+}
+.caldav-attach-bin svg { flex: 0 0 auto; width: 14px; height: 14px; }
+.caldav-attach-bin-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caldav-attach-bin-size {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--caldav-text-2);
+}
+
+/**
+ * 大文件上传前的行内确认栏（替代 confirm()）。
+ *
+ * ⚠️ 左边框用 **accent 中性色**，不用 danger（2026-10-15 雄哥截图报的）：
+ *    超过 800KB 只是「事前跟你确认一声」，是常规确认不是错误。红色留给
+ *    真错误（超过单文件硬上限的拒绝，见 .caldav-attach-msg.is-error）。
+ */
+.caldav-attach-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--caldav-border);
+  border-left: 3px solid var(--caldav-accent);
+  border-radius: 6px;
+  background: var(--caldav-bg-2);
+  font-size: 12px;
+}
+.caldav-attach-confirm-text { flex: 1 1 100%; line-height: 1.5; }

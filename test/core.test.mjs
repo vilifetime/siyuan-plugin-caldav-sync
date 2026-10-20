@@ -490,6 +490,44 @@ t("待办只填了到期日（无 DTSTART）也要能排程提醒", () => {
 const httpMod = require(path.join(outDir, "http.js"));
 const caldavMod = require(path.join(outDir, "caldav.js"));
 
+// ---- etag 的 XML 转义还原（2026-10-20 修复：服务端 getetag 返回 &quot;xxxx&quot; 残留在本地 → 所有条件 PUT/DELETE 412）----
+t("sanitizeEtag：&quot; 包裹反解码成纯 hex", () => {
+  assert.strictEqual(caldavMod.sanitizeEtag('&quot;a36652e6f28cdc9201772d4ed8be15de&quot;'), "a36652e6f28cdc9201772d4ed8be15de");
+});
+t("sanitizeEtag：纯 hex 原样返回（幂等）", () => {
+  assert.strictEqual(caldavMod.sanitizeEtag("a36652e6f28cdc9201772d4ed8be15de"), "a36652e6f28cdc9201772d4ed8be15de");
+});
+t("sanitizeEtag：带字面引号的 DAV 引用字符串剥引号", () => {
+  assert.strictEqual(caldavMod.sanitizeEtag('"a36652e6f28cdc9201772d4ed8be15de"'), "a36652e6f28cdc9201772d4ed8be15de");
+});
+t("parseMultistatus：&quot; 转义的 etag 解析为干净 hex（href/UID 正确）", () => {
+  const xml = `<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+<d:response>
+<d:href>/dav.php/calendars/bonebear/default/sy-mvgcy8o8-m3snnrp7.ics</d:href>
+<d:propstat><d:prop>
+<d:getetag>&quot;a36652e6f28cdc9201772d4ed8be15de&quot;</d:getetag>
+<cal:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:sy-mvgcy8o8-5e2sh8b3
+SUMMARY:测试全天事件1
+DTSTART;VALUE=DATE:20261020
+DTEND;VALUE=DATE:20261020
+END:VEVENT
+END:VCALENDAR
+</cal:calendar-data>
+</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+</d:response>
+</d:multistatus>`;
+  const items = caldavMod.parseMultistatus(xml, { url: "http://nas.bonebear.cn:5808/dav.php/calendars/bonebear/default/" });
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].etag, "a36652e6f28cdc9201772d4ed8be15de");
+  assert.ok(!items[0].etag.includes("&quot;"));
+  assert.strictEqual(items[0].uid, "sy-mvgcy8o8-5e2sh8b3");
+  assert.strictEqual(items[0].href, "http://nas.bonebear.cn:5808/dav.php/calendars/bonebear/default/sy-mvgcy8o8-m3snnrp7.ics");
+});
+
 const b64decode = (s) => Buffer.from(s, "base64").toString("utf8");
 
 t("buildProxyBody：headers 必须是单键对象数组，写成 [[k,v]] 会被内核静默丢弃（代理通道 401 的根因）", () => {
@@ -528,6 +566,7 @@ t("isNetworkLevelError：只把网络级失败判为网络错误，HTTP 状态�
   assert.strictEqual(httpMod.isNetworkLevelError(new TypeError("Failed to fetch")), true, "Failed to fetch 属网络级");
   assert.strictEqual(httpMod.isNetworkLevelError(new Error("Network request failed")), true, "WebView 的报错也应识别");
   assert.strictEqual(httpMod.isNetworkLevelError(new Error("ERR_CLEARTEXT_NOT_PERMITTED")), true, "明文拦截也应识别");
+  assert.strictEqual(httpMod.isNetworkLevelError(new Error("The operation was aborted")), true, "超时被 abort 也属网络级（direct 回退代理的判断要用）");
   assert.strictEqual(httpMod.isNetworkLevelError(new Error("HTTP 401")), false, "服务器真实响应不是网络错误");
   assert.strictEqual(httpMod.isNetworkLevelError(new Error("内核代理失败: timeout")), false, "代理通道报错不算");
 });

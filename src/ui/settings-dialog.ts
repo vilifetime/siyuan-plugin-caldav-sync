@@ -7,6 +7,7 @@ import { isMobile } from "./device";
 import type { CalCalendar } from "../core/types";
 import { calEventColor, calTodoColor, normalizeCalendarColors } from "../core/types";
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
+import { clearAuthCache } from "../core/http";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
 import { enableDialogResize } from "./dialog-resize";
@@ -159,6 +160,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       s.conflict = $("select[data-s='conflict']").value as any;
       s.pastDays = Math.max(7, +$("input[data-s='past']").value || 90);
       s.futureDays = Math.max(30, +$("input[data-s='future']").value || 370);
+      // 附件/ICS 体积上限（MB）。留空或非法 → 回退默认值（与 ics.ts 的 *_MB 常量一致）
+      s.attachSizeMaxMB = Math.max(1, +$("input[data-s='attachMax']").value || 5);
+      s.icsSizeMaxMB = Math.max(1, +$("input[data-s='icsMax']").value || 10);
       const wasRemindOn = s.enableReminders;
       s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement).checked;
       s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement).checked;
@@ -178,6 +182,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       normalizeCalendarColors(s.calendars);
       s.defaultCalendarUrl = s.calendars.find((c) => c.enabled)?.url;
       await ctx.store.persist();
+      // 凭据或服务器地址可能刚被改过：丢掉 Digest 协商缓存，
+      // 否则下次请求会拿着旧 nonce/旧密码重发，白挨一次 401
+      clearAuthCache();
       ctx.sync.startAutoSync();
       dialog.destroy();
       resolve();
@@ -284,6 +291,21 @@ function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string
         <input class="caldav-input" type="number" min="30" data-s="future" value="${s.futureDays}"/>
       </div>
     </div>
+    <div class="caldav-field-row">
+      <div class="caldav-field">
+        <label class="caldav-field-label">附件大小限制（MB）</label>
+        <input class="caldav-input" type="number" min="1" data-s="attachMax" value="${s.attachSizeMaxMB ?? 5}"/>
+      </div>
+      <div class="caldav-field">
+        <label class="caldav-field-label">单个ICS文件限制（MB）</label>
+        <input class="caldav-input" type="number" min="1" data-s="icsMax" value="${s.icsSizeMaxMB ?? 10}"/>
+      </div>
+    </div>
+    <p class="caldav-set-hint">
+      待办附件以 base64 内联进日历条目同步：附件大小限制是单个文件的上限，超过直接在编辑时拒绝；
+      单个 ICS 文件限制是整条日历数据（含全部附件）的上限，超过服务器会拒绝（HTTP 413）。
+      默认 5 / 10 对齐 Radicale 的默认上限，自己的服务器上限更大就把数值调大。
+    </p>
   </div>
 
   <div class="caldav-section caldav-section--card">

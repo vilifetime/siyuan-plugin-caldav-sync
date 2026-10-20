@@ -56,7 +56,24 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
         const startMin = startMatch ? +startMatch[1] * 60 + +startMatch[2] : 0;
         const end = it.end || occ;
         const endMatch = timeRe.exec(end) || startMatch;
-        const endMin = Math.max(startMin + 15, endMatch ? +endMatch[1] * 60 + +endMatch[2] : startMin + 60);
+        // 结束分钟算法（2026-10-19 雄哥两张截图逼出来的两步修复，别合并回去）：
+        // ① 待办：occ 就是到期日本身，end 也是到期日 → 时长恒 0，只取 end 的时分
+        //    （与开始同一时刻），真实时长保底交给渲染层的 floorMin（待办 1 小时）。
+        // ② 事件：按「开始 + 原时长」算，绝不直接取 end 的时分/日期——
+        //    - 非重复跨午夜（23:00→次日 00:00）：只取时分会把「次日 00:00」解析成
+        //      0 分钟，Math.max(startMin+15, 0) 把 1 小时的日程压成 15 分钟小条；
+        //    - 重复条目：it.end 属于首个实例，月度例会的 it.end 比当前 occ 早整整
+        //      一个月（base 9-17、occ 10-17），拿它算天数差得负数，同样被
+        //      Math.max(startMin+15, …) 压成 15 分钟小条（雄哥第二张截图）。
+        //    原时长平移到当前 occ 后一步都对，再由 Math.min(…, 1440) 收在 24:00 线。
+        let endMin: number;
+        if (it.kind === "todo") {
+          endMin = Math.max(startMin + 15, endMatch ? +endMatch[1] * 60 + +endMatch[2] : startMin + 60);
+        } else {
+          const durMs = it.start && it.end ? parseLocalStamp(it.end).getTime() - parseLocalStamp(it.start).getTime() : 0;
+          const durMin = Number.isFinite(durMs) && durMs > 0 ? Math.round(durMs / 60000) : 15;
+          endMin = startMin + durMin;
+        }
         blocks.push({ it, occ, day, startMin, endMin: Math.min(endMin, 1440) });
       }
     }
@@ -105,7 +122,18 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
           // 极短事件（不足 15 分钟）保底 15px 高，保证还能看见、点得到。
           // ⚠️ 下限必须用绝对像素换算，不能写百分比：原来 Math.max(…, 4) 的 4% ≈ 42px ≈ 57 分钟，
           // 会把所有 42 分钟以内的事件都撑到 42px —— 色块直接超出真实时段（与 padding 那 4px 同类问题）。
-          const height = Math.max(((b.endMin - b.startMin) / 1440) * 100, (15 / 1440) * 100);
+          //
+          // 待办另有一档保底：待办没有「时段」可言 —— occ 取到期日（DUE），end 也是 DUE，
+          // 算出来恒 0 分钟，只靠 15px 地板兜底 → 11px 高，「标题行 + 上下各 2px padding」
+          // 都塞不下，文字溢出成一小条（2026-10-19 雄哥截图：周/日视图待办「行高太小」）。
+          // 按 1 小时保底 → 44px，落进 wk-h-s 档位，标题 + 到期时间都显示得下；
+          // 真有时长的待办仍按真实时长（max 取大者）。
+          const floorMin = b.it.kind === "todo" ? 60 : 15;
+          let height = Math.max(((b.endMin - b.startMin) / 1440) * 100, (floorMin / 1440) * 100);
+          // 贴底收口：保底后块底越出 24:00 网格线时压低高度（深夜到期的待办必然触发，
+          // 23:30 到期会溢出约 21px）。再兜一层 15px 地板：23:45 之后到期的待办
+          // 也不至于比旧版事件地板还矮。
+          if (top + height > 100) height = Math.max(100 - top, (15 / 1440) * 100);
           const startLabel = `${String(b.startMin / 60 | 0).padStart(2, "0")}:${String(b.startMin % 60).padStart(2, "0")}`;
           const done = b.it.kind === "todo" && b.it.percent === 100;
           const check = b.it.kind === "todo"

@@ -32,6 +32,14 @@ export interface SyncReport {
   reconciled: number;
   /** 对账判定「服务端丢了」并重新上传的条目数（conflict === "local" 时） */
   requeued: number;
+  /**
+   * 本轮 pushDirty 实际推送**成功**的条目 key。为什么要单列：`uploaded` 只是计数，
+   * 按 key 才能与 pendingUploadedKeys 取并集去重——同一条目即时推送 N 次再全量
+   * 同步，报告只能算一条（2026-10-19 雄哥实测「操作几次就报上传几次」）。
+   */
+  uploadedKeys?: string[];
+  /** 同上，删除口径 */
+  deletedKeys?: string[];
 }
 
 /** 取 URL 的「源」（协议 + 主机 + 端口），用于判断两条地址是否属于同一台服务器 */
@@ -109,6 +117,13 @@ export class SyncEngine {
     if (this.syncing)
       return { ok: false, fetched: 0, uploaded: 0, deleted: 0, errors: ["正在同步中"], elapsedMs: 0, reconciled: 0, requeued: 0 };
     this.syncing = true;
+    // 同步一开始就清掉上次的遗留错误 + 置「同步中」状态：否则整个同步期间 Dock
+    // 一直挂着上次的过时红字，用户以为本次已经失败（2026-10-16 雄哥实测：主窗口
+    // 点刷新，Dock 显示上次的 412 错误、按钮转几分钟，最后才弹本次失败）。
+    // notify() 只通知不落盘——同步中是瞬时状态，不该写进数据文件。
+    this.store.lastError = undefined;
+    this.store.syncing = true;
+    this.store.notify();
     const t0 = Date.now();
     const report: SyncReport = {
       ok: true,
@@ -118,7 +133,9 @@ export class SyncEngine {
       errors: [],
       elapsedMs: 0,
       reconciled: 0,
-      requeued: 0
+      requeued: 0,
+      uploadedKeys: [],
+      deletedKeys: []
     };
     try {
       // 凭据缺失时直接给出明确错误，不再发无效请求、也不再显示“同步成功”
@@ -149,8 +166,10 @@ export class SyncEngine {
       const rangeStart = Date.now() - this.store.settings.pastDays * 86400000;
       const rangeEnd = Date.now() + this.store.settings.futureDays * 86400000;
 
-      // 1. 先上传本地脏数据（新条目无 etag 直接 PUT；有 etag 带条件）
-      await this.pushDirty(report);
+      // 1. 先上传本地脏数据（新条目无 etag 直接 PUT；有 etag 带条件）。
+      //    走推送队列：与「保存即推」的后台推送串行，避免并发推同一条目触发假 412
+      //    （412 的处理是丢弃本地改动，见 enqueuePush 的注释）。
+      await this.enqueuePush(() => this.pushDirty(report));
 
       // 2. 逐日历拉取
       for (const cal of this.store.settings.calendars) {
@@ -223,12 +242,20 @@ export class SyncEngine {
       // 使用本地时区墙上时间（东八区等），避免 toISOString() 输出 UTC 导致显示偏差
       this.store.lastSync = stampOfMs(Date.now()).replace("T", " ");
       // 合并「自上次全量同步以来的即时推送」：单条新建/编辑/删除走 pushAndPersist
-      // 立刻上云，计数攒在 pending 里。这里并进报告，用户才能看到「上传 1 / 删除 1」，
-      // 而不是以为改动没同步（2026-10-10 实测）。合并后清零，避免下一轮重复计。
-      report.uploaded += this.store.pendingUploaded;
-      report.deleted += this.store.pendingDeleted;
-      this.store.pendingUploaded = 0;
-      this.store.pendingDeleted = 0;
+      // 立刻上云，成功的条目 key 攒在 pending 里。这里并进报告，用户才能看到
+      // 「上传 1 / 删除 1」，而不是以为改动没同步（2026-10-10 实测）。
+      // **按条目取并集**：本轮推送与历史即时推送可能推同一条目（编辑→即时推送
+      // 成功→再编辑→本轮又推），同一条目只计一条（2026-10-19 雄哥实测：同一
+      // 事件打勾/编辑几次，同步就报「上传 N 条」——虚胖，此处修）。
+      const upKeys = new Set([...(report.uploadedKeys ?? []), ...this.store.pendingUploadedKeys]);
+      report.uploaded = upKeys.size;
+      const delKeys = new Set([...(report.deletedKeys ?? []), ...this.store.pendingDeletedKeys]);
+      // report.deleted 此刻 = 本轮推送删除数 + 跟随服务端删除数（merged.removed）；
+      // 把「本轮推送删除」换成去重口径，跟随服务端删除那部分原样保留
+      report.deleted = report.deleted - (report.deletedKeys?.length ?? 0) + delKeys.size;
+      // 合并后清零，避免下一轮重复计
+      this.store.pendingUploadedKeys = [];
+      this.store.pendingDeletedKeys = [];
       // 对账是**正常自愈，不是失败**（2026-10-10 实测：原先塞进 lastError，
       // Dock 状态栏显示「同步失败」、面板挂红色报错横幅，把一次成功同步报成失败）。
       // 「本地凭空少了 N 条」仍要让用户看得见，故走独立的中性提示通道。
@@ -247,6 +274,7 @@ export class SyncEngine {
       this.store.lastNote = undefined;
     } finally {
       this.syncing = false;
+      this.store.syncing = false;
       report.elapsedMs = Date.now() - t0;
       await this.store.persist();
       // 通知订阅者（Dock 状态栏等）刷新，否则自动同步失败时界面不会更新
@@ -362,11 +390,12 @@ export class SyncEngine {
     for (const item of this.store.dirtyItems()) {
       try {
         const ics = item.raw ? itemToEditedICS(item) : itemToNewICS(item);
-        const r = await putItem(item, ics, this.channel(), this.auth());
+        const r = await putItem(item, ics, this.channel(), this.auth(), this.store.settings.icsSizeMaxMB);
         item.etag = r.etag;
         item.dirty = false;
         item.raw = item.raw || ics; // 新建后保留原文
         report.uploaded++;
+        report.uploadedKeys?.push(keyOf(item));
       } catch (e: any) {
         if (e?.status === 412) {
           if (this.store.settings.conflict === "local") {
@@ -374,18 +403,27 @@ export class SyncEngine {
             const keep = item.etag;
             item.etag = undefined;
             try {
-              const ics = itemToEditedICS(item);
-              const r = await putItem(item, ics, this.channel(), this.auth());
+              // 与上面同一判据：有原文才走增量改写，否则整份重拼会丢掉
+              // 服务端的 ATTACH / ORGANIZER / VTIMEZONE 等未管理属性。
+              const ics = item.raw ? itemToEditedICS(item) : itemToNewICS(item);
+              const r = await putItem(item, ics, this.channel(), this.auth(), this.store.settings.icsSizeMaxMB);
               item.etag = r.etag || keep;
               item.dirty = false;
               report.uploaded++;
+              report.uploadedKeys?.push(keyOf(item));
               continue;
             } catch (e2: any) {
               report.errors.push(`覆盖 ${item.summary}: ${explainError(e2)}`);
             }
           } else {
-            // 服务端优先：丢弃本地改动
+            // 服务端优先：丢弃本地改动。**必须同时清 etag** —— 上面只清了 dirty、
+            // 没回滚字段（percent 等还是本地乐观值），若留着旧 etag，下一轮拉取会因
+            // 「字段恰好相同」走 mergeServerItems 的 same 分支仍不纠正，UI 一直挂假状态
+            // （显示打勾成功、服务端却没改）。清空 etag 后，同一轮 syncAll 随后的拉取会
+            // 无条件以服务端版本覆盖本地，把假完成态纠正回真实值（2026-10-19 雄哥实测：
+            // 打勾完成即报「服务端已变更，本地改动已按策略丢弃」，且界面上的勾是假的）。
             item.dirty = false;
+            item.etag = undefined;
             report.errors.push(`「${item.summary}」服务端已变更，本地改动已按策略丢弃`);
           }
         } else {
@@ -400,10 +438,40 @@ export class SyncEngine {
         await deleteItem(item, this.channel(), this.auth());
         report.deleted++;
         // 删除成功后从本地移除，否则每次同步都会重复发 DELETE
+        report.deletedKeys?.push(keyOf(item));
         this.store.remove(keyOf(item));
       } catch (e: any) {
-        report.ok = false;
-        report.errors.push(`删除 ${item.summary}: ${explainError(e)}`);
+        if (e?.status === 412) {
+          // If-Match 没对上：服务端那份在我们记录之后被改过（别的客户端改的、
+          // 或服务端重建导致 etag 变化）。**与上传同样按冲突策略分叉** ——
+          // 2026-10-15 之前这里什么都不做，条目卡在 deleted+dirty，每轮同步
+          // 重发 DELETE 再 412，同一个「删除失败」永远报不完（雄哥实测：
+          // 任务测试Z 已从本地删除，远端因 etag 对不上删不掉，错误无限循环）。
+          if (this.store.settings.conflict === "local") {
+            // 本地优先：用户明确要删，去掉 If-Match 无条件删
+            try {
+              await deleteItem({ ...item, etag: undefined }, this.channel(), this.auth());
+              report.deleted++;
+              report.deletedKeys?.push(keyOf(item));
+              this.store.remove(keyOf(item));
+              continue;
+            } catch (e2: any) {
+              report.errors.push(`删除 ${item.summary}: ${explainError(e2)}`);
+            }
+          } else {
+            // 服务端优先：撤销本地删除，按服务端版本留档。清 etag + dirty，
+            // 下一轮拉取（etag 不同 → 写入）会把服务端当前版本带回来。
+            item.deleted = false;
+            item.dirty = false;
+            item.etag = undefined;
+            report.errors.push(
+              `「${item.summary}」服务端已变更，删除未执行，已按策略恢复服务端版本（如仍要删除，把冲突策略改为「本地优先」后重试）`
+            );
+          }
+        } else {
+          report.ok = false;
+          report.errors.push(`删除 ${item.summary}: ${explainError(e)}`);
+        }
       }
     }
   }
@@ -412,6 +480,9 @@ export class SyncEngine {
   async createItem(item: CalItem): Promise<void> {
     item.dirty = true;
     this.store.putAndEmit(item);
+    // 先落盘再上传：编辑器保存后不再等上传完成就关窗（见 editor.ts 保存按钮），
+    // 这一行保证「上传还在后台排队」时改动也已经安全写在磁盘上。
+    await this.store.persist();
     await this.pushAndPersist();
   }
 
@@ -419,6 +490,7 @@ export class SyncEngine {
   async updateItem(item: CalItem): Promise<void> {
     item.dirty = true;
     this.store.putAndEmit(item);
+    await this.store.persist();
     await this.pushAndPersist();
   }
 
@@ -427,10 +499,35 @@ export class SyncEngine {
     item.deleted = true;
     item.dirty = true;
     this.store.putAndEmit(item);
+    await this.store.persist();
     await this.pushAndPersist();
   }
 
-  private async pushAndPersist(): Promise<void> {
+  /**
+   * 推送队列：所有上传/删除**串行**过这条链。
+   *
+   * 为什么需要：编辑器保存后立刻关窗、上传在后台跑（服务器卡死时不能把窗口
+   * 冻住），连点两下保存就会有两条 pushDirty 并发推同一条目 —— 第二条拿着
+   * 第一条还没更新的旧 etag 发 If-Match，服务端返 412，而 412 的处理是
+   * 「服务端优先 → 丢弃本地改动」，用户的第二次编辑就这么被静默丢掉了。
+   * syncAll 的第一步推送也走这条链，同理。
+   */
+  private pushChain: Promise<void> = Promise.resolve();
+  private enqueuePush<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.pushChain.then(fn);
+    // 单次失败不能把队列本身断掉
+    this.pushChain = run.then(
+      () => {},
+      () => {}
+    );
+    return run;
+  }
+
+  private pushAndPersist(): Promise<void> {
+    return this.enqueuePush(() => this.doPushAndPersist());
+  }
+
+  private async doPushAndPersist(): Promise<void> {
     // 单条上传/删除后立即落盘。**不做对账** —— 刚建的条目此刻还没被服务端列进清单，
     // 拿去比对只会把它误判成幽灵。
     const report: SyncReport = {
@@ -441,14 +538,17 @@ export class SyncEngine {
       errors: [],
       elapsedMs: 0,
       reconciled: 0,
-      requeued: 0
+      requeued: 0,
+      uploadedKeys: [],
+      deletedKeys: []
     };
     await this.pushDirty(report);
-    // 这一轮的成功数不能就这么丢掉 —— 用户随后点全量同步时已无事可做，
+    // 这一轮的成功不能就这么丢掉 —— 用户随后点全量同步时已无事可做，
     // 会看到「上传 0 · 删除 0」，以为改动没同步（2026-10-10 实测）。
-    // 先攒进 pending，等下一轮 syncAll 合并进报告再清零。
-    this.store.pendingUploaded += report.uploaded;
-    this.store.pendingDeleted += report.deleted;
+    // **按条目 key 去重攒**：同一条目被编辑 N 次会推 N 次，按轮次累加会让
+    // 同步报告虚报「上传 N 条」（2026-10-19 雄哥实测：操作几次就报上传几次）。
+    for (const k of report.uploadedKeys ?? []) this.store.markUploaded(k);
+    for (const k of report.deletedKeys ?? []) this.store.markDeleted(k);
     // 立刻给一次反馈：用户点完保存/删除要看得到「已经上云了」
     const pushed: string[] = [];
     if (report.uploaded) pushed.push(`已同步到服务端：上传 ${report.uploaded} 条`);

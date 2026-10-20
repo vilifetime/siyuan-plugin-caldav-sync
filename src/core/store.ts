@@ -1,7 +1,7 @@
 /**
  * 本地存储与条目仓库：插件私有数据读写 + 内存索引 + 订阅
  */
-import type { CalItem, CalSettings, PersistData } from "./types";
+import type { CalAttachment, CalItem, CalSettings, PersistData } from "./types";
 import { DEFAULT_SETTINGS, normalizeCalendarColors } from "./types";
 import {
   adoptKeyring,
@@ -11,6 +11,7 @@ import {
   isEncrypted,
   isLegacyEncrypted
 } from "./secret";
+import { sanitizeEtag } from "./caldav";
 
 export interface StoreEnv {
   loadData: () => Promise<any>;
@@ -22,11 +23,22 @@ export class CalStore {
   private items = new Map<string, CalItem>();
   lastSync?: string;
   lastError?: string;
+  /**
+   * 同步进行中的瞬时状态（UI 用，**不持久化**——重启后无意义）。
+   * syncAll 置位/复位时走 notify() 通知各面板：Dock 与主窗口两条同步入口
+   * 由此显示一致的「同步中…」，且同步期间不再挂着上次的过时错误
+   * （2026-10-16 雄哥实测：主窗口点刷新后 Dock 显示上次的 412、按钮转几分钟）。
+   */
+  syncing?: boolean;
   /** 上次同步的中性提示（对账自愈等），**不是错误**，见 types.ts 的 SyncState */
   lastNote?: string;
-  /** 即时推送累计的上传/删除数，下一轮 syncAll 合并进报告后清零（见 types.ts） */
-  pendingUploaded = 0;
-  pendingDeleted = 0;
+  /**
+   * 即时推送成功上传/删除的**条目 key**（按 key 去重），下一轮 syncAll 合并进
+   * 报告后清零。为什么按 key：同一条目被操作 N 次会推 N 次，按推送轮次计数会让
+   * 同步报告虚报「上传 N 条」（2026-10-19 雄哥实测），详见 types.ts 的 SyncState。
+   */
+  pendingUploadedKeys: string[] = [];
+  pendingDeletedKeys: string[] = [];
   /** 密码解密失败（本地密钥丢失/损坏），需要用户重新输入密码 */
   secretBroken = false;
   /** 密钥尚未就绪导致的「暂时解不开」——不是密码损坏，稍后可重试 */
@@ -46,12 +58,23 @@ export class CalStore {
       this.settings = { ...JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), ...data.settings };
       // 老数据：单一日历色 → eventColor + todoColor（不改变现有观感，见 types.ts）
       normalizeCalendarColors(this.settings.calendars);
-      this.items = new Map((data.items || []).map((it) => [keyOf(it), it]));
+      this.items = new Map(
+        (data.items || []).map((it) => {
+          // 幂等自愈：历史上拉取回来的 etag 被服务端 XML 转义成 &quot;xxxx&quot; 残留在本地
+          // （见 core/caldav.ts 的 parseMultistatus 修复），这里加载时还原，避免 If-Match 永远 412。
+          if (it && typeof it.etag === "string" && /&(quot|amp|lt|gt|apos);/.test(it.etag)) {
+            it.etag = sanitizeEtag(it.etag);
+          }
+          return [keyOf(it), it];
+        })
+      );
       this.lastSync = data.sync?.lastSync;
       this.lastError = data.sync?.lastError;
       this.lastNote = data.sync?.lastNote;
-      this.pendingUploaded = data.sync?.pendingUploaded ?? 0;
-      this.pendingDeleted = data.sync?.pendingDeleted ?? 0;
+      // 2026-10-19 起按条目 key 去重（旧版是 number、按推送轮次计数会虚胖）；
+      // 老数据里的 number 字段直接忽略——计数只是展示用，丢一次无碍
+      this.pendingUploadedKeys = Array.isArray(data.sync?.pendingUploadedKeys) ? data.sync.pendingUploadedKeys : [];
+      this.pendingDeletedKeys = Array.isArray(data.sync?.pendingDeletedKeys) ? data.sync.pendingDeletedKeys : [];
       this.keyring = (data as any).keyring || "";
     }
     // 先注入主密钥再解密：密钥的权威副本随数据走，新生成的由 sink 回写持久化
@@ -144,8 +167,8 @@ export class CalStore {
         lastSync: this.lastSync,
         lastError: this.lastError,
         lastNote: this.lastNote,
-        pendingUploaded: this.pendingUploaded,
-        pendingDeleted: this.pendingDeleted
+        pendingUploadedKeys: this.pendingUploadedKeys,
+        pendingDeletedKeys: this.pendingDeletedKeys
       }
     });
   }
@@ -212,6 +235,21 @@ export class CalStore {
     // 不能用 incoming.length，否则自己刚推上去的条目被服务端当变更推回时，
     // 会被重复计入拉取（自环回显，2026-10-10 实测：新建一条显示「上传1 拉取1」）。
     let applied = 0;
+    // 老数据自愈：2026-10-14 之前的版本**从不在拉取时保存 ICS 原文**，本地 store 里
+    // 一大批条目的 `raw` 是 undefined。这些条目一旦被编辑就会走 `itemToNewICS` 整份重拼，
+    // 服务端的 ATTACH / ORGANIZER / ATTENDEE / VTIMEZONE 全部被抹掉（实测数据丢失）。
+    // 服务端内容没变（etag 相同 / 字段全同）时顺手把原文补上：数据上一个字节都没变，
+    // 所以**不计入 `applied`**（否则「拉取 N 条」会虚增），只标 changed 让它落盘。
+    const adoptRaw = (cur: CalItem, inc: CalItem): void => {
+      if (cur.raw || !inc.raw) return;
+      cur.raw = inc.raw;
+      // 附件一起补：老数据（二进制附件支持之前解析的）这个字段是 undefined，
+      // 而 rebuildComponent 的兜底逻辑只在 undefined 时原样带回原文里的二进制件。
+      // 不补的话老条目永远走兜底，界面上看不到、也删不掉它们。
+      // 只在本地没有时补 —— 本地有值说明插件已经接管附件，不能拿服务端的盖掉本地的。
+      if (cur.attachments === undefined && inc.attachments) cur.attachments = inc.attachments;
+      changed = true;
+    };
     for (const inc of incoming) {
       // 本地脏数据优先：等上传后再被服务端确认覆盖
       const existing = this.items.get(keyOf(inc));
@@ -225,8 +263,15 @@ export class CalStore {
         // `raw`：本地是生成的 ICS 原文，服务端返回的是它规范化过的版本（换行、
         // 属性顺序、补 PRODID/DTSTAMP 等），几乎必然不等，于是自己刚推上去的
         // 条目每轮都被判成「有变化」，拉取永远虚增 1（2026-10-10 实测）。
-        if (cur.etag && inc.etag && cur.etag === inc.etag) continue;
+        if (cur.etag && inc.etag && cur.etag === inc.etag) {
+          adoptRaw(cur, inc);
+          continue;
+        }
         // etag 缺失（老数据 / 服务端不返回）时才退回逐字段比对
+        // ⚠️ 附件要按「空 ≡ 没有」归一化：编辑器删光附件时写的是 `[]`，
+        //    而解析器在无 ATTACH 时留 `undefined`。直接比会把这两者判成「有变化」，
+        //    于是删完附件的条目每轮同步都被拉回一次（自环回显的变体）。
+        const attKey = (a?: CalAttachment[]): string => (a && a.length ? JSON.stringify(a) : "");
         const same =
           cur.summary === inc.summary &&
           cur.start === inc.start &&
@@ -239,8 +284,21 @@ export class CalStore {
           JSON.stringify(cur.rrule || null) === JSON.stringify(inc.rrule || null) &&
           JSON.stringify(cur.alarms || null) === JSON.stringify(inc.alarms || null) &&
           JSON.stringify(cur.categories || null) === JSON.stringify(inc.categories || null) &&
+          attKey(cur.attachments) === attKey(inc.attachments) &&
           JSON.stringify(cur.exdates || null) === JSON.stringify(inc.exdates || null);
-        if (same) continue;
+        if (same) {
+          adoptRaw(cur, inc);
+          // 服务端 etag 变了但受管字段没变（多端改了 DTSTAMP/ATTENDEE/ORGANIZER 等
+          // 插件不管的字段、或服务器重算指纹）：必须把新 etag 回写，否则本地 etag 一直
+          // 滞后，下一次编辑 PUT 带着旧 etag 发 If-Match，必被服务端 412、又按「服务端
+          // 优先」把用户的改动静默丢掉（2026-10-19 雄哥实测：打勾完成即报「服务端已变更，
+          // 本地改动已按策略丢弃」，根因就是这里漏了回写——单端不触发，多端/服务器重算才触发）。
+          if (inc.etag && cur.etag !== inc.etag) {
+            cur.etag = inc.etag;
+            changed = true;
+          }
+          continue;
+        }
       }
       this.items.set(keyOf(inc), { ...inc, dirty: false, deleted: false });
       changed = true;
@@ -272,6 +330,20 @@ export class CalStore {
   /** 待删除 */
   deletedItems(): CalItem[] {
     return this.getAll().filter((it) => it.dirty && it.deleted);
+  }
+
+  /**
+   * 记一条「即时推送成功上传」的条目 key。**按 key 去重**：同一条目被编辑 N 次
+   * 会推 N 次，但同步报告按「条」计只能算一条（2026-10-19 雄哥实测：同一事件
+   * 操作几次，同步就报上传几次——旧代码按轮次累加，虚胖）。
+   */
+  markUploaded(key: string): void {
+    if (!this.pendingUploadedKeys.includes(key)) this.pendingUploadedKeys.push(key);
+  }
+
+  /** 同 markUploaded，删除口径 */
+  markDeleted(key: string): void {
+    if (!this.pendingDeletedKeys.includes(key)) this.pendingDeletedKeys.push(key);
   }
 
   isConfigured(): boolean {

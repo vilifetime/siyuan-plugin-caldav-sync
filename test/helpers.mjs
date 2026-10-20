@@ -132,7 +132,13 @@ export function seedStore(plugin) {
   };
   const dow = (today.getDay() + 6) % 7; // 周一=0，周三=2…
   const monday = shift(-dow);
-  const midWeek = shift(-dow + 3); // 本周内确定的一天（周一~周日任意天运行都落在 [周一,周日]）
+  // 本周内确定的一天（周一~周日任意天运行都落在 [周一,周日]）。
+  // ⚠️ 还必须**永不为今天**：它是「当日日记不该收它」的干扰样本，
+  //    今天恰好是周四时 midWeek 会等于今天，「本周待办」就真的属于当日，
+  //    diary.test.mjs 的干扰项断言会误报（2026-10-15 周四实测踩到，
+  //    表现为「本周待办不属于今天，不应写入日记」）。
+  let midWeek = shift(-dow + 3); // 周四
+  if (midWeek === todayStamp) midWeek = shift(-dow + 4); // 今天就是周四 → 顺延到周五（仍在本周内）
   // 明确已经结束的过去事件：用于验证「当前时间以前的日程不显示」
   store.put(mk(10, { summary: "昨天的会议", start: `${dayBack(1)}T09:00:00`, end: `${dayBack(1)}T10:00:00` }));
   // 日期在窗口内、但当天早已结束的日程：这才是「按当前时刻判断」与「只按日期判断」的分水岭

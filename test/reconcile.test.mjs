@@ -67,6 +67,18 @@ const multistatus = (hrefs) =>
   `</D:multistatus>`;
 
 /**
+ * REPORT（calendar-query）的响应：ICS 正文直接放在 <calendar-data> 里返回，
+ * 不会再发 GET（拉取走的整条路都是 REPORT，见 caldav.ts fetchCalendarItems）。
+ */
+const reportMultistatus = (href, etag, ics) =>
+  `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
+  `<D:response><D:href>${href}</D:href><D:propstat><D:prop>` +
+  `<D:getetag>"${etag}"</D:getetag>` +
+  `<D:calendar-data>${ics.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")}</D:calendar-data>` +
+  `</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+  `</D:multistatus>`;
+
+/**
  * @param {(req:{method:string,body:string,url:string}) => {status:number,body:string,headers?:object}} router
  */
 function withFetch(router) {
@@ -362,10 +374,12 @@ await t("SyncReport 必须带 reconciled / requeued，三处构造都要补齐",
 });
 
 await t("pushAndPersist 明确不做对账（刚建的条目还没进服务端清单）", () => {
-  const i = srcSync.indexOf("private async pushAndPersist");
+  // 2026-10-15：pushAndPersist 改成推送队列的壳，实体在 doPushAndPersist
+  const i = srcSync.indexOf("private async doPushAndPersist");
+  assert.ok(i > 0, "要能找到 doPushAndPersist（pushAndPersist 现在只是队列壳）");
   const body = srcSync.slice(i, i + 900);
-  assert.ok(/不做对账/.test(body), "pushAndPersist 里要写明为什么不做对账");
-  assert.ok(!/this\.reconcile\(/.test(body), "pushAndPersist 里不许调 reconcile");
+  assert.ok(/不做对账/.test(body), "推送实体里要写明为什么不做对账");
+  assert.ok(!/this\.reconcile\(/.test(body), "推送实体里不许调 reconcile");
 });
 
 await t("caldav.ts 暴露 fileNameOf / listResourceNames 且用 Depth:1 取全量", () => {
@@ -423,10 +437,13 @@ await t("fetched 取实际写入数，不能取 items.length（否则自环回�
 
 await t("applied 只在真写入时 ++（same 判定跳过的条目不能算拉取）", () => {
   const body = srcStore.slice(srcStore.indexOf("mergeServerItems(incoming"));
-  // same → continue 必须排在 applied++ 之前，否则自环条目照样被计
+  // same → continue 必须排在 applied++ 之前，否则自环条目照样被计。
+  // ⚠️ 判据只取 "if (same)"，不要写 "if (same) continue;" —— 2026-10-14 给 same
+  // 分支加了 adoptRaw 自愈后它变成块结构，绑死单行会让这条断言假红。
+  // 真正钉住行为的是下面那条跑真实对象的「自环回显」用例。
   const iSet = body.indexOf("this.items.set(keyOf(inc)");
   const iApplied = body.indexOf("applied++");
-  const iSame = body.indexOf("if (same) continue;");
+  const iSame = body.indexOf("if (same)");
   assert.ok(iSame > 0 && iSame < iSet, "same 判定要在写入之前（自环条目靠它挡掉）");
   assert.ok(iApplied > iSet, "applied++ 要紧跟在真写入之后");
 });
@@ -479,6 +496,18 @@ await t("etag 缺失时退回逐字段比对（老数据不能因此每轮都算
   );
 });
 
+// ---- 2026-10-19 雄哥实测：打勾完成即报「服务端已变更，本地改动已按策略丢弃」。根因是
+//      多端/服务器重算让服务端 etag 变、但受管字段没变 → same 分支跳过时漏回写 etag →
+//      本地 etag 滞后 → 下次编辑 PUT 带旧 etag 必 412 → 改动被丢弃。修法：same 分支回写 etag。 ----
+await t("缺陷A：etag 变但受管字段没变 → same 分支必须回写 etag（否则本地滞后、下次编辑必 412）", async () => {
+  const local = mkItem({ uid: "stale@test", href: CAL_URL + "stale.ics", summary: "标题", etag: "old-etag" });
+  const st = await mkStore([local]);
+  // 服务端把这条的 etag 改了（多端动过 DTSTAMP/ATTENDEE 等非受管字段），受管字段一个没变
+  const r = st.mergeServerItems([{ ...local, etag: "new-etag", raw: "SERVER-NORMALIZED" }], []);
+  assert.strictEqual(r.applied, 0, "受管字段没变就不算拉取，applied 不能虚增");
+  assert.strictEqual(st.getAll()[0].etag, "new-etag", "关键：same 分支要把服务端新 etag 回写，绝让本地 etag 滞后");
+});
+
 await t("对账提示走 lastNote 中性通道，绝不塞进 lastError", () => {
   assert.ok(/this\.store\.lastNote = notes\.join\("; "\) \|\| undefined/.test(srcSync), "对账提示要写 lastNote");
   assert.ok(
@@ -512,50 +541,392 @@ await t("同步抛异常时要清掉过期 lastNote（否则报错后中性提�
 
 await t("Dock 状态栏对 lastNote 用中性样式，不复用「同步失败」前缀", () => {
   assert.ok(/opts\.store\.lastNote/.test(srcPanel), "面板要消费 lastNote");
-  assert.ok(/showNote/.test(srcPanel), "要有独立的中性提示渲染");
   assert.ok(
     /} else if \(opts\.store\.lastNote\)/.test(srcPanel),
     "lastNote 分支必须在 lastError 分支之后，且不显示「同步失败」"
   );
+  // 2026-10-15 页脚一行化：showNote/showError 两个独立渲染函数已删，提示并进
+  // 状态按钮这一行。断言的意图不变——lastNote 分支必须保持中性（无错误前缀、
+  // 不加 has-error），不能再按「有独立函数」断言。
+  // ⚠️ 先剥注释再断言：分支上方的注释里就写着「不能复用『同步失败』的前缀」，
+  //    不剥的话这句解释本身会被当成违规（铁律：断言先剥注释）。
+  const i = srcPanel.indexOf("} else if (opts.store.lastNote)");
+  assert.ok(i > 0, "要能定位 lastNote 分支");
+  const raw = srcPanel.slice(i, i + 600);
+  const body = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/同步失败/.test(body), "lastNote 分支不能出现「同步失败」前缀");
+  assert.ok(!/add\("has-error"\)/.test(body), "中性提示不能加错误样式");
 });
 
 // ---- 2026-10-10 第二轮：即时推送（新建/编辑/删除单条）的计数被整个丢弃，
 //      用户随后点全量同步看到「上传 0 · 删除 0」，以为改动没同步 ----
 
-await t("即时推送的 uploaded/deleted 要攒进 pending，不能丢", () => {
-  const body = srcSync.slice(srcSync.indexOf("private async pushAndPersist"));
-  assert.ok(/pendingUploaded \+= report\.uploaded/.test(body), "上传数要攒进 pendingUploaded");
-  assert.ok(/pendingDeleted \+= report\.deleted/.test(body), "删除数要攒进 pendingDeleted");
+// ---- 2026-10-19 雄哥实测：同一事件打勾/编辑几次，同步就报「上传 N 条」——虚胖。
+//      根因：pending 按推送轮次累加（pendingUploaded += report.uploaded），同一条目
+//      推 N 次就计 N。修法：按条目 key 去重（markUploaded/markDeleted + 并集合并且）。 ----
+
+await t("即时推送的成功要按条目 key 攒进 pending（去重，不能按轮次累加）", () => {
+  // 实体在 doPushAndPersist（pushAndPersist 是 2026-10-15 加的队列壳）
+  const body = srcSync.slice(srcSync.indexOf("private async doPushAndPersist"));
+  assert.ok(
+    /for \(const k of report\.uploadedKeys \?\? \[\]\) this\.store\.markUploaded\(k\)/.test(body),
+    "上传要按 key 攒进 pendingUploadedKeys"
+  );
+  assert.ok(
+    /for \(const k of report\.deletedKeys \?\? \[\]\) this\.store\.markDeleted\(k\)/.test(body),
+    "删除要按 key 攒进 pendingDeletedKeys"
+  );
+  assert.ok(!/pendingUploaded \+=/.test(srcSync), "绝不许再按轮次累加计数（虚胖的根因）");
   // 攒了不合并 = 白攒
-  assert.ok(
-    /report\.uploaded \+= this\.store\.pendingUploaded/.test(srcSync),
-    "syncAll 要把 pendingUploaded 并进报告"
-  );
-  assert.ok(
-    /report\.deleted \+= this\.store\.pendingDeleted/.test(srcSync),
-    "syncAll 要把 pendingDeleted 并进报告"
-  );
+  assert.ok(/this\.store\.pendingUploadedKeys/.test(srcSync), "syncAll 要消费 pendingUploadedKeys");
+  assert.ok(/this\.store\.pendingDeletedKeys/.test(srcSync), "syncAll 要消费 pendingDeletedKeys");
 });
 
-await t("pending 合并后必须清零（否则下一轮重复计数、数字越滚越大）", () => {
-  const i = srcSync.indexOf("report.uploaded += this.store.pendingUploaded");
+await t("pending 合并后必须清零（否则下一轮重复计数、key 越滚越多）", () => {
+  const i = srcSync.indexOf("this.store.pendingUploadedKeys = []");
   assert.ok(i > 0, "先找到合并点");
-  const body = srcSync.slice(i, i + 400);
-  assert.ok(/pendingUploaded = 0/.test(body), "合并后 pendingUploaded 要清零");
-  assert.ok(/pendingDeleted = 0/.test(body), "合并后 pendingDeleted 要清零");
+  const body = srcSync.slice(i, i + 500);
+  assert.ok(/pendingUploadedKeys = \[\]/.test(body), "合并后 pendingUploadedKeys 要清零");
+  assert.ok(/pendingDeletedKeys = \[\]/.test(body), "合并后 pendingDeletedKeys 要清零");
 });
 
 await t("即时推送后立刻给反馈（用户点完删除要看得到「已上云」）", () => {
-  const body = srcSync.slice(srcSync.indexOf("private async pushAndPersist"));
+  const body = srcSync.slice(srcSync.indexOf("private async doPushAndPersist"));
   assert.ok(/已同步到服务端/.test(body), "要有即时反馈文案");
   assert.ok(/if \(pushed\.length\) this\.store\.lastNote = pushed\.join/.test(body), "反馈写 lastNote 中性通道");
 });
 
 await t("pending 有完整的存取盘链路（重启就丢 = 计数凭空消失）", () => {
-  assert.ok(/pendingUploaded\?: number/.test(srcTypes), "SyncState 要有 pendingUploaded");
-  assert.ok(/pendingDeleted\?: number/.test(srcTypes), "SyncState 要有 pendingDeleted");
-  assert.ok(/this\.pendingUploaded = data\.sync\?\.pendingUploaded/.test(srcStore), "load 要读 pending");
-  assert.ok(/pendingUploaded: this\.pendingUploaded/.test(srcStore), "persist 要写 pending");
+  assert.ok(/pendingUploadedKeys\?: string\[\]/.test(srcTypes), "SyncState 要有 pendingUploadedKeys");
+  assert.ok(/pendingDeletedKeys\?: string\[\]/.test(srcTypes), "SyncState 要有 pendingDeletedKeys");
+  assert.ok(
+    /this\.pendingUploadedKeys = Array\.isArray\(data\.sync\?\.pendingUploadedKeys\)/.test(srcStore),
+    "load 要读 pending keys"
+  );
+  assert.ok(/pendingUploadedKeys: this\.pendingUploadedKeys/.test(srcStore), "persist 要写 pending keys");
+});
+
+// ---- 2026-10-15 雄哥实测：任务测试Z 已从本地删除，远端那份 etag 对不上，
+//      DELETE 带 If-Match → 412 → 旧代码什么都不做，条目卡在 deleted+dirty，
+//      每轮同步重发 DELETE 再 412，「删除失败」永远报不完。 ----
+
+await t("删除遇 412（etag 对不上）：服务端优先 → 撤销删除、恢复服务端版本", async () => {
+  const gone = mkItem({
+    uid: "z@test",
+    href: CAL_URL + "z.ics",
+    deleted: true,
+    dirty: true,
+    summary: "任务测试Z",
+    etag: '"old-etag"'
+  });
+  const st = await mkStore([gone]); // 默认 conflict = server
+  // 服务端那份被改过：清单里还在，但 etag 已是新值、内容也变了
+  const serverIcs = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//test//EN",
+    "BEGIN:VTODO",
+    "UID:z@test",
+    "SUMMARY:服务端改过的版本",
+    "DTSTAMP:20260101T000000Z",
+    "DTSTART:20261020T090000",
+    "DUE:20261021T090000",
+    "END:VTODO",
+    "END:VCALENDAR"
+  ].join("\r\n");
+  const restore = withFetch((req) => {
+    if (req.method === "DELETE") return { status: 412, body: "" };
+    // 拉取走 REPORT：正文直接在 calendar-data 里，etag 已是新值
+    if (req.method === "REPORT") return { status: 207, body: reportMultistatus("/cal/z.ics", "new-server-etag", serverIcs) };
+    if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND") return { status: 207, body: multistatus(["/cal/z.ics"]) };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    const rep = await eng.syncAll();
+    assert.strictEqual(rep.deleted, 0, "删除没执行就不能计数，实际 " + rep.deleted);
+    const left = st.getAll().find((i) => i.uid === "z@test");
+    assert.ok(left, "服务端优先：条目必须留在本地（撤销删除），不能就这么消失");
+    assert.strictEqual(left.deleted, false, "撤销删除标记");
+    assert.strictEqual(left.dirty, false, "不再当脏条目反复重推");
+    assert.strictEqual(left.summary, "服务端改过的版本", "应拉到服务端当前版本");
+    assert.ok(
+      /服务端已变更/.test(rep.errors.join(";")),
+      "要说清为什么删没执行、下一步怎么办，实际 " + JSON.stringify(rep.errors)
+    );
+  } finally {
+    restore();
+  }
+});
+
+await t("删除遇 412（etag 对不上）：本地优先 → 去掉 If-Match 无条件删", async () => {
+  const gone = mkItem({
+    uid: "z@test",
+    href: CAL_URL + "z.ics",
+    deleted: true,
+    dirty: true,
+    summary: "任务测试Z",
+    etag: '"old-etag"'
+  });
+  const st = await mkStore([gone], { conflict: "local" });
+  let deleteCalls = 0;
+  const restore = withFetch((req) => {
+    if (req.method === "DELETE") {
+      deleteCalls++;
+      return { status: deleteCalls === 1 ? 412 : 204, body: "" }; // 第二次（无条件）成功
+    }
+    if (req.method === "REPORT") return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+    // 放一条别的资源占位，保证清单非空（空清单会触发「查错地方 → 跳过」约束）
+    if (req.method === "PROPFIND") return { status: 207, body: multistatus(["/cal/someone-else.ics"]) };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    const rep = await eng.syncAll();
+    assert.strictEqual(deleteCalls, 2, "应补发一次不带 If-Match 的 DELETE，实际 " + deleteCalls);
+    assert.strictEqual(rep.deleted, 1, "补删成功要计数，实际 " + rep.deleted);
+    assert.ok(!st.getAll().some((i) => i.uid === "z@test"), "删除成功后条目应移出本地");
+    assert.ok(
+      !rep.errors.some((e) => /任务测试Z/.test(e)),
+      "成功了就不该再留错误，实际 " + JSON.stringify(rep.errors)
+    );
+  } finally {
+    restore();
+  }
+});
+
+// ---- 2026-10-19 雄哥实测：打勾「关于开展外包风险专项排查的通知」→ 同步即报「服务端已变更，
+//      本地改动已按策略丢弃」，且界面上的勾是假的（服务端并没改成完成）。上传 412 服务端优先
+//      分支旧代码只清 dirty、不清 etag 也不回滚字段 → 下一轮拉取因「字段恰好相同」仍不纠正。
+//      修法：丢弃时清 etag，让同一轮 syncAll 的拉取无条件以服务端版本覆盖、纠正假状态。 ----
+await t("上传遇 412（etag 对不上）：服务端优先 → 丢弃改动 + 清 etag，本轮拉取把假完成态纠正回服务端版本", async () => {
+  const it = mkItem({
+    uid: "外包通知@test",
+    href: CAL_URL + "u1.ics",
+    summary: "关于开展外包风险专项排查的通知",
+    percent: 100, // 本地打勾后的乐观值，还没推上去
+    status: "COMPLETED",
+    completedAt: "2026-10-19T10:00:00",
+    dirty: true,
+    etag: '"old-etag"' // 陈旧 etag：多端/服务器改过，本地没跟上
+  });
+  const st = await mkStore([it]); // 默认 conflict = server
+  // 服务端那份 etag 已是新值，且还是未完成——本地打过勾但被 412 挡住
+  const serverIcs = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//test//EN",
+    "BEGIN:VTODO",
+    "UID:外包通知@test",
+    "SUMMARY:关于开展外包风险专项排查的通知",
+    "STATUS:NEEDS-ACTION",
+    "PERCENT-COMPLETE:0",
+    "DTSTAMP:20260101T000000Z",
+    "DTSTART:20261020T090000",
+    "DUE:20261021T090000",
+    "END:VTODO",
+    "END:VCALENDAR"
+  ].join("\r\n");
+  const restore = withFetch((req) => {
+    if (req.method === "PUT") return { status: 412, body: "" }; // 打勾推送被服务端拒（etag 对不上）
+    if (req.method === "REPORT") return { status: 207, body: reportMultistatus("/cal/u1.ics", "new-server-etag", serverIcs) };
+    if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND") return { status: 207, body: multistatus(["/cal/u1.ics"]) };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    const rep = await eng.syncAll();
+    assert.ok(
+      /服务端已变更/.test(rep.errors.join(";")),
+      "要报清楚为什么打勾没同步上去，实际 " + JSON.stringify(rep.errors)
+    );
+    const left = st.getAll().find((i) => i.uid === "外包通知@test");
+    assert.ok(left, "条目必须留在本地");
+    assert.strictEqual(left.dirty, false, "不再当脏条目反复重推");
+    assert.strictEqual(left.percent, 0, "假 100 必须被本轮拉取纠正回服务端未完成，实际 percent=" + left.percent);
+    assert.strictEqual(left.etag, "new-server-etag", "拉取后 etag 应更新为服务端新值，实际 " + left.etag);
+  } finally {
+    restore();
+  }
+});
+
+await t("上传 412 服务端优先分支要清 etag（源码防漂移，否则又留假状态）", () => {
+  // 不剥全文件注释——sync.ts 里有正则/字符串含 /* 或 */，naive 块注释剥离会误配对、
+  // 把目标代码段一起吃掉（2026-10-19 实测踩坑：剥完连 push 行都没了）。改为锚定
+  // 「连续三条代码语句」：dirty=false → etag=undefined → push(「…本地改动已按策略丢弃」）。
+  // 注释在上方独立行，夹不进这条序列，既能精确命中真实分支，也不被注释里的同款文案误伤。
+  assert.ok(
+    /item\.dirty = false;\s*item\.etag = undefined;\s*report\.errors\.push\(`[^`]*本地改动已按策略丢弃`\)/.test(srcSync),
+    "上传 412 服务端优先分支必须 dirty=false + etag=undefined + 报「本地改动已按策略丢弃」——漏了 etag=undefined，下一轮拉取因字段相同走 same 分支仍不纠正，UI 挂假完成态"
+  );
+});
+
+await t("删除遇 412 按冲突策略分叉（源码防漂移）", () => {
+  const i = srcSync.indexOf("// 删除");
+  assert.ok(i > 0, "要能找到删除分支");
+  const body = srcSync.slice(i, srcSync.indexOf("/** 新建条目"));
+  assert.ok(/e\?\.status === 412/.test(body), "删除分支必须接 412 —— 不接就回到死循环");
+  assert.ok(
+    /conflict === "local"[\s\S]{0,400}?deleteItem\(\{ \.\.\.item, etag: undefined \}/.test(body),
+    "本地优先：去掉 If-Match 无条件删"
+  );
+  assert.ok(
+    /item\.deleted = false[\s\S]{0,240}?item\.dirty = false/.test(body),
+    "服务端优先：撤销删除 + 清 dirty（否则每轮重推）"
+  );
+});
+
+// ---- 2026-10-16 雄哥实测：主窗口点刷新，Dock 一直挂着上次的 412 红字、
+//      按钮转几分钟后才弹本次失败。根因是两条同步入口对状态条的处理不一致
+//      （Dock 自己的入口会立即写「同步中…」，主窗口的入口不动状态条），
+//      且 syncAll 不清上次的遗留错误。修法：store.syncing 瞬时状态 +
+//      syncAll 入口清错误，renderStatus 统一认。 ----
+
+await t("syncAll 进行中：清掉上次的遗留错误并置 syncing", async () => {
+  const st = await mkStore([]);
+  st.lastError = "上次的旧错误（删除 任务测试Z: HTTP 412）";
+  let seenError = "unset";
+  let seenSyncing = "unset";
+  const restore = withFetch((req) => {
+    // 第一次网络请求时（同步已开始、拉取未结束）抓状态
+    if (seenError === "unset") {
+      seenError = st.lastError;
+      seenSyncing = st.syncing;
+    }
+    if (req.method === "REPORT") return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND") return { status: 207, body: multistatus([]) };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    const rep = await eng.syncAll();
+    assert.strictEqual(rep.ok, true, "本轮应成功（空清单无错误），实际 " + JSON.stringify(rep.errors));
+    assert.strictEqual(seenError, undefined, "同步开始后旧错误必须立即清掉，实际 " + seenError);
+    assert.strictEqual(seenSyncing, true, "同步中 syncing 应为 true，实际 " + seenSyncing);
+    assert.strictEqual(st.syncing, false, "结束后 syncing 必须复位，实际 " + st.syncing);
+    assert.strictEqual(st.lastError, undefined, "成功同步后 lastError 应为空");
+  } finally {
+    restore();
+  }
+});
+
+await t("syncAll 入口清遗留错误（源码防漂移）", () => {
+  const i = srcSync.indexOf("this.syncing = true;");
+  assert.ok(i > 0, "要能找到 syncAll 的入口闸");
+  const body = srcSync.slice(i, i + 500);
+  assert.ok(/this\.store\.lastError = undefined/.test(body), "入口必须清 lastError");
+  assert.ok(/this\.store\.syncing = true/.test(body), "入口必须置 syncing");
+  assert.ok(/this\.store\.notify\(\)/.test(body), "置位后要 notify，Dock 才能即时刷新");
+});
+
+await t("renderStatus 认同步中状态（两条入口表现一致）", () => {
+  assert.ok(/store\.syncing/.test(srcPanel), "renderStatus 要读 store.syncing");
+  assert.ok(/同步中…/.test(srcPanel), "同步中要有明确文案");
+  const i = srcPanel.indexOf("if (opts.store.syncing)");
+  assert.ok(i > 0, "要能找到 syncing 分支");
+  const body = srcPanel.slice(i, i + 300);
+  assert.ok(!/同步失败/.test(body), "同步中不能显示失败前缀");
+});
+
+// ---- 2026-10-19 雄哥实测：同一事件操作几次（打勾/编辑），全量同步就报「上传 N 条」
+//      ——虚胖。根因：pending 按推送轮次累加，同一条目推 N 次计 N。修法：按 key 去重。 ----
+
+/** 全绿的假服务器：PUT 201、REPORT 207 回一条、PROPFIND 清单含它 */
+const okServer = (icsHref, ics) => (req) => {
+  if (req.method === "PUT") return { status: 201, body: "" };
+  if (req.method === "REPORT") return { status: 207, body: reportMultistatus(icsHref, "e-new", ics) };
+  if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+  if (req.method === "PROPFIND") return { status: 207, body: multistatus([icsHref]) };
+  return { status: 200, body: "" };
+};
+
+const todoIcs = (uid, summary) =>
+  [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//test//EN",
+    "BEGIN:VTODO",
+    `UID:${uid}`,
+    `SUMMARY:${summary}`,
+    "DTSTAMP:20260101T000000Z",
+    "DTSTART:20261020T090000",
+    "DUE:20261021T090000",
+    "END:VTODO",
+    "END:VCALENDAR"
+  ].join("\r\n");
+
+await t("同一条目即时推送 3 次，全量同步只报上传 1 条（操作几次不能就报几次）", async () => {
+  const it = mkItem({ uid: "dup@test", href: CAL_URL + "dup.ics", summary: "同一事件" });
+  const st = await mkStore([it]);
+  const restore = withFetch(okServer("/cal/dup.ics", todoIcs("dup@test", "同一事件")));
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    // 模拟用户对同一事件操作三次：每次编辑都走 updateItem → 即时推送（后台）
+    for (let i = 0; i < 3; i++) {
+      await eng.updateItem({ ...it, percent: 100, status: "COMPLETED", dirty: true });
+    }
+    assert.strictEqual(
+      st.pendingUploadedKeys.length,
+      1,
+      "同一 key 只记一次，实际 " + JSON.stringify(st.pendingUploadedKeys)
+    );
+    const rep = await eng.syncAll();
+    assert.strictEqual(rep.uploaded, 1, "三次编辑同一条目 → 同步应报上传 1 条，实际 " + rep.uploaded);
+  } finally {
+    restore();
+  }
+});
+
+await t("两个不同条目各推一次，同步报上传 2 条（去重不能把不同条目合并掉）", async () => {
+  const a = mkItem({ uid: "a@test", href: CAL_URL + "a.ics", summary: "事件A" });
+  const b = mkItem({ uid: "b@test", href: CAL_URL + "b.ics", summary: "事件B" });
+  const st = await mkStore([a, b]);
+  const restore = withFetch((req) => {
+    if (req.method === "PUT") return { status: 201, body: "" };
+    if (req.method === "REPORT") return { status: 207, body: reportMultistatus("/cal/a.ics", "e-new", todoIcs("a@test", "事件A")) };
+    if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND") return { status: 207, body: multistatus(["/cal/a.ics", "/cal/b.ics"]) };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    await eng.updateItem({ ...a, percent: 50, dirty: true });
+    await eng.updateItem({ ...b, percent: 50, dirty: true });
+    const rep = await eng.syncAll();
+    assert.strictEqual(rep.uploaded, 2, "两个不同条目 → 上传 2 条，实际 " + rep.uploaded);
+  } finally {
+    restore();
+  }
+});
+
+await t("即时推送成功后又编辑、本轮同步再推同一条目 → 并集只算 1 条", async () => {
+  const it = mkItem({ uid: "u1@test", href: CAL_URL + "u1.ics", summary: "同一事件" });
+  const st = await mkStore([it]);
+  let putCount = 0;
+  const restore = withFetch((req) => {
+    if (req.method === "PUT") {
+      putCount++;
+      // 第二次 PUT（编辑后的后台推送）失败 → 条目留脏，交给本轮 syncAll 重推
+      return putCount === 2 ? { status: 500, body: "" } : { status: 201, body: "" };
+    }
+    if (req.method === "REPORT") return { status: 207, body: reportMultistatus("/cal/u1.ics", "e-new", todoIcs("u1@test", "同一事件")) };
+    if (req.method === "PROPFIND" && /sync-token/.test(req.body)) return { status: 207, body: multistatus([]) };
+    if (req.method === "PROPFIND") return { status: 207, body: multistatus(["/cal/u1.ics"]) };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    await eng.updateItem({ ...it, percent: 30, dirty: true }); // 后台推送成功 → pending 记 key
+    await eng.updateItem({ ...it, percent: 60, dirty: true }); // 后台推送失败 → 留脏
+    const rep = await eng.syncAll(); // 本轮 pushDirty 重推成功 → 本轮 key 与 pending 同 key
+    assert.strictEqual(rep.uploaded, 1, "同一条目跨轮推送只算 1 条，实际 " + rep.uploaded);
+  } finally {
+    restore();
+  }
 });
 
 console.log(`\n[reconcile] ${passed} 项通过`);

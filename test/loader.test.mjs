@@ -231,6 +231,25 @@ assert.match(
   /同步失败/,
   "Dock 状态栏应显示「同步失败」，而不是看起来像成功的「上次同步」"
 );
+// ---- 页脚一行化（2026-10-15 雄哥要求）：状态+时间+失败原因一行，整行即按钮 ----
+assert.match(
+  String(dockStatus.textContent || ""),
+  /^同步失败 · .+：/,
+  "失败时应拼成「同步失败 · 时间：失败信息」一行，实际=" + dockStatus.textContent
+);
+assert.ok(
+  String(dockStatus.textContent || "").endsWith("…"),
+  "超 40 字应截断（省略号结尾），实际=" + dockStatus.textContent
+);
+assert.ok(
+  String(dockStatus.title || "").includes("服务器地址已变更"),
+  "截断不影响悬浮看全文：title 必须是完整错误，实际=" + dockStatus.title
+);
+assert.strictEqual(
+  dockEl.querySelector("[data-dock='error']"),
+  null,
+  "页脚不再有第二行错误详情（详情已并进状态按钮这一行）"
+);
 // 还原，避免影响后续断言
 plugin.store.settings.serverUrl = "http://127.0.0.1:5232/";
 plugin.store.lastError = undefined;

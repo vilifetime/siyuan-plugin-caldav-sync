@@ -70,7 +70,12 @@ filesystem_folder = ${path.join(dir, "collections").replace(/\\/g, "/")}
 );
 
 const radicaleLog = [];
-const radicale = spawn(py, ["-m", "radicale", "--config", path.join(dir, "config")], {
+// Windows 上必须走 radicale-win.py wrapper，不能 `-m radicale` —— 本机有建符号链接的
+// 权限，Radicale 启动时的「能否建符号链接」探测会建一个再删，删目录符号链接必然
+// WinError 5，进程起不来（详见 scripts/radicale-win.py 顶部注释）。
+const radicaleEntry =
+  process.platform === "win32" ? ["scripts/radicale-win.py"] : ["-m", "radicale"];
+const radicale = spawn(py, [...radicaleEntry, "--config", path.join(dir, "config")], {
   stdio: ["ignore", "pipe", "pipe"],
   env: (() => {
     const env = { ...process.env };
@@ -182,6 +187,64 @@ try {
     assert.strictEqual(it2.location, "线上");
     assert.strictEqual(it2.alarms[0].minutesBefore, 10, "VALARM 应保留");
     void put;
+  });
+
+  await t("编辑不能抹掉服务端非受管属性（raw 全链路）", async () => {
+    // 2026-10-14 数据丢失事故的端到端复现位。
+    // 根因：itemsFromICS 从不把服务端原文写进 item.raw → itemToEditedICS 退化成
+    // itemToNewICS 整份重拼 → ORGANIZER / ATTENDEE / VTIMEZONE / X- 扩展 /
+    // 二进制 ATTACH / 同一资源里的其它组件**全部丢失**。
+    // 用户实测：改个标题，服务器上那个附件就没了。
+    //
+    // 上面那条「编辑后重新上传」用例抓不到这个 bug —— 它只断言 VALARM，
+    // 而 VALARM 在 itemToNewICS 里也会被写出来，两条路径都有。
+    // 所以这里必须用**只有 raw 路径才保得住的属性**来钉。
+    const uid = "e2e-raw-loss@siyuan";
+    const href = calUrl + "e2e-raw-loss.ics";
+    const seedIcs = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//e2e//raw-loss//EN",
+      "BEGIN:VEVENT",
+      `UID:${uid}`,
+      "DTSTAMP:20260901T000000Z",
+      "DTSTART:20260915T100000Z",
+      "DTEND:20260915T110000Z",
+      "SUMMARY:带非受管属性的会",
+      "ORGANIZER:mailto:boss@example.com",
+      "X-CUSTOM-FIELD:keep-me",
+      "ATTACH;VALUE=BINARY;ENCODING=BASE64:QUJDREVG",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    await http.httpRequest(href, { method: "PUT", body: seedIcs, headers: { "Content-Type": "text/calendar" } }, CH, auth);
+
+    // ① 拉回来时 raw 必须在（这一条就是事故的根）
+    const r = await caldav.fetchCalendarItems(
+      cal, CH, auth,
+      caldav.icsRangeIso(Date.UTC(2026, 8, 1)),
+      caldav.icsRangeIso(Date.UTC(2026, 11, 31))
+    );
+    const it = r.items.find((i) => i.uid === uid);
+    assert.ok(it, "应拉取到种子条目");
+    assert.ok(typeof it.raw === "string" && it.raw.length > 0,
+      "拉回的条目必须带 raw —— 没有它，编辑就走整份重拼");
+    assert.ok(it.raw.includes("ORGANIZER"), "raw 应含服务端原文的 ORGANIZER");
+
+    // ② 只改标题，推回去
+    it.summary = "只改了标题";
+    await caldav.putItem(it, ics.itemToEditedICS(it), CH, auth);
+
+    // ③ 回读服务端原文：非受管属性必须一条不少
+    const back = await http.httpRequest(href, { method: "GET" }, CH, auth);
+    assert.ok(back.status === 200, "GET 回读失败: " + back.status);
+    assert.ok(back.body.includes("SUMMARY:只改了标题"), "标题改动应生效");
+    assert.ok(back.body.includes("ORGANIZER:mailto:boss@example.com"),
+      "ORGANIZER 必须保留 —— 它被抹掉就是这个事故本身");
+    assert.ok(back.body.includes("X-CUSTOM-FIELD:keep-me"),
+      "X- 扩展属性必须保留");
+    assert.ok(/ATTACH[^\r\n]*BINARY[^\r\n]*QUJDREVG/.test(back.body.replace(/\r\n /g, "")),
+      "二进制 ATTACH 必须原样保留（RFC 5545 折行要先拼回去再判）");
   });
 
   await t("过期 If-Match 上传应 412", async () => {

@@ -318,6 +318,20 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
       ? `<span class="cal-task-check cal-task-check--event" title="${kindLabel}"></span>`
       : `<button class="cal-task-check" data-toggle="${k}" title="${finished ? "标记未完成" : "标记完成"}">${finished ? "✓" : ""}</button>`;
     const prio = !isEvent && pr.label ? `<span class="cal-task-priority ${pr.cls}">${pr.label}</span>` : "";
+    // 附件：只在**待办**上显示，位置在备注之后、日历名之前（雄哥 2026-10-14 指定）。
+    // 日程不显示 —— 附件对日程意义不大，且会把 meta 行撑得很长。
+    // 只展示第一个，其余折叠成「+N」，避免一长串把行撑爆。
+    //
+    // 两种形式点击行为不同：
+    //  - URI：新标签页打开外链（`href` + `data-attach-open` 带 URI）；
+    //  - 二进制内联：没有可打开的地址，`data-attach-open` 带 `bin:<下标>`，
+    //    由 panel.ts 解出 base64 走 blob 下载（见 openAttachment）。
+    const atts = !isEvent ? it.attachments || [] : [];
+    const first = atts[0];
+    const firstIsBin = !!first?.b64;
+    const attHtml = atts.length
+      ? `<span class="cal-task-attach" title="${escape(atts.map((a) => a.name || a.uri || "附件").join("\n"))}">${icons.paperclip}<a class="cal-task-attach-link${firstIsBin ? " cal-task-attach-link--bin" : ""}" ${firstIsBin ? "" : `href="${escape(first.uri || "")}"`} data-attach-open="${firstIsBin ? "bin:0" : escape(first.uri || "")}" ${firstIsBin ? "" : 'target="_blank" rel="noreferrer"'}>${escape(first.name || first.uri || "附件")}</a>${atts.length > 1 ? `<span class="cal-task-attach-more">+${atts.length - 1}</span>` : ""}</span>`
+      : "";
     return `
 <div class="cal-task ${finished ? "is-done" : ""} ${overdue ? "is-overdue" : ""} ${isEvent ? "is-event" : "is-todo"}" data-open="${k}" style="--cal-color:${calColorOf(ctx, it)}">
   ${check}
@@ -327,6 +341,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     <div class="cal-task-meta">
       <span class="${overdue ? "cal-task-overdue" : ""}">${dueText}</span>
       ${it.description ? `<span class="cal-task-desc" title="${escape(it.description)}">${escape(it.description).slice(0, 40)}</span>` : ""}
+      ${attHtml}
       <span class="cal-task-cal"><i style="background:${calEventColor(cal)}"></i>${escape(cal?.displayName || "")}</span>
     </div>
   </div>

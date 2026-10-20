@@ -14,6 +14,7 @@ import { occurrencesInRange } from "@/core/ics";
 import { todayStamp, fmtDateCn, fmtTime, stampOfMs, parseLocalStamp, diffDays } from "@/core/date";
 import type { CalItem } from "@/core/types";
 import { todoDueOccurrences } from "@/ui/view-common";
+import { initialViewMode as readLastView, saveViewMode as writeLastView, saveCalendarView } from "@/ui/view-pref";
 import { ReminderEngine } from "@/core/reminder";
 import { renderPanel, renderDockPanel, notifyViewChange, toggleTodoDone, VIEW_CHANGE_EVENT, type PanelCtx, type ViewMode } from "@/ui/panel";
 import { isMobile } from "@/ui/device";
@@ -35,33 +36,7 @@ const TAB_TYPE = "caldav-sync-tab";
 /** 插件数据文件名：带 .json 后缀，便于在文件管理器里直接双击查看/编辑 */
 const DATA_FILE = "caldav-sync.json";
 
-/**
- * 「主窗口上次用的视图」的本地存储键。
- *
- * 存 localStorage 而不是设置里：它是**本机偏好**（桌面端可能是宽屏看周视图、
- * 手机端只想看任务列表），没必要跟着设置参与云同步，也避免每切一次视图就写盘。
- */
-const LAST_VIEW_KEY = "siyuan-plugin-caldav-sync:last-view";
-const VIEW_MODES: ViewMode[] = ["year", "month", "week", "day", "task"];
 
-/** 读上次视图（非法值/读不到一律回落 month）。localStorage 可能被禁用，全部兜住。 */
-function readLastView(): ViewMode {
-  try {
-    const v = globalThis.localStorage?.getItem(LAST_VIEW_KEY) as ViewMode | null | undefined;
-    return v && VIEW_MODES.includes(v) ? v : "month";
-  } catch {
-    return "month";
-  }
-}
-
-/** 记上次视图。写失败（隐私模式 / 配额）不影响功能，静默忽略。 */
-function writeLastView(mode: ViewMode): void {
-  try {
-    globalThis.localStorage?.setItem(LAST_VIEW_KEY, mode);
-  } catch {
-    /* 存不下就算了：本次会话内 mainCtx.viewMode 仍然是对的 */
-  }
-}
 /**
  * 0.2.12 及更早版本的数据文件名（无扩展名，历史上直接复用了 DOCK_TYPE 的值）。
  * 这里刻意写成字面量而不是 `= DOCK_TYPE` —— 它是**冻结的历史值**，
@@ -239,6 +214,9 @@ export default class CalDavPlugin extends Plugin {
       // 记住这次视图：Dock 的合并按钮（打开上次视图）下次要用
       if (mode) self.lastViewMode = mode;
       writeLastView(mode);
+      // 日历视图单独记一份（2026-10-20）：从任务视图返回时要回到进任务视图
+      // 之前的那个日历视图，而不是统一落回月视图。task 不覆盖它。
+      saveCalendarView(mode);
     };
     document.addEventListener(VIEW_CHANGE_EVENT, this.viewChangeHandler);
 

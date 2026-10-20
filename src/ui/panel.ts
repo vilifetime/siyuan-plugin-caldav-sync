@@ -7,7 +7,7 @@
 import type { CalStore } from "../core/store";
 import { keyOf } from "../core/store";
 import type { SyncEngine } from "../core/sync";
-import type { CalItem, CalKind, SortMode } from "../core/types";
+import type { CalAttachment, CalItem, CalKind, SortMode } from "../core/types";
 import { DEFAULT_CATEGORIES, calEventColor, setTaskViewEventsShown } from "../core/types";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
@@ -18,6 +18,7 @@ import { openSettingsDialog } from "./settings-dialog";
 import { askDiaryRange } from "./diary-range-dialog";
 import type { DiaryRange, DiaryTarget } from "./diary-range";
 import { renderMonthView } from "./view-month";
+import { loadCalendarView, DEFAULT_VIEW } from "./view-pref";
 import { renderWeekView } from "./view-week";
 import { renderTaskView } from "./view-task";
 import { renderYearView } from "./view-year";
@@ -572,8 +573,10 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     }
     const action = target.dataset.action;
     if (action === "toggle-view") {
-      // 日历视图（年/月/周/日）↔ 任务视图 互切；从任务视图返回时统一落回月视图
-      ctx.viewMode = ctx.viewMode === "task" ? "month" : "task";
+      // 日历视图（年/月/周/日）↔ 任务视图 互切；从任务视图返回时回到
+      // 上次使用的日历视图（2026-10-20 雄哥要求，原来是硬编码落回月视图）。
+      // 读不到记录（含隐私模式 localStorage 不可用）才回落默认月视图。
+      ctx.viewMode = ctx.viewMode === "task" ? loadCalendarView() ?? DEFAULT_VIEW : "task";
       notifyViewChange(ctx.viewMode);
       renderAll();
       return;
@@ -797,11 +800,9 @@ export function renderDockPanel(
 </div>
 <div class="caldav-dock-foot">
   <button class="caldav-dock-status" data-action="sync">未同步</button>
-  <div class="caldav-dock-error" data-dock="error" hidden></div>
 </div>`;
 
   const statusEl = root.querySelector(".caldav-dock-status") as HTMLElement;
-  const errorEl = root.querySelector("[data-dock='error']") as HTMLElement | null;
   const listEl = root.querySelector("[data-dock='items']") as HTMLElement;
   const pops = Array.from(root.querySelectorAll<HTMLElement>(".caldav-dock-pop"));
   let destroyed = false;
@@ -909,61 +910,43 @@ export function renderDockPanel(
       statusEl.textContent = "同步不可用 · 凭据异常";
       statusEl.title = cred;
       statusEl.classList.add("has-error");
-      showError(cred);
       return;
     }
     if (!s.serverUrl) {
       statusEl.textContent = "未配置服务器";
       statusEl.title = "点击打开设置";
       statusEl.classList.remove("has-error");
-      showError("");
+      return;
+    }
+    // 同步进行中：显示「同步中…」而不是上次的过时结果。两条同步入口（Dock 页脚 /
+    // 主窗口工具栏）都经 syncAll 置 store.syncing，行为由此一致 —— 修复
+    // 2026-10-16 雄哥实测「主窗口点刷新，Dock 挂上次的 412、按钮转几分钟」。
+    if (opts.store.syncing) {
+      statusEl.textContent = "同步中…";
+      statusEl.title = "正在同步，请稍候";
+      statusEl.classList.remove("has-error");
       return;
     }
     if (err) {
-      statusEl.textContent = `同步失败 · ${time}`;
-      statusEl.title = `错误: ${err}`;
+      // 一行呈现：状态 + 时间 + 失败原因，**整行就是同步按钮**。
+      // 2026-10-15 雄哥要求：原来是两行，详情行不可点，看到错误想重试时点不到。
+      // 超 40 字截断、悬浮看全文；容器宽度的兜底交给 CSS 的 ellipsis。
+      const full = `同步失败 · ${time}：${err}`;
+      statusEl.textContent = full.length > 40 ? full.slice(0, 40) + "…" : full;
+      statusEl.title = full;
       statusEl.classList.add("has-error");
-      showError(err);
     } else if (opts.store.lastNote) {
       // 对账提示是**中性信息**，不是失败 —— 不能复用「同步失败」的前缀，
-      // 否则一次成功同步会被报成失败（2026-10-10 实测）。
-      statusEl.textContent = `上次同步 ${time}`;
-      statusEl.title = opts.store.lastNote;
+      // 否则一次成功同步会被报成失败（2026-10-10 实测）。同样一行呈现 + 40 字截断。
+      const full = `上次同步 ${time}：${opts.store.lastNote}`;
+      statusEl.textContent = full.length > 40 ? full.slice(0, 40) + "…" : full;
+      statusEl.title = full;
       statusEl.classList.remove("has-error");
-      showNote(opts.store.lastNote);
     } else {
       statusEl.textContent = `上次同步 ${time}`;
       statusEl.title = "点击立即同步";
       statusEl.classList.remove("has-error");
-      showError("");
     }
-  }
-
-  /** 页脚提示行：把提示正文摊开显示，而不是只放在悬停提示里 */
-  function showNote(text: string): void {
-    if (!errorEl) return;
-    if (!text) {
-      errorEl.hidden = true;
-      errorEl.textContent = "";
-      return;
-    }
-    errorEl.hidden = false;
-    errorEl.textContent = text.length > 90 ? text.slice(0, 90) + "…" : text;
-    errorEl.title = text;
-    errorEl.classList.remove("has-error");
-  }
-
-  /** 页脚错误行：把错误正文摊开显示，而不是只放在悬停提示里 */
-  function showError(text: string): void {
-    if (!errorEl) return;
-    if (!text) {
-      errorEl.hidden = true;
-      errorEl.textContent = "";
-      return;
-    }
-    errorEl.hidden = false;
-    errorEl.textContent = text.length > 90 ? text.slice(0, 90) + "…" : text;
-    errorEl.title = text;
   }
 
   let dockFilter: DockFilter = "next7";
@@ -1334,6 +1317,21 @@ export function renderDockPanel(
       ev.stopPropagation();
       return;
     }
+    // 附件链接：点它是要**打开/下载附件**，不是打开编辑器。
+    // 不拦的话它会冒泡到下面的 `[data-open]` 委托 → 弹编辑器，链接永远点不开。
+    const attLink = t.closest("[data-attach-open]") as HTMLElement | null;
+    if (attLink) {
+      const val = attLink.dataset.attachOpen || "";
+      // 二进制内联件没有可打开的地址，标记形如 `bin:<下标>`，走 blob 下载
+      const m = /^bin:(\d+)$/.exec(val);
+      if (m) {
+        const host = attLink.closest("[data-open]") as HTMLElement | null;
+        const item = host ? opts.store.get(host.dataset.open!) : undefined;
+        downloadAttachment(item?.attachments?.[+m[1]]);
+      }
+      // URI 形式：<a href target="_blank"> 自己会打开，不用插手
+      return;
+    }
     const openEl = t.closest("[data-open]") as HTMLElement | null;
     if (openEl && listEl.contains(openEl)) {
       const item = opts.store.get(openEl.dataset.open!);
@@ -1549,6 +1547,39 @@ export function stepCursor(cursor: string, mode: ViewMode, dir: number): string 
 
 function pad(n: number): string {
   return n < 10 ? "0" + n : String(n);
+}
+
+/**
+ * 把内联二进制附件下载到本地。
+ *
+ * 附件是按 RFC 5545 `VALUE=BINARY;ENCODING=BASE64` 存在 ICS 里的，没有可打开的
+ * 地址，只能解出来落盘。用 blob + `<a download>` 而不是 data: URL ——
+ * data: URL 在顶层框架里被浏览器禁止导航，插件 iframe 里也不稳妥。
+ *
+ * `atob` 一次解整个 base64 没问题（它是流式实现的），但解出来的二进制串转
+ * Uint8Array 必须逐字符写，`Uint8Array.from(bin, c => c.charCodeAt(0))` 同样
+ * 可以，别用 `String.fromCharCode(...)` 的反向操作。
+ */
+function downloadAttachment(att: CalAttachment | undefined): void {
+  const b64 = att?.b64;
+  if (!b64) return;
+  try {
+    const bin = atob(b64.replace(/\s+/g, ""));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: att!.fmttype || "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = att!.name || "附件";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // 马上 revoke 个别浏览器来不及发起下载，留一点时间再收
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch {
+    // 解码失败（base64 损坏 / 浏览器不支持 atob）就别静默，让用户知道
+    alert("附件读取失败：内容可能已损坏");
+  }
 }
 
 export function escapeHtml(s: string): string {

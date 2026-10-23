@@ -509,7 +509,7 @@ await t("缺陷A：etag 变但受管字段没变 → same 分支必须回写 eta
 });
 
 await t("对账提示走 lastNote 中性通道，绝不塞进 lastError", () => {
-  assert.ok(/this\.store\.lastNote = notes\.join\("; "\) \|\| undefined/.test(srcSync), "对账提示要写 lastNote");
+  assert.ok(/this\.store\.lastNote = \[\.\.\.notes, \.\.\.report\.conflicts\]\.join\("; "\) \|\| undefined/.test(srcSync), "对账提示要写 lastNote（含冲突）");
   assert.ok(
     /this\.store\.lastError = report\.errors\.join\("; "\) \|\| undefined/.test(srcSync),
     "lastError 只装真错误"
@@ -529,7 +529,7 @@ await t("lastNote 有完整的存取盘链路（加了字段但没存 = 重启�
 
 await t("同步抛异常时要清掉过期 lastNote（否则报错后中性提示一直挂着）", () => {
   // 用 lastNote 赋值点定位兜底 catch —— 文件里有多处 catch，按序号数位置会随重构漂移
-  const iAssign = srcSync.indexOf("this.store.lastNote = notes.join");
+  const iAssign = srcSync.indexOf("this.store.lastNote = [...notes");
   assert.ok(iAssign > 0, "先找到正常路径的 lastNote 赋值点");
   const iCatch = srcSync.indexOf("} catch (e: any) {", iAssign);
   assert.ok(iCatch > iAssign, "正常路径之后应紧跟兜底 catch");
@@ -593,7 +593,7 @@ await t("pending 合并后必须清零（否则下一轮重复计数、key 越�
 await t("即时推送后立刻给反馈（用户点完删除要看得到「已上云」）", () => {
   const body = srcSync.slice(srcSync.indexOf("private async doPushAndPersist"));
   assert.ok(/已同步到服务端/.test(body), "要有即时反馈文案");
-  assert.ok(/if \(pushed\.length\) this\.store\.lastNote = pushed\.join/.test(body), "反馈写 lastNote 中性通道");
+  assert.ok(/noteParts\.length\) this\.store\.lastNote = noteParts\.join/.test(body), "反馈写 lastNote 中性通道（含冲突）");
 });
 
 await t("pending 有完整的存取盘链路（重启就丢 = 计数凭空消失）", () => {
@@ -651,9 +651,10 @@ await t("删除遇 412（etag 对不上）：服务端优先 → 撤销删除、
     assert.strictEqual(left.deleted, false, "撤销删除标记");
     assert.strictEqual(left.dirty, false, "不再当脏条目反复重推");
     assert.strictEqual(left.summary, "服务端改过的版本", "应拉到服务端当前版本");
+    assert.strictEqual(rep.errors.length, 0, "冲突不应计入 errors，实际 " + JSON.stringify(rep.errors));
     assert.ok(
-      /服务端已变更/.test(rep.errors.join(";")),
-      "要说清为什么删没执行、下一步怎么办，实际 " + JSON.stringify(rep.errors)
+      /服务端已变更/.test(rep.conflicts.join(";")),
+      "要说清为什么删没执行、下一步怎么办，实际 " + JSON.stringify(rep.conflicts)
     );
   } finally {
     restore();
@@ -739,9 +740,10 @@ await t("上传遇 412（etag 对不上）：服务端优先 → 丢弃改动 + 
   try {
     const eng = new syncMod.SyncEngine(st, () => "direct");
     const rep = await eng.syncAll();
+    assert.strictEqual(rep.errors.length, 0, "冲突不应计入 errors，实际 " + JSON.stringify(rep.errors));
     assert.ok(
-      /服务端已变更/.test(rep.errors.join(";")),
-      "要报清楚为什么打勾没同步上去，实际 " + JSON.stringify(rep.errors)
+      /服务端已变更/.test(rep.conflicts.join(";")),
+      "要报清楚为什么打勾没同步上去，实际 " + JSON.stringify(rep.conflicts)
     );
     const left = st.getAll().find((i) => i.uid === "外包通知@test");
     assert.ok(left, "条目必须留在本地");
@@ -759,7 +761,7 @@ await t("上传 412 服务端优先分支要清 etag（源码防漂移，否则�
   // 「连续三条代码语句」：dirty=false → etag=undefined → push(「…本地改动已按策略丢弃」）。
   // 注释在上方独立行，夹不进这条序列，既能精确命中真实分支，也不被注释里的同款文案误伤。
   assert.ok(
-    /item\.dirty = false;\s*item\.etag = undefined;\s*report\.errors\.push\(`[^`]*本地改动已按策略丢弃`\)/.test(srcSync),
+    /item\.dirty = false;\s*item\.etag = undefined;\s*report\.conflicts\.push\(`[^`]*本地改动已按策略丢弃`\)/.test(srcSync),
     "上传 412 服务端优先分支必须 dirty=false + etag=undefined + 报「本地改动已按策略丢弃」——漏了 etag=undefined，下一轮拉取因字段相同走 same 分支仍不纠正，UI 挂假完成态"
   );
 });

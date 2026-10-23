@@ -11,13 +11,14 @@ import {
   fetchCalendarItems,
   putItem,
   deleteItem,
+  uploadIcloudAttachment,
   icsRangeIso,
   listResourceNames,
   fileNameOf,
   type DavAuth
 } from "./caldav";
 import { httpRequest } from "./http";
-import { itemToEditedICS, itemToNewICS } from "./ics";
+import { itemToEditedICS, itemToNewICS, base64ToBytes } from "./ics";
 import { dateStampOfMs, stampOfMs } from "./date";
 import type { Channel } from "./http";
 
@@ -27,6 +28,8 @@ export interface SyncReport {
   uploaded: number;
   deleted: number;
   errors: string[];
+  /** 冲突（412 等正常冲突，已按策略自愈，非失败）：单独计数走中性提示，不计入 errors */
+  conflicts: string[];
   elapsedMs: number;
   /** 对账清掉的「幽灵条目」数（本地有、服务端早已不存在，见 reconcile） */
   reconciled: number;
@@ -115,7 +118,7 @@ export class SyncEngine {
 
   async syncAll(): Promise<SyncReport> {
     if (this.syncing)
-      return { ok: false, fetched: 0, uploaded: 0, deleted: 0, errors: ["正在同步中"], elapsedMs: 0, reconciled: 0, requeued: 0 };
+      return { ok: false, fetched: 0, uploaded: 0, deleted: 0, errors: ["正在同步中"], conflicts: [], elapsedMs: 0, reconciled: 0, requeued: 0 };
     this.syncing = true;
     // 同步一开始就清掉上次的遗留错误 + 置「同步中」状态：否则整个同步期间 Dock
     // 一直挂着上次的过时红字，用户以为本次已经失败（2026-10-16 雄哥实测：主窗口
@@ -131,6 +134,7 @@ export class SyncEngine {
       uploaded: 0,
       deleted: 0,
       errors: [],
+      conflicts: [],
       elapsedMs: 0,
       reconciled: 0,
       requeued: 0,
@@ -262,7 +266,7 @@ export class SyncEngine {
       const notes: string[] = [];
       if (report.reconciled) notes.push(`对账：已清理 ${report.reconciled} 条服务端不存在的本地条目`);
       if (report.requeued) notes.push(`对账：${report.requeued} 条本地条目在服务端已丢失，已重新上传`);
-      this.store.lastNote = notes.join("; ") || undefined;
+      this.store.lastNote = [...notes, ...report.conflicts].join("; ") || undefined;
       this.store.lastError = report.errors.join("; ") || undefined;
     } catch (e: any) {
       // 兜底：try 内部若抛出未捕获的异常（例如 pushDirty 直接抛错），原先会跳过上面两行赋值，
@@ -389,6 +393,11 @@ export class SyncEngine {
     // 新建 / 修改
     for (const item of this.store.dirtyItems()) {
       try {
+        // iCloud 托管附件预上传：把仍是内联 base64 的件逐个 POST 进 iCloud 托管
+        // 存储，就地改写成托管 URI（uri + managedId），随后的序列化只写
+        // `ATTACH;MANAGED-ID="<id>":<uri>` —— iCloud 对内联二进制回 507（实测），
+        // 托管形态是苹果官方路径。非 iCloud 服务器直接跳过（return 无副作用）。
+        await this.uploadIcloudAttachments(item);
         const ics = item.raw ? itemToEditedICS(item) : itemToNewICS(item);
         const r = await putItem(item, ics, this.channel(), this.auth(), this.store.settings.icsSizeMaxMB);
         item.etag = r.etag;
@@ -424,8 +433,16 @@ export class SyncEngine {
             // 打勾完成即报「服务端已变更，本地改动已按策略丢弃」，且界面上的勾是假的）。
             item.dirty = false;
             item.etag = undefined;
-            report.errors.push(`「${item.summary}」服务端已变更，本地改动已按策略丢弃`);
+            report.conflicts.push(`「${item.summary}」服务端已变更，本地改动已按策略丢弃`);
           }
+        } else if (e?.status === 400) {
+          // body 畸形类 400（iCloud 实测：裸组件 / 缺 VCALENDAR 信封）。根因已修
+          // （parseMultistatus 剥离 CDATA + itemToEditedICS 补信封），正常不会再出现；
+          // 此分支仅作防御：本地序列化既已畸形，强行再 PUT 只会恒 400 死循环（2026-10-23
+          // 雄哥实测刷屏），故按服务端优先清 etag+dirty，下轮 pull 用服务端版本覆盖本地。
+          item.dirty = false;
+          item.etag = undefined;
+          report.errors.push(`「${item.summary}」上传被服务端拒绝（HTTP 400，疑似本地数据损坏），已按策略用服务端版本覆盖本地`);
         } else {
           report.ok = false;
           report.errors.push(`上传 ${item.summary}: ${explainError(e)}`);
@@ -464,7 +481,7 @@ export class SyncEngine {
             item.deleted = false;
             item.dirty = false;
             item.etag = undefined;
-            report.errors.push(
+            report.conflicts.push(
               `「${item.summary}」服务端已变更，删除未执行，已按策略恢复服务端版本（如仍要删除，把冲突策略改为「本地优先」后重试）`
             );
           }
@@ -474,6 +491,90 @@ export class SyncEngine {
         }
       }
     }
+  }
+
+  /**
+   * iCloud 托管附件预上传：把 item.attachments 里仍是内联 base64 的件，逐个 POST 到
+   * iCloud 的 add-attachment 端点，就地改写成托管 URI（uri + managedId）、清掉 b64。
+   * 改写后 pushDirty 的序列化写出 `ATTACH;MANAGED-ID="<id>":<uri>`，ICS 里不再
+   * 内联二进制，iCloud 不再 507。非 iCloud 服务器直接跳过。
+   *
+   * 新建条目（href 已由编辑器定好、但服务端还没有资源、etag 为空）要先建一份
+   * **不含内联二进制**的资源拿到 etag，add-attachment 与最终 PUT 才有目标；
+   * 已存在的条目（有 etag）直接 POST。
+   *
+   * ⚠️ 上传失败会抛错 → pushDirty 记错误、条目保持 dirty 下轮重试，b64 不会被
+   *    清掉，数据不会坏。重试时已上传的件其 b64 已被改写，inline 过滤为空，
+   *    不会重复上传（幂等）。
+   */
+  private async uploadIcloudAttachments(item: CalItem): Promise<void> {
+    if (this.store.settings.serverType !== "icloud") return;
+    if (!item.attachments?.length) return;
+    const inline = item.attachments.filter((a) => (a.b64 || "").trim());
+    if (!inline.length) return;
+    // 新建条目：服务端还没有资源，add-attachment 没处 POST。先建一份不含内联
+    // 二进制的资源（URI 外链保留），拿到 etag，后续 add-attachment 与最终 PUT
+    // 才有目标。过滤副本只影响这一次预上传的序列化，不动 item.attachments 本身。
+    if (!item.href || !item.etag) {
+      const draft: CalItem = {
+        ...item,
+        attachments: item.attachments.filter((a) => !(a.b64 || "").trim())
+      };
+      const ics0 = item.raw ? itemToEditedICS(draft) : itemToNewICS(draft);
+      const r0 = await putItem(item, ics0, this.channel(), this.auth(), this.store.settings.icsSizeMaxMB);
+      item.etag = r0.etag;
+      item.raw = item.raw || ics0;
+    }
+    // 上传前就已托管的 MANAGED-ID 集合：iCloud 回 GET 认领「新传的那个」时扣减用；
+    // 每成功传一个就补进集合，多个附件排队上传时不会认领错（见 caldav.ts 扣减法）。
+    const known = new Set(item.attachments.map((a) => a.managedId).filter((v): v is string => !!v));
+    for (const a of inline) {
+      const bytes = base64ToBytes(a.b64!);
+      const r = await uploadIcloudAttachment(
+        item,
+        bytes,
+        a.name || "attachment",
+        a.fmttype || "application/octet-stream",
+        this.channel(),
+        this.auth(),
+        [...known]
+      );
+      a.uri = r.uri;
+      a.managedId = r.managedId;
+      a.b64 = undefined;
+      known.add(r.managedId);
+      // add-attachment 会改变服务端资源的 etag（iCloud 连响应体都不给，只能从
+      // 回 GET 的 ETag 头拿）。不更新的话 pushDirty 随后那次 PUT 带旧 etag 必 412，
+      // 条目永远 dirty、每轮同步重传——2026-10-22 雄哥实测踩坑后的修复。
+      if (r.etag) item.etag = r.etag;
+    }
+  }
+
+  /**
+   * 取回托管附件（iCloud 等）的原始字节，供编辑器下载。
+   * 走传输层、保留鉴权；`responseEncoding: "base64"` 保证二进制不被 utf8 文本化破坏
+   * （>0x7F 字节会被换成 U+FFFD）。auto 通道内核代理优先，也顺带绕开 CORS。
+   */
+  async fetchAttachmentBytes(url: string): Promise<Uint8Array> {
+    // iCloud 托管附件的下载 URI 在 gateway.icloud.com（预签名：路径尾部自带
+    // token），**带 Authorization 反而 500**（2026-10-23 真机实测：带 auth 500、
+    // 不带 200 且 256 字节 0x00-0xFF 原样回；直连带 auth 同样 500，与通道无关）。
+    // 同主机的托管附件（自建服务器）才需要 auth，按主机是否相同决定带不带。
+    let crossHost = false;
+    try {
+      crossHost = new URL(url).host !== new URL(this.store.settings.serverUrl).host;
+    } catch {
+      crossHost = false; // URL 解析不了时保守带 auth（自建服务器场景）
+    }
+    const res = await httpRequest(
+      url,
+      { method: "GET", responseEncoding: "base64" },
+      this.channel(),
+      crossHost ? undefined : this.auth()
+    );
+    if (res.status >= 400) throw new Error(`下载附件失败: HTTP ${res.status}`);
+    if (res.bytes && res.bytes.length) return res.bytes;
+    return new TextEncoder().encode(res.body); // 兜底（纯文本类附件）
   }
 
   /** 新建条目（先入本地并标记脏，立即上传） */
@@ -536,6 +637,7 @@ export class SyncEngine {
       uploaded: 0,
       deleted: 0,
       errors: [],
+      conflicts: [],
       elapsedMs: 0,
       reconciled: 0,
       requeued: 0,
@@ -553,7 +655,8 @@ export class SyncEngine {
     const pushed: string[] = [];
     if (report.uploaded) pushed.push(`已同步到服务端：上传 ${report.uploaded} 条`);
     if (report.deleted) pushed.push(`已同步到服务端：删除 ${report.deleted} 条`);
-    if (pushed.length) this.store.lastNote = pushed.join("; ");
+    const noteParts = [...pushed, ...report.conflicts];
+    if (noteParts.length) this.store.lastNote = noteParts.join("; ");
     this.store.lastError = report.errors.length ? report.errors.join("; ") : this.store.lastError;
     await this.store.persist();
     this.store.notify();

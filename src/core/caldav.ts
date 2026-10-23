@@ -3,7 +3,7 @@
  */
 import type { CalCalendar, CalItem } from "./types";
 import { httpRequest, HttpError, isNetworkLevelError, uploadTimeoutMs, type HttpResult, type Channel } from "./http";
-import { itemsFromICS, ICS_SIZE_MAX_MB, mbToBytes } from "./ics";
+import { itemsFromICS, ICS_SIZE_MAX_MB, mbToBytes, parseAttachLine, icsFilenameParam } from "./ics";
 
 export interface DavAuth {
   username: string;
@@ -53,7 +53,7 @@ async function dav(
 function pickHrefXml(xml: string): string[] {
   // 不做完整 XML 解析，提取 <D:href> / <href>（CalDAV 服务端响应结构固定）
   const out: string[] = [];
-  const re = /<(?:[A-Za-z0-9_-]+:)?href>([^<]+)<\/(?:[A-Za-z0-9_-]+:)?href>/g;
+  const re = /<(?:[A-Za-z0-9_-]+:)?href[^>]*>([^<]+)<\/(?:[A-Za-z0-9_-]+:)?href>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml))) out.push(m[1].trim());
   return out;
@@ -136,12 +136,12 @@ export async function discoverCalendars(
 
   const calendars: CalCalendar[] = [];
   // 按 <response> 分块
-  const chunks = listRes.body.split(/<(?:[A-Za-z0-9_-]+:)?response>/i).slice(1);
+  const chunks = listRes.body.split(/<(?:[A-Za-z0-9_-]+:)?response\b[^>]*>/i).slice(1);
   let colorIdx = 0;
   for (const chunk of chunks) {
     const href = pickHrefXml(chunk)[0];
     if (!href) continue;
-    if (!/<(?:[A-Za-z0-9_-]+:)?calendar\s*\/?>/.test(chunk)) continue; // 必须含 <calendar/> 资源类型
+    if (!/<(?:[A-Za-z0-9_-]+:)?calendar(?![\w-])[^>]*>/.test(chunk)) continue; // 必须含 <calendar/> 资源类型（iCloud 的 <calendar xmlns="..."> 带属性）
     const names = pickTextXml(chunk, "displayname");
     const name = (names[0] || decodeURIComponent(href.replace(/\/+$/, "").split("/").pop() || "")).trim();
     const colorM = /<(?:[A-Za-z0-9_-]+:)?calendar-color[^>]*>([^<]*)</.exec(chunk);
@@ -267,7 +267,7 @@ export async function syncCollection(
   if (res.status >= 400) throw new HttpError(res.status, `增量同步失败: HTTP ${res.status}`);
   const tokenM = /<(?:[A-Za-z0-9_-]+:)?sync-token[^>]*>([^<]*)</.exec(res.body);
   const deletedHrefs: string[] = [];
-  const chunks = res.body.split(/<(?:[A-Za-z0-9_-]+:)?response>/i).slice(1);
+  const chunks = res.body.split(/<(?:[A-Za-z0-9_-]+:)?response\b[^>]*>/i).slice(1);
   const changed: string[] = [];
   for (const chunk of chunks) {
     const href = pickHrefXml(chunk)[0] || "";
@@ -303,7 +303,7 @@ async function multiget(cal: CalCalendar, channel: Channel, auth: DavAuth, hrefs
 
 export function parseMultistatus(xml: string, cal: CalCalendar): CalItem[] {
   const items: CalItem[] = [];
-  const chunks = xml.split(/<(?:[A-Za-z0-9_-]+:)?response>/i).slice(1);
+  const chunks = xml.split(/<(?:[A-Za-z0-9_-]+:)?response\b[^>]*>/i).slice(1);
   for (const chunk of chunks) {
     const href = unescapeXml(pickHrefXml(chunk)[0] || "");
     // 服务端（Baïkal/sabre）的 getetag 以 XML 转义形态返回：&quot;xxxx&quot;，
@@ -312,10 +312,21 @@ export function parseMultistatus(xml: string, cal: CalCalendar): CalItem[] {
     const etag = sanitizeEtag(pickTextXml(chunk, "getetag")[0] || "");
     const calDataM = /<(?:[A-Za-z0-9_-]+:)?calendar-data[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_-]+:)?calendar-data>/i.exec(chunk);
     if (!href || !calDataM) continue;
-    const ics = unescapeXml(calDataM[1]);
+    // ⚠️ 服务端（iCloud 实测）会把整段 ICS 包进 <![CDATA[ ... ]]>。若不剥离，
+    // item.raw 就以 <![CDATA[BEGIN:VCALENDAR... 开头，parseICS 识别不到 VCALENDAR
+    // 层 → itemToEditedICS 误吐裸 VTODO/VEVENT → 严格服务器（iCloud）判 body
+    // 非法 → HTTP 400（2026-10-23 定位的「无附件也 400」根因，与附件无关）。
+    const ics = unescapeXml(stripCdata(calDataM[1]));
     items.push(...itemsFromICS(ics, cal.url, toAbsolute(cal.url, href), etag));
   }
   return items;
+}
+
+/** 若整段被 <![CDATA[ ... ]]> 包裹则取其中文本，否则原样返回。
+ *  iCloud 实测会在 calendar-data 外包一层 CDATA，不清会污染 item.raw（见 parseMultistatus）。 */
+function stripCdata(s: string): string {
+  const m = /^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/.exec(s);
+  return m ? m[1] : s;
 }
 
 function unescapeXml(s: string): string {
@@ -380,9 +391,278 @@ export async function putItem(
         `请删除该待办的大附件或改用外链后重试。`
     );
   }
-  if (res.status >= 400) throw new HttpError(res.status, `上传失败: HTTP ${res.status}`);
+  if (res.status >= 400) {
+    // 诊断落盘（2026-10-23 雄哥实测过一次无法复现的 PUT 400：同一份 ICS/etag 直连
+    // 与代理都能 204，缺响应体只能瞎猜）。If-Match 的 etag 拼进 URL 行一起记。
+    // 412/413 在上面已分别处理，到这里的是真异常。
+    debugDump(
+      "icloud-put-item",
+      `${item.href} (If-Match: ${item.etag || "无"})`,
+      res.status,
+      "OUTGOING ICS (\u957f " + (ics ? ics.length : 0) + "):\n" + (ics || "") + "\n\nSERVER RESPONSE BODY:\n" + (res.body || ""),
+      res.headers
+    );
+    throw new HttpError(res.status, `上传失败: HTTP ${res.status}`);
+  }
   const etag = (res.headers["etag"] || res.headers["etag".toLowerCase()] || "").replace(/^"|"$/g, "");
   return { etag: etag || undefined };
+}
+
+/**
+ * 临时诊断：iCloud 托管附件链路失败时把真实 HTTP 响应（URL + status + body）追加到
+ * D:/Temp/caldav-debug.txt，便于在没有抓包条件的情况下定位「服务器到底回了什么」。
+ * 思源渲染进程有 globalThis.require（Electron），桌面端生效；其它环境静默跳过。
+ * TODO(临时): iCloud 附件实测稳定后删除本函数及其调用。
+ */
+function debugDump(label: string, url: string, status: number, body: string, headers?: Record<string, string>): void {
+  try {
+    const g: any = globalThis;
+    const fs = g.require?.("fs");
+    if (!fs) return;
+    try { fs.mkdirSync("D:/Temp", { recursive: true }); } catch { /* 已存在 */ }
+    const hdr = headers
+      ? "\nHEADERS:\n" + Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n")
+      : "";
+    const line = `\n===== ${label} =====\nURL: ${url}\nSTATUS: ${status}${hdr}\nBODY:\n${body}\n`;
+    fs.appendFileSync("D:/Temp/caldav-debug.txt", line);
+  } catch { /* 诊断失败不影响主流程 */ }
+}
+
+/** 取响应头里的 ETag（小写归一化后） */
+function etagOf(res: HttpResult): string | undefined {
+  const raw = res.headers["etag"] || "";
+  const v = raw.replace(/^"|"$/g, "").trim();
+  return v || undefined;
+}
+
+/**
+ * 从 iCalendar 文本（可能含 RFC 5545 折行）解析出**所有**托管附件条目。
+ *
+ * MANAGED-ID 形态两种都要认：
+ *   `ATTACH;MANAGED-ID="abc":https://…`（带引号，RFC 5545 参数值含 `:`/`/` 时规范要求）
+ *   `ATTACH;FMTTYPE=…;SIZE=…;FILENAME="…";MANAGED-ID=abc:https://…`（裸写——iCloud 实测就是这个形态）
+ * 先展开折行（续行并入上一行），否则长 URI 会被截断。
+ */
+export function parseAllManagedAttach(body: string): { uri: string; managedId: string }[] {
+  if (!body) return [];
+  const ics = body.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
+  const out: { uri: string; managedId: string }[] = [];
+  for (const line of ics.split(/\r\n|\n/)) {
+    if (!/^ATTACH[;:]/i.test(line)) continue;
+    const parsed = parseAttachLine(line);
+    const managedId = parsed?.params["MANAGED-ID"]?.trim();
+    if (parsed && managedId && parsed.value) out.push({ uri: parsed.value, managedId });
+  }
+  return out;
+}
+
+/**
+ * 从 attachment-add 响应（iCalendar 文本，可能含折行）解析出托管 URI 与 MANAGED-ID。
+ * 只取第一条——响应体是刚上传完的单一资源，正常只有一条新托管附件。
+ */
+function parseManagedAttach(body: string): { uri: string; managedId: string } | null {
+  const all = parseAllManagedAttach(body);
+  return all.length ? all[0] : null;
+}
+
+/**
+ * 判断「回 GET 到的 ICS 里的 URI」与「POST 回应的 location 头」是否指向同一个托管附件。
+ *
+ * ⚠️ 2026-10-23 01:23 雄哥真机 dump（服务端积了 9 条托管附件那次）：**location 头比
+ * ICS 里的 URI 少尾部 token 段**——
+ *   location: https://gateway.icloud.com/…/attach/4_XXX/UTF-8%27%27%25E5….jpg
+ *   ICS URI:  https://gateway.icloud.com/…/attach/4_XXX/UTF-8%27%27%25E5….jpg/YXR0YWNoYXR0YWNoYXR0YQ…
+ * （缺了签名段，location 直接去 GET 会 400。）但 `/attach/<上传次号>/<文件名>` 基名每次
+ * 上传唯一，按「互为前缀」判同一附件即可；精确相等、百分号解码后相等都兜底。
+ * 写成精确相等会永远不命中——location 优先认领失效，又掉回扣减法被积压歧义判死
+ * （雄哥 01:23 报的「无法确认托管信息」就是这条）。
+ */
+function sameIcloudAttachmentUri(icsUri: string, locationUri: string): boolean {
+  if (!icsUri || !locationUri) return false;
+  if (icsUri === locationUri) return true;
+  if (icsUri.startsWith(locationUri) || locationUri.startsWith(icsUri)) return true;
+  try {
+    const a = decodeURIComponent(icsUri);
+    const b = decodeURIComponent(locationUri);
+    return a === b || a.startsWith(b) || b.startsWith(a);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * POST attachment-add 之后，回 GET 资源本体，从新鲜 ICS 里认出「我们刚传的那个」托管附件。
+ *
+ * 为什么需要这一步（2026-10-22/23 雄哥实测 + 真机探针）：iCloud 对 attachment-add
+ * 返回 **HTTP 200 但响应体恒为空**——RFC 8607 要求响应体带更新后的日历对象资源，
+ * 苹果不给（Prefer: return=representation 也无视，Cal-Managed-ID 头也不给）。
+ * 上传其实成功了（GET 资源，托管 ATTACH 已在里面），只是本地拿不到托管信息。
+ *
+ * 「哪个是新传的」两级认领：
+ *  ① **location 头优先**：POST 响应给了 `location: <附件规范URI>`。⚠️ 它与回 GET 到的
+ *     ICS 里本次那条 ATTACH 的 URI **不是全等——location 缺尾部 token 段**（2026-10-23
+ *     01:23 雄哥真机 dump：location 到文件名结尾，ICS URI 后面还拖一截
+ *     `/YXR0YWNoYXR0YWNoYXR0YQ…`；缺签名段，location 直接 GET 会 400）。判「同一个
+ *     附件」走 sameIcloudAttachmentUri（互为前缀 + 解码兜底）。location 是服务端权威
+ *     指向，历史积压再多也不歧义——00:55 那次（积压 3 条）扣减法判歧义假失败、且
+ *     失败不 PUT 越积越多的恶性循环，就靠它破。
+ *  ② 扣减法兜底：传入上传前就已托管的 MANAGED-ID 集合，GET 回来的全量托管条目扣掉
+ *     它们，剩下唯一一个就是本次的。多于一个说明并发改动，不猜，让上层失败重试
+ *     （猜错＝把别人的附件 URI 挂到本条目上）。
+ *
+ * 顺带解决一个隐藏坑：attachment-add 会改变服务端资源的 etag（实测 mvjqlbf5 →
+ * mvjqlbf6），POST 响应的头里却不给新 etag，只能从这里拿——后续 PUT 带旧 etag
+ * 必 412，条目会永远卡在 dirty 里每轮同步重传。
+ *
+ * @param locationUri POST 响应 location 头的值（没有则空串，直接走扣减法）
+ */
+async function fetchFreshManagedAttach(
+  href: string,
+  known: Set<string>,
+  channel: Channel,
+  auth: DavAuth,
+  locationUri = ""
+): Promise<{ uri: string; managedId: string; etag?: string } | null> {
+  const res = await httpRequest(href, { method: "GET" }, channel, auth);
+  if (res.status >= 400) return null;
+  const all = parseAllManagedAttach(res.body);
+  // ① location 命中：服务端指着说这就是刚传的那个，历史积压再多也不歧义
+  if (locationUri) {
+    const hit = all.find((a) => sameIcloudAttachmentUri(a.uri, locationUri));
+    if (hit) return { ...hit, etag: etagOf(res) };
+  }
+  // ② 扣减法：恰好一条未知才算认领
+  const fresh = all.filter((a) => !known.has(a.managedId));
+  if (fresh.length !== 1) return null;
+  return { ...fresh[0], etag: etagOf(res) };
+}
+
+/**
+ * Apple 附件文件名禁令（2026-10-23 真机实测）：文件名含 `\ / : * ? " |` 时
+ * POST ?action=attachment-add 直接回 **400**。上传前把这些字符换掉，
+ * 本地 attachments[].name 保持用户原文件名不动（下载/显示用本地的）。
+ */
+function sanitizeIcloudFilename(name: string): string {
+  return (name || "attachment")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\\/:*?"|]/g, "_");
+}
+
+/**
+ * attachment-add 请求的 Content-Disposition 头值。
+ *
+ * ⚠️ 2026-10-23 雄哥实测（Obsidian 桌面端，中文名附件「南坞古道.jpg」）：
+ * HTTP 头值只收 Latin-1 域字符（\t \x20-\x7e \x80-\xff），中文裸写进去，
+ * Node http 直接抛 `Invalid character in header content ["Content-Disposition"]`
+ * ——请求都发不出去，同步红字。所以非 ASCII 名不能裸写进头：
+ *  - 纯 ASCII 名 → RFC 8607 §3.4 标准形态 `filename="x.jpg"`；
+ *  - 含非 ASCII → RFC 5987/6266 的 `filename*=UTF-8''%E5…`（头值纯 ASCII，
+ *    任何传输层都吃得下）。iCloud 不解析 RFC 5987、会把 `UTF-8''…` 字面量
+ *    存进服务端 FILENAME（真机实测），本地由 ics.ts recoverServerFilename()
+ *    还原；界面显示/下载/ICS 序列化一概用本地名，不受影响。
+ *
+ * 思源侧走内核代理（JSON 载荷）本来不校验头字符集，但与 Obsidian 保持同一形态：
+ * 服务端存的 FILENAME 两种形态（UTF-8'' 字面量 / Latin-1 双重编码）两端都已能还原。
+ */
+export function icloudContentDisposition(name: string): string {
+  const safe = sanitizeIcloudFilename(name);
+  if (!/[^\x20-\x7e]/.test(safe)) return `attachment; filename="${safe}"`;
+  return `attachment; filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
+/**
+ * 把单个文件 POST 进 iCloud 的托管附件存储（RFC 8607 managed attachments）。
+ *
+ * 为什么走这条路：iCloud 拒绝 `ATTACH;VALUE=BINARY;ENCODING=BASE64` 内联二进制
+ * （PUT 直接回 HTTP 507，2026-10-21 雄哥实测）。苹果自家客户端（iOS/macOS 提醒
+ * 事项）走的是托管存储：对日历对象资源发
+ *
+ *   POST <item.href>?action=attachment-add
+ *   Content-Type: <mime>
+ *   Content-Disposition: attachment; filename="<name>"（非 ASCII 名走 filename*=UTF-8''…，见 icloudContentDisposition）
+ *   Prefer: return=representation
+ *   body: <raw bytes>
+ *
+ * ⚠️ **动作名是 `attachment-add`，不是 add-attachment**（RFC 8607 §3.3.1）。
+ *    2026-10-22 实测：写成 add-attachment 时 iCloud 把未知动作当空操作——
+ *    回 **200 空 body、资源 etag 都不变**，看起来像「上传成功但解析失败」。
+ *
+ * 服务端把文件收进专用存储。RFC 8607 说响应体是更新后的 iCalendar、附件改写为
+ * `ATTACH;MANAGED-ID=<id>:<uri>`；**但 iCloud 恒回 200 空 body**（连
+ * Prefer: return=representation 都无视，也不给 Cal-Managed-ID 头），所以响应体
+ * 解析不到时回 GET 资源本体补拿托管信息 + 新 etag（见 fetchFreshManagedAttach）。
+ * 本地只留托管 URI + ID，ICS 不再内联二进制。
+ *
+ * ⚠️ 二进制 body 必须走**内核代理**通道：请求带 Authorization + Content-Disposition
+ *    自定义头，浏览器直连必然触发 CORS 预检被拦（iCloud 不会放行）。
+ *    auto 通道代理优先，天然满足；用户若手动选了「仅浏览器直连」会失败，
+ *    错误文案会引导改回自动/代理（与其它 iCloud 请求同语义）。
+ * ⚠️ iCloud 跨域 301（caldav.icloud.com → pN-caldav.icloud.com）由内核 Go 侧跟随；
+ *    PUT 能通说明这条链没问题，attachment-add 走同一通道。
+ *
+ * @param knownManagedIds 上传前该条目已托管的 MANAGED-ID（回 GET 时用来扣减出「新传的那个」）
+ * @returns 托管 URI + MANAGED-ID；若经过回 GET，还带服务端新 etag（调用方必须更新 item.etag）
+ */
+export async function uploadIcloudAttachment(
+  item: CalItem,
+  bytes: Uint8Array,
+  name: string,
+  mime: string,
+  channel: Channel,
+  auth: DavAuth,
+  knownManagedIds: string[] = []
+): Promise<{ uri: string; managedId: string; etag?: string }> {
+  if (!item.href) throw new HttpError(400, "条目没有服务端地址（href），无法上传托管附件");
+  const url = item.href + "?action=attachment-add";
+  const headers: Record<string, string> = {
+    "Content-Type": mime || "application/octet-stream",
+    // RFC 8607 §3.4：SHOULD 带 filename（iPhone 上显示的名字）。
+    // ⚠️ 2026-10-23 实测两件事：① Apple 拒收文件名含 \ / : * ? " | 的附件（400），
+    //    先替换；② HTTP 头只收 Latin-1 域字符，中文名裸写会被 Node/浏览器抛
+    //    `Invalid character in header content`——统一走 icloudContentDisposition，
+    //    非 ASCII 名改送 filename*=UTF-8''…，服务端存的字面量由 recoverServerFilename 还原。
+    "Content-Disposition": icloudContentDisposition(name),
+    // RFC 8607：带了它服务器 SHOULD 在响应体回更新后的资源（省一次 GET）。
+    // iCloud 无视（恒空 body），但对规范服务器有益，无害。
+    Prefer: "return=representation"
+  };
+  const res = await httpRequest(
+    url,
+    { method: "POST", body: bytes, headers, timeoutMs: uploadTimeoutMs(bytes.length) },
+    channel,
+    auth
+  );
+  if (res.status >= 400) {
+    if (res.status === 507) {
+      throw new HttpError(
+        507,
+        `上传失败：HTTP 507（iCloud 存储配额不足或拒绝接收）。请检查 iCloud 账户剩余空间后重试。`
+      );
+    }
+    debugDump("icloud-add-attachment", url, res.status, res.body, res.headers);
+    throw new HttpError(res.status, `上传附件「${name}」失败: HTTP ${res.status}`);
+  }
+  // ① 响应体带托管信息（RFC 8607 标准形态）→ 直接用；ETag 头有就一起拿
+  const parsed = parseManagedAttach(res.body);
+  if (parsed) return { ...parsed, etag: etagOf(res) };
+  // ② iCloud 形态：200 空 body。上传已成功，回 GET 资源本体认领托管附件 + 新 etag
+  const known = new Set(knownManagedIds);
+  // location 头是服务端权威指向（与 ICS 里本次 ATTACH 的 URI 同基名——它缺尾部 token 段，
+  // 2026-10-23 01:23 真机 dump；匹配走 sameIcloudAttachmentUri），带上它认领——资源上有
+  // 历史积压附件时扣减法会歧义（2026-10-23 00:55 雄哥实测踩坑）。
+  const location = (res.headers["location"] || res.headers["Location"] || "").trim();
+  const fresh = await fetchFreshManagedAttach(item.href, known, channel, auth, location);
+  if (fresh) return fresh;
+  // ③ GET 也认不出（真出事：上传没落上 / 服务端异常）→ dump 两份现场让人能贴回来定位
+  const getDump = await httpRequest(item.href, { method: "GET" }, channel, auth).catch(() => null);
+  debugDump("icloud-add-attachment-parse", url, res.status, res.body, res.headers);
+  if (getDump) {
+    debugDump("icloud-add-attachment-get-fallback", item.href, getDump.status, getDump.body, getDump.headers);
+  }
+  throw new HttpError(
+    res.status,
+    `附件「${name}」上传后无法确认托管信息：服务端响应为空且回读资源也未找到新附件。请重试；若持续失败，请把 D:/Temp/caldav-debug.txt 里 icloud-add-attachment 片段反馈给开发者。`
+  );
 }
 
 /** 删除服务端条目 */

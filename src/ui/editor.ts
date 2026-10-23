@@ -73,7 +73,8 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
       ctx.store.settings.categories?.length ? ctx.store.settings.categories : DEFAULT_CATEGORIES,
       !!ctx.store.settings.categoryMulti,
       isNew,
-      attachSizeMaxBytes(ctx.store.settings)
+      attachSizeMaxBytes(ctx.store.settings),
+      ctx.store.settings.serverType === "icloud"
     )}</div>`,
     width: mobile ? "100vw" : isTodo ? "560px" : "520px",
     height: mobile ? "100vh" : "86vh",
@@ -325,6 +326,18 @@ function downloadAttachment(a: CalAttachment): void {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+/** 把已取回的字节（iCloud 托管附件下载）落盘为本地文件，与 downloadAttachment 同款交互。 */
+function downloadBytes(bytes: Uint8Array, a: CalAttachment): void {
+  const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: a.fmttype || "application/octet-stream" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = safeAttachName(a.name);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 /**
  * 附件行的 HTML（2026-10-14）。
  *
@@ -360,7 +373,13 @@ function attachRowHtml(a: CalAttachment, i: number): string {
   }
   return `<div class="caldav-attach-row" data-attach-i="${i}">
       <input class="caldav-input caldav-attach-input" data-attach-uri value="${escape(a.uri || "")}" placeholder="https://…" />
-      ${del}
+      ${
+        // 托管附件（iCloud，带 MANAGED-ID）：文件在服务端托管存储里，插件能取回
+        // 字节下载；纯外链没有可下载的内容，用户自己复制链接打开。
+        a.managedId
+          ? `<button type="button" class="caldav-btn caldav-btn--sm" data-attach-dl title="下载该附件到本地">${icons.download} 下载</button>`
+          : ""
+      }${del}
     </div>`;
 }
 
@@ -377,7 +396,14 @@ function attachRowsHtml(list: CalAttachment[]): string {
  * 还挂着 5.0 MB，看着就像设置没生效（2026-10-15 雄哥报的就是这个）。
  * 挑选文件时按当前设置重写一次，显示的上限与实际校验的上限就一致了。
  */
-function attachHintHtml(maxBytes: number): string {
+function attachHintHtml(maxBytes: number, isIcloud?: boolean): string {
+  if (isIcloud) {
+    return (
+      `上传的文件会存进 iCloud 的托管附件空间（苹果官方附件机制，iPhone/iPad 的提醒事项同样走它），` +
+      `待办里只记托管链接，不再内联进日历；也可直接粘贴外链。` +
+      `单个文件上限 ${sizeText(maxBytes)}（上限可在设置里调整），超过 ${sizeText(ATTACH_SIZE_WARN)} 会先跟你确认。`
+    );
+  }
   return (
     `上传的文件会转成 base64 内联进待办、随日历一起同步（RFC 5545 标准形式，任何客户端都能读）；也可直接粘贴外链。` +
     `单个文件上限 ${sizeText(maxBytes)}（再大服务器会拒收，上限可在设置里调整），超过 ${sizeText(ATTACH_SIZE_WARN)} 会先跟你确认。`
@@ -400,7 +426,7 @@ function attachHintHtml(maxBytes: number): string {
  */
 type ConfirmLargeFileResult = "ok" | "cancel" | "superseded";
 let cancelPendingConfirm: (() => void) | null = null;
-function confirmLargeFile(host: HTMLElement, file: File): Promise<ConfirmLargeFileResult> {
+function confirmLargeFile(host: HTMLElement, file: File, isIcloud = false): Promise<ConfirmLargeFileResult> {
   return new Promise((resolve) => {
     cancelPendingConfirm?.(); // 上一次没确认就选了新文件 → 作废上一条
     host.querySelector("[data-attach-confirm]")?.remove(); // 别叠第二条
@@ -409,9 +435,12 @@ function confirmLargeFile(host: HTMLElement, file: File): Promise<ConfirmLargeFi
     bar.setAttribute("data-attach-confirm", "");
     const text = document.createElement("span");
     text.className = "caldav-attach-confirm-text";
-    text.textContent =
-      `「${file.name}」当前为 ${sizeText(file.size)}，附件建议不超过 ${sizeText(ATTACH_SIZE_WARN)}。` +
-      `内联进日历后体积会涨约 1/3，每次编辑这个待办都会重传一遍。仍要内联吗？`;
+    // iCloud 托管上传没有「内联涨 1/3、每次编辑重传」的问题（文件在托管存储里，
+    // ICS 只记链接），确认文案按实际行为写，不制造不存在的担忧。
+    text.textContent = isIcloud
+      ? `「${file.name}」当前为 ${sizeText(file.size)}，附件建议不超过 ${sizeText(ATTACH_SIZE_WARN)}。仍要上传到 iCloud 吗？`
+      : `「${file.name}」当前为 ${sizeText(file.size)}，附件建议不超过 ${sizeText(ATTACH_SIZE_WARN)}。` +
+        `内联进日历后体积会涨约 1/3，每次编辑这个待办都会重传一遍。仍要内联吗？`;
     const ok = document.createElement("button");
     ok.type = "button";
     ok.className = "caldav-btn caldav-btn--sm caldav-btn--primary";
@@ -442,7 +471,8 @@ function editorHtml(
   cats: CategoryDef[],
   catMulti: boolean,
   isNew: boolean,
-  attachMaxBytes: number
+  attachMaxBytes: number,
+  isIcloud: boolean
 ): string {
   const isTodo = it.kind === "todo";
   const r = it.rrule;
@@ -698,7 +728,7 @@ function editorHtml(
         <button type="button" class="caldav-btn caldav-btn--sm" data-attach-upload>${icons.paperclip} 上传文件</button>
         <button type="button" class="caldav-btn caldav-btn--sm" data-attach-add>${icons.plus} 添加链接</button>
       </div>
-      <div class="caldav-attach-hint" data-attach-hint>${attachHintHtml(attachMaxBytes)}</div>
+      <div class="caldav-attach-hint" data-attach-hint>${attachHintHtml(attachMaxBytes, isIcloud)}</div>
       <div class="caldav-attach-msg" data-attach-msg></div>
     </div>`
         : ""
@@ -737,6 +767,11 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
   // 提到外层：保存时（collectItem）要读它，而附件区只在待办下渲染。
   // `undefined` = 这次编辑没碰到附件（日程根本没有附件区），别去动 it.attachments。
   let attachList: CalAttachment[] | undefined;
+  // 服务器类型决定附件行为：iCloud 走托管上传（不内联 base64），附件区文案、
+  // 确认栏口径、保存时的体积预检都按它分叉（见 attachHintHtml /
+  // confirmLargeFile / collectItem 的 isIcloud 分支）。放函数体作用域：
+  // 附件区只在待办下渲染，但 collectItem 在块外也要用。
+  const isIcloud = ctx.store.settings.serverType === "icloud";
   const attachRows = el.querySelector<HTMLElement>("[data-attach-rows]");
   if (attachRows) {
     const fileInput = el.querySelector<HTMLInputElement>("[data-attach-file]");
@@ -745,7 +780,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
     // 提示语实时刷新：开弹窗后的上限快照会过期（设置里改大后旧弹窗仍显示老数字），
     // 每次挑选文件时按当前设置重写，保证显示与校验一致。
     const refreshHint = (): void => {
-      if (hintEl) hintEl.innerHTML = attachHintHtml(attachSizeMaxBytes(ctx.store.settings));
+      if (hintEl) hintEl.innerHTML = attachHintHtml(attachSizeMaxBytes(ctx.store.settings), isIcloud);
     };
     const setMsg = (text: string, isErr = false): void => {
       if (!msgEl) return;
@@ -774,8 +809,9 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       atts[i] = { ...atts[i], uri, name: uri ? nameOfUri(uri) : atts[i].name };
     });
 
-    // 下载：二进制行专用（外链行没有可下载的内容，用户自己复制链接打开）
-    attachRows.addEventListener("click", (e) => {
+    // 下载：二进制行（内联件）本地解码；托管附件行（iCloud 等带 MANAGED-ID）走
+    // 同步层从服务端取回原始字节（需要鉴权，且二进制不能被 utf8 文本化破坏）。
+    attachRows.addEventListener("click", async (e) => {
       const dlBtn = (e.target as HTMLElement).closest<HTMLElement>("[data-attach-dl]");
       if (dlBtn) {
         const row = dlBtn.closest<HTMLElement>("[data-attach-i]");
@@ -784,6 +820,15 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
         if (a?.b64) {
           try {
             downloadAttachment(a);
+            setMsg(`已开始下载「${a.name || "附件"}」`);
+          } catch (err) {
+            setMsg(err instanceof Error ? err.message : String(err), true);
+          }
+        } else if (a?.uri) {
+          try {
+            setMsg(`正在从服务器取回「${a.name || "附件"}」…`);
+            const bytes = await ctx.sync.fetchAttachmentBytes(a.uri);
+            downloadBytes(bytes, a);
             setMsg(`已开始下载「${a.name || "附件"}」`);
           } catch (err) {
             setMsg(err instanceof Error ? err.message : String(err), true);
@@ -841,7 +886,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       if (file.size > ATTACH_SIZE_WARN) {
         setMsg(""); // 上一条提示别和确认栏同时在场
         const host = attachRows.closest<HTMLElement>(".caldav-attach") || attachRows;
-        const r = await confirmLargeFile(host, file);
+        const r = await confirmLargeFile(host, file, isIcloud);
         if (r === "cancel") setMsg("已取消上传");
         if (r !== "ok") return;
       }
@@ -1316,7 +1361,24 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
   // 所以这里按**真实序列化出的 ICS** 卡总账。超了服务端必然 413（Radicale 默认
   // 10MB / PHP 默认 8MB），这个待办会卡在「同步失败」里每次同步重传一遍。
   // 上限取自设置（单个ICS文件限制），老数据缺省回默认 10MB。
-  const icsDraft = itemToEditedICS(it);
+  //
+  // ⚠️ iCloud 托管附件场景要用「托管化草案」算账：保存这一刻 b64 还在本地
+  //    （托管上传发生在随后的同步层），草案若含 base64 会把体积算虚高——
+  //    7MB 文件 base64 后 9.3MB，贴着默认上限走，存心让人存不进去。
+  //    托管后的 ICS 只记一行 ATTACH 链接，把 b64 换成占位 uri 再算，
+  //    量的才是最终会上服务器的体积。
+  const draftForSize: CalItem =
+    ctx.store.settings.serverType === "icloud" && it.attachments?.some((a) => (a.b64 || "").trim())
+      ? {
+          ...it,
+          attachments: it.attachments.map((a) =>
+            (a.b64 || "").trim()
+              ? { ...a, b64: undefined, uri: a.uri || `https://icloud-managed.invalid/${encodeURIComponent(a.name || "attachment")}` }
+              : a
+          )
+        }
+      : it;
+  const icsDraft = itemToEditedICS(draftForSize);
   const icsBytes = new TextEncoder().encode(icsDraft).length;
   const icsMax = icsSizeMaxBytes(ctx.store.settings);
   if (icsBytes > icsMax) {

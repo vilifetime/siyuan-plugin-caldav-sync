@@ -528,6 +528,51 @@ END:VCALENDAR
   assert.strictEqual(items[0].href, "http://nas.bonebear.cn:5808/dav.php/calendars/bonebear/default/sy-mvgcy8o8-m3snnrp7.ics");
 });
 
+// ---- 2026-10-23 修复：iCloud 在 calendar-data 外包 <![CDATA[ ]]>，必须剥离；否则
+// item.raw 被污染 → itemToEditedICS 误吐裸组件 → iCloud PUT 判 HTTP 400（「无附件也 400」根因）----
+t("parseMultistatus：calendar-data 的 <![CDATA[ ]]> 包裹必须剥离（否则 raw 污染 → PUT 400）", () => {
+  const xml = `<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+<d:response>
+<d:href>/cal/sy-cdata-mvi7xtb1-3jcke8nn.ics</d:href>
+<d:propstat><d:prop>
+<d:getetag>"mvi8mw76"</d:getetag>
+<cal:calendar-data><![CDATA[BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//MailClient.VObject/11.0.1267.0
+BEGIN:VTODO
+UID:sy-cdata-mvi7xtb1-3jcke8nn
+SUMMARY:测试任务
+DUE:20261023T180000Z
+END:VTODO
+END:VCALENDAR]]></cal:calendar-data>
+</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+</d:response>
+</d:multistatus>`;
+  const items = caldavMod.parseMultistatus(xml, { url: "https://pxx-caldav.icloud.com/cal/" });
+  assert.strictEqual(items.length, 1);
+  assert.ok(!items[0].raw.includes("CDATA"), "raw 不应残留 <![CDATA[ 包裹符");
+  assert.ok(items[0].raw.startsWith("BEGIN:VCALENDAR"), "raw 应以 BEGIN:VCALENDAR 开头（而非 <![CDATA[）");
+  assert.strictEqual(items[0].uid, "sy-cdata-mvi7xtb1-3jcke8nn");
+  assert.strictEqual(items[0].summary, "测试任务");
+});
+
+t("itemToEditedICS：raw 被 <![CDATA[ 包裹污染（无 VCALENDAR 信封层）时，兜底补信封避免 PUT 400", () => {
+  const cdataRaw = "<![CDATA[BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//MailClient.VObject/11.0.1267.0\r\nBEGIN:VTODO\r\nUID:sy-cdata-mvi7xtb1-3jcke8nn\r\nSUMMARY:测试任务\r\nDUE:20261023T180000Z\r\nPERCENT:0\r\nEND:VTODO\r\nEND:VCALENDAR]]>";
+  const item = {
+    kind: "todo", uid: "sy-cdata-mvi7xtb1-3jcke8nn", summary: "测试任务",
+    due: "2026-10-23T18:00:00", start: "2026-10-23T10:00:00",
+    raw: cdataRaw, etag: "mvi8mw76", attachments: [], percent: 0, priority: 0,
+  };
+  const out = ics.itemToEditedICS(item);
+  assert.ok(out.startsWith("BEGIN:VCALENDAR"), "产物必须以 BEGIN:VCALENDAR 开头（带信封）");
+  assert.ok(out.includes("BEGIN:VTODO"), "产物应包含 VTODO");
+  assert.ok(out.includes("SUMMARY:测试任务"), "产物应保留原 SUMMARY");
+  assert.ok(out.includes("END:VCALENDAR"), "产物应以 END:VCALENDAR 结尾");
+  assert.ok(!out.includes("CDATA"), "产物绝不可残留 CDATA 包裹符");
+  assert.ok(out.indexOf("BEGIN:VTODO") > out.indexOf("BEGIN:VCALENDAR"), "VTODO 必须嵌套在 VCALENDAR 之内（不是裸组件）");
+});
+
 const b64decode = (s) => Buffer.from(s, "base64").toString("utf8");
 
 t("buildProxyBody：headers 必须是单键对象数组，写成 [[k,v]] 会被内核静默丢弃（代理通道 401 的根因）", () => {

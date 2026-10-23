@@ -99,6 +99,15 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       /* 仅保存时生效 */
     });
 
+    // 服务器类型切换：选 iCloud 且地址为空时自动填 https://caldav.icloud.com
+    $("select[data-s='serverType']").addEventListener("change", (e) => {
+      const sel = (e.target as HTMLSelectElement).value;
+      if (sel === "icloud") {
+        const serverInput = $("input[data-s='server']");
+        if (!serverInput.value.trim()) serverInput.value = "https://caldav.icloud.com";
+      }
+    });
+
     el.querySelector("[data-action='test']")?.addEventListener("click", () => {
       const server = $("input[data-s='server']").value.trim();
       const username = $("input[data-s='username']").value.trim();
@@ -155,6 +164,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         ctx.store.pendingUnlock = false;
       }
       s.calendarPath = $("input[data-s='path']").value.trim();
+      s.serverType = $("select[data-s='serverType']").value as any;
       s.channel = $("select[data-s='channel']").value as any;
       s.syncIntervalMin = Math.max(0, +$("input[data-s='interval']").value || 0);
       s.conflict = $("select[data-s='conflict']").value as any;
@@ -214,6 +224,17 @@ function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string
 <div class="caldav-settings-form">
   <div class="caldav-section caldav-section--card">
     <div class="caldav-section-title"><span class="caldav-section-icon">${icons.server}</span>服务器</div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">服务器类型</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="serverType">
+          <option value="caldav" ${s.serverType !== "icloud" ? "selected" : ""}>CalDAV（标准服务器）</option>
+          <option value="icloud" ${s.serverType === "icloud" ? "selected" : ""}>iCloud</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+    <p class="caldav-set-hint">选「iCloud」时地址会自动填为 https://caldav.icloud.com，留空「日历路径」即可自动发现日历（iCloud 地址会跳转到节点主机，已做适配）；选「CalDAV」可连接任意标准服务器。</p>
     <div class="caldav-field">
       <label class="caldav-field-label">服务器地址</label>
       <input class="caldav-input" data-s="server" placeholder="http://192.168.1.10:5232/ 或 https://dav.example.com/" value="${escape(s.serverUrl)}"/>

@@ -8,6 +8,13 @@ export interface HttpResult {
   status: number;
   headers: Record<string, string>;
   body: string;
+  /**
+   * 原始字节（响应）。仅当调用方传 `responseEncoding: "base64"` 时填充——
+   * 用于二进制附件下载（iCloud 托管附件）：utf8 文本化会把 >0x7F 字节换成
+   * U+FFFD，文件必坏。两条通道都保证填（内核代理走 base64 响应编码，
+   * 直连走 arrayBuffer）。
+   */
+  bytes?: Uint8Array;
   elapsedMs: number;
   via: "proxy" | "direct";
 }
@@ -15,7 +22,17 @@ export interface HttpResult {
 export interface HttpOptions {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  /**
+   * 请求体。`string` 走文本（UTF-8 编码后 base64 过内核，见 buildProxyBody）；
+   * `Uint8Array` 走**原始二进制**（iCloud 托管附件上传用：内核代理的 payload
+   * 按字节原样转发，不经任何文本转换）。
+   */
+  body?: string | Uint8Array;
+  /**
+   * 响应体编码：`"text"`（默认）按文本返回；`"base64"` 时内核代理把响应
+   * base64 化回传（Go 侧二进制安全），插件侧解码填 `HttpResult.bytes`。
+   */
+  responseEncoding?: "text" | "base64";
   timeoutMs?: number;
 }
 
@@ -92,23 +109,25 @@ function normalizeHeaders(h: Record<string, string[]> | Record<string, string> |
 /**
  * 组装 /api/network/forwardProxy 的请求体。
  *
- * 三个必须遵守的内核约定（均已实测确认，SiYuan 3.1.0 与 3.8.4 一致）：
+ * 三个必须遵守的内核约定（均已实测确认，SiYuan 3.1.0 与 3.8.8 一致）：
  * 1. `headers` 必须是「单键对象数组」`[{"k":"v"}]`，不是键值对数组 `[["k","v"]]`。
  *    传成后者时，内核遍历 `map[string]any` 取不到任何键，**自定义头被静默丢弃**——
  *    表现为代理通道永远 401（Authorization 没送到），而直连通道一切正常。
  * 2. `contentType` 是独立字段，内核会用它覆盖请求头里的 Content-Type；
  *    若固化传 text/plain，PROPFIND 的 application/xml 会被改写。
- * 3. `payloadEncoding: "base64"` 时内核要求 `payload` 必须是字符串：
- *    无 body 的请求（DELETE）也要传空串，否则报 `[payload] must be a string`。
- *    另外 `payloadEncoding: "text"` 不会发送 body，所以 body 一律走 base64。
- */
-/**
- * 内核代理请求体。
+ * 3. `payload` 恒为字符串、body 一律走 base64：无 body 的请求（DELETE）也要传空串，
+ *    否则报 `[payload] must be a string`；`payloadEncoding: "text"` 根本不发送 body。
  *
- * ⚠️ `payload` 必须恒为字符串：Go 侧 `[payload] must be a string`。
- *    另外 `payloadEncoding: "text"` 不会发送 body，所以 body 一律走 base64。
- *    文本要先用 UTF-8 编码再 base64（`unescape(encodeURIComponent(...))` 那一步），
- *    否则中文会被按 Latin-1 截断。
+ * ⚠️ **两条 base64 路径不能混**（2026-10-22 iCloud 托管附件接入时新增二进制分支）：
+ *    · 文本 body：先 `unescape(encodeURIComponent(...))` 做 UTF-8 编码再 btoa，
+ *      否则中文按 Latin-1 截断；
+ *    · 二进制 body（Uint8Array）：binary string **直接** btoa。那一步 UTF-8
+ *      往返会把 >0x7F 的字节重编码成两字节（0x80 → C2 80），文件必坏。
+ *      binary string 每字符码元 0-255，btoa 逐字符取低 8 位，内核解码后
+ *      就是原始字节（实测：0x00-0xFF 全字节经 httpbin 回显原样到达）。
+ *
+ * `responseEncoding`：文本响应（默认）走 "text"；二进制响应（托管附件下载）
+ * 传 "base64"，内核把响应体 base64 化回传，插件侧解码填 HttpResult.bytes。
  */
 export function buildProxyBody(url: string, opts: HttpOptions): Record<string, unknown> {
   const headers: Record<string, string> = { ...(opts.headers || {}) };
@@ -119,16 +138,41 @@ export function buildProxyBody(url: string, opts: HttpOptions): Record<string, u
       delete headers[k];
     }
   }
+  let payload: string;
+  if (typeof opts.body === "string") {
+    payload = btoa(unescape(encodeURIComponent(opts.body)));
+  } else if (opts.body && opts.body.length) {
+    // 二进制：分块拼 binary string 再 btoa（String.fromCharCode(...bytes)
+    // 一次展开全部字节会超调用栈上限，32K 一块与 arrayBufferToBase64 同款）。
+    let bin = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < opts.body.length; i += CHUNK) {
+      bin += String.fromCharCode(...opts.body.subarray(i, i + CHUNK));
+    }
+    payload = btoa(bin);
+  } else {
+    payload = "";
+  }
   return {
     url,
     method: opts.method || "GET",
     timeout: Math.floor(opts.timeoutMs || 30000),
     contentType,
     headers: Object.entries(headers).map(([k, v]) => ({ [k]: v })),
-    payload: btoa(unescape(encodeURIComponent(opts.body ?? ""))),
+    payload,
     payloadEncoding: "base64",
-    responseEncoding: "text"
+    // 二进制响应（托管附件下载）走 base64 回传：Go 侧不碰编码，插件侧自行解码。
+    // "text" 时内核按 UTF-8 处理响应体，二进制会被换成 U+FFFD。
+    responseEncoding: opts.responseEncoding === "base64" ? "base64" : "text"
   };
+}
+
+/** base64 串 → 字节（内核代理的 base64 响应用） */
+function base64ToBytesLocal(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 async function viaProxy(url: string, opts: HttpOptions): Promise<HttpResult> {
@@ -151,10 +195,21 @@ async function viaProxy(url: string, opts: HttpOptions): Promise<HttpResult> {
     if (data.code !== 0) throw new Error("内核代理失败: " + (data.msg || JSON.stringify(data)));
     const d = data.data || {};
     const body = typeof d.body === "string" ? d.body : d.body?.content ?? "";
+    // 二进制响应（responseEncoding=base64）：内核回传 base64 串，解码成字节。
+    // 解码失败（响应不是合法 base64）时留空 bytes，调用方按文本兜底。
+    let bytes: Uint8Array | undefined;
+    if (opts.responseEncoding === "base64" && body) {
+      try {
+        bytes = base64ToBytesLocal(body);
+      } catch {
+        bytes = undefined;
+      }
+    }
     return {
       status: d.status ?? 0,
       headers: normalizeHeaders(d.headers),
       body,
+      bytes,
       elapsedMs: Date.now() - t0,
       via: "proxy"
     };
@@ -168,15 +223,31 @@ async function viaDirect(url: string, opts: HttpOptions): Promise<HttpResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs || 30000);
   try {
-    const res = await fetch(url, {
+    const init: RequestInit = {
       method: opts.method || "GET",
       headers: opts.headers,
-      body: opts.body,
       signal: ctrl.signal
-    });
-    const body = await res.text();
+    };
+    // 二进制 body 走 Blob：TS 5.x 的 lib.dom 把 Uint8Array<ArrayBufferLike>
+    // 排除在 BodyInit 之外（esbuild 不查类型所以 build 一直绿，tsc 红）。
+    // Blob 对 subarray 视图也正确（只拷贝视图范围内的字节），Chromium fetch
+    // 原生接受 Blob body。
+    // ⚠️ typeof 收窄（不是 === undefined）：测试链路的 tsc 带 --strict false，
+    //    strictNullChecks 关闭时 `=== undefined` 比较不产生收窄，联合类型
+    //    原样传给 fetch 照样报 TS2769（2026-10-22 踩到）。
+    if (typeof opts.body === "string") init.body = opts.body;
+    else if (opts.body) init.body = new Blob([opts.body as BlobPart]);
+    const res = await fetch(url, init);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
+    if (opts.responseEncoding === "base64") {
+      // 二进制响应：先拿 ArrayBuffer 再解码文本（TextDecoder 与 res.text() 等价），
+      // 字节原样填 bytes —— utf8 文本化会把 >0x7F 字节换成 U+FFFD。
+      const buf = await res.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      return { status: res.status, headers, body: new TextDecoder().decode(bytes), bytes, elapsedMs: Date.now() - t0, via: "direct" };
+    }
+    const body = await res.text();
     return { status: res.status, headers, body, elapsedMs: Date.now() - t0, via: "direct" };
   } finally {
     clearTimeout(timer);
@@ -233,9 +304,12 @@ export async function httpRequest(
   const full: HttpOptions = { ...opts, headers: { ...(opts.headers || {}) } };
   // 没显式给超时的带 body 请求（上传类）按 body 大小放宽预算，见 uploadTimeoutMs：
   // 几 MB 的日历数据在家庭宽带上传一分钟以上是常事，固定 30s 等于必然超时。
+  // 二进制 body（iCloud 托管附件）按字节数算；文本按 UTF-8 编码后的长度算。
   // 显式传了 timeoutMs 的调用方（小 body 的 PROPFIND/DELETE 等）保持原值不动。
-  if (full.timeoutMs === undefined && typeof full.body === "string" && full.body.length > 0) {
-    full.timeoutMs = uploadTimeoutMs(new TextEncoder().encode(full.body).length);
+  if (full.timeoutMs === undefined && full.body) {
+    const bodyLen =
+      typeof full.body === "string" ? new TextEncoder().encode(full.body).length : full.body.length;
+    if (bodyLen > 0) full.timeoutMs = uploadTimeoutMs(bodyLen);
   }
 
   // 回退时按**剩余预算**走：否则 auto 通道下每条通道各等一份全额超时，

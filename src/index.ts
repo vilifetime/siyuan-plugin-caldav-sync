@@ -729,8 +729,14 @@ export default class CalDavPlugin extends Plugin {
       this.refreshPanels();
       this.reminder?.reschedule();
       if (manual) {
+        const strategyLabel = this.store.settings.conflict === "local" ? "本地优先" : "服务端优先";
         if (report.errors.length > 0) {
           this.notify(`同步完成，但有 ${report.errors.length} 处出错：${report.errors[0] ?? ""}`, "error");
+        } else if (report.conflicts.length > 0) {
+          this.notify(
+            `同步完成，但有 ${report.conflicts.length} 处冲突（按「${strategyLabel}」策略处理）：${report.conflicts[0] ?? ""}`,
+            "info"
+          );
         } else {
           this.notify(
             `同步完成：拉取 ${report.fetched} 条，上传 ${report.uploaded} 条，删除 ${report.deleted} 条（${report.elapsedMs}ms）`

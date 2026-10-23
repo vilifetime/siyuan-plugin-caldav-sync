@@ -383,9 +383,10 @@ console.log("\n附件：新建待办");
     end: "2026-10-21T09:00:00",
     attachments: [{ uri: "https://example.com/new.pdf", name: "new.pdf", fmttype: "application/pdf" }]
   };
-  const out = ics.itemToNewICS(it);
+  const out = ics.itemToNewICS(it).replace(/\r\n /g, "");
   check("新建时附件写入 ICS", out.includes("https://example.com/new.pdf"));
   check("新建时带 FMTTYPE", /ATTACH;FMTTYPE=application\/pdf/.test(out), out.split(/\r?\n/).find((l) => l.startsWith("ATTACH")) || "");
+  check("新建时带 FILENAME（换设备重拉也叫得出原名）", /FILENAME=new\.pdf/.test(out), out.split(/\r?\n/).find((l) => l.startsWith("ATTACH")) || "");
 }
 
 console.log("\n附件：源码防漂移");
@@ -604,14 +605,14 @@ console.log("\n附件：大文件确认流（只说一遍 / 三态 / 提示语�
   //    实际校验的上限一致。
   check(
     "提示语抽出 attachHintHtml 且挂在 data-attach-hint 上",
-    /function attachHintHtml\(maxBytes: number\)/.test(editorSrc) && /data-attach-hint/.test(editorSrc),
+    /function attachHintHtml\(maxBytes: number, isIcloud\?: boolean\)/.test(editorSrc) && /data-attach-hint/.test(editorSrc),
     "不抽出函数就没法在挑选时重写"
   );
   check(
     "挑选文件时按当前设置实时刷新提示语（在校验之前）",
     // ⚠️ 仓库是 CRLF：两行之间的间隔用 \s*，别写死 \n（本项目踩过的坑）
     /const maxBytes = attachSizeMaxBytes\(ctx\.store\.settings\);\s*refreshHint\(\);/.test(editorSrc) &&
-      /hintEl\.innerHTML = attachHintHtml\(attachSizeMaxBytes\(ctx\.store\.settings\)\)/.test(editorSrc),
+      /hintEl\.innerHTML = attachHintHtml\(attachSizeMaxBytes\(ctx\.store\.settings\), isIcloud\)/.test(editorSrc),
     "开弹窗后的快照会过期：设置里 5 改 7，旧弹窗仍显示 5.0 MB，就像设置没生效"
   );
 }
@@ -916,7 +917,7 @@ console.log("\n附件体积硬上限（设置项：附件大小限制 / 单个IC
   );
   check(
     "保存前按真实序列化结果卡总账（itemToEditedICS，上限取自设置）",
-    /const icsDraft = itemToEditedICS\(it\);[\s\S]{0,700}?const icsMax = icsSizeMaxBytes\(ctx\.store\.settings\)[\s\S]{0,200}?if \(icsBytes > icsMax\)/.test(editorSrc),
+    /const icsDraft = itemToEditedICS\(draftForSize\);[\s\S]{0,700}?const icsMax = icsSizeMaxBytes\(ctx\.store\.settings\)[\s\S]{0,200}?if \(icsBytes > icsMax\)/.test(editorSrc),
     "不卡总账 → 多个中等附件叠加照样超限，保存成功但同步永远失败"
   );
   check(
@@ -1167,6 +1168,115 @@ console.log("\n保存/删除不再阻塞关窗 + 推送队列（2026-10-15 窗�
     );
     check("abort 按显式预算触发（≈300ms，不是默认 30s）", Date.now() - t0 < 5000, `耗时 ${Date.now() - t0}ms`);
     globalThis.fetch = prevFetch2;
+  }
+
+  {
+    // iCloud 托管附件（RFC 8607）：服务端 ICS 里 ATTACH 带 MANAGED-ID 参数，
+    //    文件在服务端托管存储里（不在 ICS 内）。解析必须收 managedId，
+    //    序列化必须原样写回（带引号）——漏一个就是编辑一次把托管引用抹掉。
+    const icsM = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//test//EN",
+      "BEGIN:VTODO",
+      "UID:icl-managed@test",
+      "SUMMARY:托管附件解析",
+      "DTSTAMP:20260101T000000Z",
+      "ATTACH;MANAGED-ID=\"abc-123\";FMTTYPE=image/jpeg:https://p12-caldav.icloud.com/xxx/attach/abc-123/x.jpg",
+      "END:VTODO",
+      "END:VCALENDAR"
+    ].join("\r\n");
+    const itM = ics.itemsFromICS(icsM, "https://caldav.icloud.com/1/", "https://caldav.icloud.com/1/x.ics", "e1")[0];
+    check(
+      "托管附件：解析出 managedId",
+      itM.attachments?.[0]?.managedId === "abc-123",
+      JSON.stringify(itM.attachments)
+    );
+    const backM = ics.itemToEditedICS(itM);
+    check(
+      "序列化写回 MANAGED-ID（带引号，RFC 5545 参数值规则）",
+      /ATTACH;MANAGED-ID="abc-123"(;FMTTYPE=[^:\r\n]*)?(;FILENAME=[^:\r\n]*)?:https:\/\/p12-caldav\.icloud\.com/.test(backM.replace(/\r\n /g, "")),
+      backM.split(/\r?\n/).find((l) => l.startsWith("ATTACH")) || "没有 ATTACH 行"
+    );
+  }
+
+  {
+    // ⑤ 托管附件文件名往返（2026-10-23 雄哥实测：托管分支原先不写文件名参数，
+    //    服务端 ICS 是无名氏——换设备/本地数据丢失后重拉只能按 URI 末段的签名
+    //    token 推乱名）。形态与 iCloud 自身写出的一致：ASCII 裸写、非 ASCII 走
+    //    UTF-8''+percent；recoverServerFilename 还原。
+    const icsFn = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//test//EN",
+      "BEGIN:VTODO",
+      "UID:icl-fn@test",
+      "SUMMARY:托管附件文件名往返",
+      "DTSTAMP:20260101T000000Z",
+      "ATTACH;FMTTYPE=image/jpeg;FILENAME=UTF-8''%E5%8D%97%E5%9D%9E%E5%8F%A4%E9%81%93.jpg;MANAGED-ID=fn-1:https://gateway.icloud.com/1/attach/fn-1/x.jpg",
+      "END:VTODO",
+      "END:VCALENDAR"
+    ].join("\r\n");
+    const itF = ics.itemsFromICS(icsFn, "https://caldav.icloud.com/1/", "https://caldav.icloud.com/1/x.ics", "e1")[0];
+    check(
+      "解析：FILENAME 参数还原中文原名",
+      itF.attachments?.[0]?.name === "南坞古道.jpg",
+      JSON.stringify(itF.attachments)
+    );
+    const backF = ics.itemToEditedICS(itF).replace(/\r\n /g, "");
+    check(
+      "序列化：托管分支写 FILENAME（非 ASCII 走 UTF-8'' 形态，与 iCloud 自身一致）",
+      /FILENAME=UTF-8''%E5%8D%97%E5%9D%9E%E5%8F%A4%E9%81%93.jpg/.test(backF),
+      backF.split(/\r?\n/).find((l) => l.startsWith("ATTACH")) || "没有 ATTACH 行"
+    );
+    const itF2 = ics.itemsFromICS(ics.itemToEditedICS(itF), "https://caldav.icloud.com/1/", "https://caldav.icloud.com/1/x.ics", "e1")[0];
+    check(
+      "往返：序列化后再解析，名字不变",
+      itF2.attachments?.[0]?.name === "南坞古道.jpg" && itF2.attachments?.[0]?.managedId === "fn-1",
+      JSON.stringify(itF2.attachments)
+    );
+    check(
+      "helper：ASCII 名裸写、非 ASCII 走 UTF-8''、控制字符剔除、结构字符编码",
+      ics.managedAttachFilenameParam("photo.jpg") === "photo.jpg" &&
+        ics.managedAttachFilenameParam("南坞古道.jpg") === "UTF-8''%E5%8D%97%E5%9D%9E%E5%8F%A4%E9%81%93.jpg" &&
+        ics.managedAttachFilenameParam("a\u0007b.jpg") === "ab.jpg" &&
+        ics.managedAttachFilenameParam("a,b;c.jpg") === "UTF-8''a%2Cb%3Bc.jpg",
+      ""
+    );
+
+    // ⑤b 结构字符附件名（`, ; : " % /`）在 Windows 文件名里合法，裸写进 ATTACH
+    //     行会撕碎结构（第一个 : 之后全被当 URI、; 拆出假参数），服务端直接 PUT 400。
+    //     必须走 UTF-8'' 形态且往返无损。
+    const icsFn2 = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//test//EN",
+      "BEGIN:VTODO",
+      "UID:icl-fn2@test",
+      "SUMMARY:结构字符附件名往返",
+      "DTSTAMP:20260101T000000Z",
+      "ATTACH;FMTTYPE=image/jpeg;FILENAME=UTF-8''a%2Cb%3Bc.jpg;MANAGED-ID=fn-2:https://gateway.icloud.com/1/attach/fn-2/x.jpg",
+      "END:VTODO",
+      "END:VCALENDAR"
+    ].join("\r\n");
+    const itG = ics.itemsFromICS(icsFn2, "https://caldav.icloud.com/1/", "https://caldav.icloud.com/1/x.ics", "e1")[0];
+    check(
+      "解析：结构字符名从 UTF-8'' 形态还原",
+      itG.attachments?.[0]?.name === "a,b;c.jpg",
+      JSON.stringify(itG.attachments)
+    );
+    const backG = ics.itemToEditedICS(itG).replace(/\r\n /g, "");
+    check(
+      "序列化：结构字符名仍走 UTF-8''（不裸写撕碎 ATTACH 行）",
+      /FILENAME=UTF-8''a%2Cb%3Bc\.jpg/.test(backG),
+      backG.split(/\r?\n/).find((l) => l.startsWith("ATTACH")) || "没有 ATTACH 行"
+    );
+    const itG2 = ics.itemsFromICS(ics.itemToEditedICS(itG), "https://caldav.icloud.com/1/", "https://caldav.icloud.com/1/x.ics", "e1")[0];
+    check(
+      "往返：结构字符名序列化后再解析不变",
+      itG2.attachments?.[0]?.name === "a,b;c.jpg" && itG2.attachments?.[0]?.managedId === "fn-2",
+      JSON.stringify(itG2.attachments)
+    );
   }
 
   console.log(failed === 0 ? "\n✓ 待办附件回归测试通过" : `\n✗ ${failed} 个用例失败`);

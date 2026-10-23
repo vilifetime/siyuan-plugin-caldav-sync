@@ -222,6 +222,9 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
+  /* 按钮文字禁换行：附件行空间紧张时 flex 会把按钮压窄，「下载/删除」
+   * 会被挤成上下两截（2026-10-23 雄哥截图）。nowrap 后 flex 只压输入框。 */
+  white-space: nowrap;
   box-sizing: border-box;
   /* ⚠️ 高度必须**显式**写死，不能只靠 padding 撑 —— 宿主（思源 base.css）
    * 给 button 定了 line-height/height，不写 height 时同一排按钮会差几像素，
@@ -1122,6 +1125,13 @@
 .caldav-attach-msg.is-error { color: var(--caldav-danger); }
 .caldav-btn--sm { padding: 3px 8px; font-size: 12px; }
 .caldav-btn--danger { color: var(--caldav-danger); }
+
+/* 附件行：按钮与链接输入框**等高**、图标同比例放大（2026-10-23 雄哥截图）。
+ * 输入框显式 36px（与 select 同款口径：8px padding + 13px 行高 + 2px 边框），
+ * 按钮从 34px 提到 36px，图标 14 → 16px。 */
+.caldav-attach-row .caldav-attach-input { height: 36px; padding-top: 0; padding-bottom: 0; }
+.caldav-attach-row .caldav-btn { height: 36px; }
+.caldav-attach-row .caldav-btn svg { width: 16px; height: 16px; }
 
 .cal-task-cal { display: inline-flex; align-items: center; gap: 4px; }
 .cal-task-cal i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
@@ -2610,7 +2620,15 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 
 /* 日历单元格双击新增浮层 */
+/* ⚠️ 挂在 body 上，祖先链里没有 `.caldav-root`，`--caldav-*` 全部取不到
+ * → 必须在自身重新声明变量映射，否则 hover 高亮的 color-mix 全部落空、
+ * 底色/边框退化成透明（2026-10-23 雄哥截图）。与 .caldav-month-pop 同一套做法。 */
 .caldav-add-menu {
+  --caldav-accent: var(--b3-theme-primary, #3575f0);
+  --caldav-bg: var(--b3-theme-background, #fff);
+  --caldav-bg-3: var(--b3-theme-surface, #eef1f5);
+  --caldav-border: var(--b3-border-color, #e4e7ed);
+  --caldav-text: var(--b3-theme-on-background, #1f2329);
   position: fixed;
   z-index: 60;
   min-width: 144px;

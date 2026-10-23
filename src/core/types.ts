@@ -43,6 +43,14 @@ export interface CalAttachment {
    * 单独放一个文件，只能内联进条目本身、跟着 ICS 一起同步。
    */
   b64?: string;
+  /**
+   * iCloud 托管附件（RFC 8607 managed attachments）的 MANAGED-ID。
+   * 上传成功后由同步层回填：文件已存进 iCloud 专用存储，本地只留托管 URI +
+   * 这个 ID，不再内联 base64 —— iCloud 对内联二进制附件回 507（实测），
+   * 托管形态是苹果官方支持的路径（iPhone/iPad 的提醒事项同样走它）。
+   * 序列化时写 `ATTACH;MANAGED-ID="<id>":<uri>`，与 uri 并存。
+   */
+  managedId?: string;
   /** 文件名：URI 形式取末段，二进制件用上传时的文件名 */
   name: string;
   /** MIME 类型（FMTTYPE / FBTYPE 参数），可能为空 */
@@ -184,6 +192,13 @@ export interface CalSettings {
   password: string;
   /** 可选，直接指定日历集合或主目录；空则自动发现 */
   calendarPath: string;
+  /**
+   * 服务器类型：标准 CalDAV 服务器 / 苹果 iCloud。
+   * 选 iCloud 时设置页会把服务器地址自动填成 https://caldav.icloud.com（用户留空时），
+   * 留空日历路径即可走完整发现链自动找到 iCloud 日历（iCloud 的 XML 带 xmlns 属性，
+   * 解析正则已对齐）。老数据缺此字段时按 caldav 处理，不影响既有连接。
+   */
+  serverType?: "icloud" | "caldav";
   /** auto：内核代理优先、失败回退直连 */
   channel: "auto" | "proxy" | "direct";
   /** 自动同步间隔（分钟），0 关闭 */
@@ -266,6 +281,7 @@ export const DEFAULT_SETTINGS: CalSettings = {
   username: "",
   password: "",
   calendarPath: "",
+  serverType: "caldav",
   channel: "auto",
   syncIntervalMin: 15,
   enableReminders: false,

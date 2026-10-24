@@ -216,6 +216,17 @@
   gap: 6px;
 }
 
+/* 工具栏中部：年/月/周/日 分段控件 + 「列表」按钮。
+   ⚠️ 必须是 flex 容器 —— 分段控件是 inline-flex、列表按钮是 inline-block，
+   两者之间的 HTML 空白文本节点会额外撑出 ~4px 空隙，
+   加上按钮自己的 margin-left 就显得「离得很远」（2026-10-25 雄哥要求更紧靠）。
+   改 flex 后间隙完全由 gap 说了算。 */
+.caldav-toolbar-center {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 /* 按钮 */
 .caldav-btn {
   display: inline-flex;
@@ -3652,13 +3663,16 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   border-radius: 50%;
   background: var(--cal-color, var(--caldav-accent));
 }
+/* 类型角标：复用任务视图的 .cal-task-kind（橙「待办」/ 蓝「日程」） */
 .cal-list-kind {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  color: var(--caldav-text-2);
 }
-.cal-list-kind svg { width: 13px; height: 13px; }
+/* 任务视图里角标是行内元素（margin-right/vertical-align 为标题排版服务），
+   列表里它是独立的 flex 项，间距由 .cal-list-row 的 gap 统一管 —— 复位掉。 */
+.cal-list-row .cal-task-kind { margin-right: 0; vertical-align: middle; }
+.cal-list-row.is-done .cal-task-kind { opacity: .5; }
 .cal-list-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -3681,7 +3695,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   color: var(--caldav-text-2);
   cursor: pointer;
   font-size: 12.5px;
-  margin-left: 8px;
+  /* 间距由父容器 .caldav-toolbar-center 的 gap 统一控制（2026-10-25 雄哥要求
+     「更紧靠一些」）：原先 8px + HTML 空白节点 ≈ 12px，看起来像两组不相干的控件。
+     这里置 0，避免与 flex 的 gap 叠加成双倍间距。 */
+  margin-left: 0;
   transition: background .12s ease, color .12s ease;
 }
 .caldav-list-toggle:hover { color: var(--caldav-text); background: var(--caldav-bg-3); }

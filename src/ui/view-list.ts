@@ -16,19 +16,18 @@
  *
  * ## 条目内容
  *
- * 每行：时间区间 + 日历颜色点 + 条目类型图标（待办/日程）+ 标题。
+ * 每行：时间区间 + 日历颜色点 + 条目类型角标（待办/日程）+ 标题。
  * 待办的「时间」取**到期时间**（与日历视图一致，见 view-common.todoDueOccurrences）。
  */
 import type { CalItem } from "../core/types";
-import { addDays, isDateOnly, parseLocalStamp, startOfWeek } from "../core/date";
+import { addDays, isDateOnly, padDate, parseLocalStamp, startOfWeek } from "../core/date";
 import { calColorOf, escape, keyOfItem, occComparator, type ViewArgs } from "./view-common";
-import { icons } from "./icons";
 
 /** 星期中文名（周一起始，与周/月视图一致） */
 const WEEK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 /**
- * 当前视图对应的时间窗（毫秒区间，左闭右开）。
+ * 当前视图对应的时间窗。
  *
  * 与各视图**逐一对齐**：
  *  - 年：1 月 1 日 → 次年 1 月 1 日
@@ -39,23 +38,60 @@ const WEEK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六",
  * ⚠️ 月视图在 UI 上是「5 行滑动窗口」（可能跨月），但**列表按自然月**取范围 ——
  * 用户在「2026 年 10 月」的标题下期望看到的就是 10 月这一个月，
  * 而不是一个从 9 月 28 日起算的 35 天窗口。
+ *
+ * startDay / endDay 是窗口内的**自然日闭区间**（YYYY-MM-DD），
+ * 供渲染层过滤越界实例用（见 renderListView 的注释）。
  */
-export function listRange(ctx: { viewMode: string; cursor: string }): { startMs: number; endMs: number } {
+export interface ListRange {
+  /** 窗口左端（含），毫秒 */
+  startMs: number;
+  /** 窗口右端（不含），毫秒 */
+  endMs: number;
+  /** 窗口首个自然日（含），YYYY-MM-DD */
+  startDay: string;
+  /** 窗口最后一个自然日（含），YYYY-MM-DD */
+  endDay: string;
+}
+
+export function listRange(ctx: { viewMode: string; cursor: string }): ListRange {
   const c = ctx.cursor;
   const y = +c.slice(0, 4);
   const m = +c.slice(5, 7);
   if (ctx.viewMode === "year") {
-    return { startMs: new Date(y, 0, 1).getTime(), endMs: new Date(y + 1, 0, 1).getTime() };
+    return {
+      startMs: new Date(y, 0, 1).getTime(),
+      endMs: new Date(y + 1, 0, 1).getTime(),
+      startDay: padDate(y, 1, 1),
+      endDay: padDate(y, 12, 31)
+    };
   }
   if (ctx.viewMode === "month") {
-    return { startMs: new Date(y, m - 1, 1).getTime(), endMs: new Date(y, m, 1).getTime() };
+    // 当月天数：new Date(y, m, 0) = 第 m 月最后一天（m 为 1-based，month 参数 0-based）
+    const daysInMonth = new Date(y, m, 0).getDate();
+    return {
+      startMs: new Date(y, m - 1, 1).getTime(),
+      endMs: new Date(y, m, 1).getTime(),
+      startDay: padDate(y, m, 1),
+      endDay: padDate(y, m, daysInMonth)
+    };
   }
   if (ctx.viewMode === "week") {
     const ws = startOfWeek(c);
-    return { startMs: parseLocalStamp(ws).getTime(), endMs: parseLocalStamp(addDays(ws, 7)).getTime() };
+    return {
+      startMs: parseLocalStamp(ws).getTime(),
+      endMs: parseLocalStamp(addDays(ws, 7)).getTime(),
+      startDay: ws,
+      endDay: addDays(ws, 6)
+    };
   }
   // 日视图
-  return { startMs: parseLocalStamp(c.slice(0, 10)).getTime(), endMs: parseLocalStamp(addDays(c.slice(0, 10), 1)).getTime() };
+  const d = c.slice(0, 10);
+  return {
+    startMs: parseLocalStamp(d).getTime(),
+    endMs: parseLocalStamp(addDays(d, 1)).getTime(),
+    startDay: d,
+    endDay: d
+  };
 }
 
 /**
@@ -89,27 +125,37 @@ function rowHtml(ctx: ViewArgs["ctx"], it: CalItem, occ: string): string {
   const k = keyOfItem(it);
   const done = it.kind === "todo" && it.percent === 100;
   const check = it.kind === "todo" ? `<button class="cal-chip-check" data-toggle="${k}" title="${done ? "标记未完成" : "标记完成"}">✓</button>` : "";
-  const kindIcon = it.kind === "todo" ? icons.tasks : icons.calendar;
-  const kindLabel = it.kind === "todo" ? "待办" : "日程";
+  // 类型标记复用**任务视图**的那两个文字角标（橙「待办」/ 蓝「日程」），
+  // 不再是自绘的线框图标 —— 用户 2026-10-25 明确指正：图标表达错了，
+  // 列表与任务视图要用同一套标记，跨视图认知才一致。
+  const isEvent = it.kind !== "todo";
+  const kindLabel = isEvent ? "日程" : "待办";
+  const kindBadge = `<span class="cal-list-kind cal-task-kind ${isEvent ? "is-event" : "is-todo"}" title="${kindLabel}">${kindLabel}</span>`;
   const repeat = it.rrule ? '<span class="cal-list-repeat" title="重复">↻</span>' : "";
   return `<div class="cal-list-row ${done ? "is-done" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColorOf(ctx, it)}">
     <span class="cal-list-time">${escape(timeLabelOf(it, occ))}</span>
     <span class="cal-list-dot"></span>
-    <span class="cal-list-kind" title="${kindLabel}">${kindIcon}</span>
+    ${kindBadge}
     <span class="cal-list-title">${repeat}${escape(it.summary || "(无标题)")}</span>
     ${check}
   </div>`;
 }
 
 export function renderListView({ ctx, viewEl, occurrences }: ViewArgs): void {
-  const { startMs, endMs } = listRange(ctx);
+  const { startMs, endMs, startDay, endDay } = listRange(ctx);
   const occMap = occurrences(startMs, endMs);
 
   // 按日期分组（组内按当前排序方式排）
+  //
+  // ⚠️ 必须**再按窗口过滤一次**：`occurrencesInRange()` 对「无重复规则」的条目会
+  // 回退返回 `item.start`（core/ics.ts 的 expandRepeats），而这个值可能根本不在窗口内。
+  // 各日历视图按格子落位时越界条目会被自然丢掉，列表却是平铺全部实例 ——
+  // 不这道过滤，10 月的列表里会混进 12 月的条目（src/index.ts 写日记时有同款二次过滤）。
   const byDay = new Map<string, { it: CalItem; occ: string }[]>();
   for (const [it, occs] of occMap) {
     for (const occ of occs) {
       const day = occ.slice(0, 10);
+      if (day < startDay || day > endDay) continue; // 窗口外的实例不进列表
       if (!byDay.has(day)) byDay.set(day, []);
       byDay.get(day)!.push({ it, occ });
     }

@@ -690,6 +690,9 @@ export default class CalDavPlugin extends Plugin {
       unsaved: new Set(),
       // 恢复上次用的视图：Dock 的合并按钮点下去打开的就是它（见 lastViewMode 注释）
       viewMode: this.lastViewMode,
+      // 「列表」正交开关（2026-10-25 方案 A）：默认关 —— 列表是**呈现方式**，
+      // 不是第五种时间段，记住它会让下次打开面板时用户摸不着头脑（怎么没有月历了？）
+      listMode: false,
       cursor: todayStamp(),
       sortMode: "start",
       testReminder: () => this.testReminder(),

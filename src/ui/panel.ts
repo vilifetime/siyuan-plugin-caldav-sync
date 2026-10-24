@@ -22,6 +22,7 @@ import { loadCalendarView, DEFAULT_VIEW } from "./view-pref";
 import { renderWeekView } from "./view-week";
 import { renderTaskView } from "./view-task";
 import { renderYearView } from "./view-year";
+import { renderListView } from "./view-list";
 import { todoDueOccurrences } from "./view-common";
 
 export type ViewMode = "year" | "month" | "week" | "day" | "task";
@@ -54,6 +55,17 @@ export interface PanelCtx {
   refreshPanels?: () => void;
   unsaved: Set<string>; // 面板实例 key，防重复渲染
   viewMode: ViewMode;
+  /**
+   * 「列表」正交开关（2026-10-25 雄哥拍板方案 A）。
+   *
+   * 列表**不是新的 ViewMode**，而是横切在年/月/周/日之上的**呈现方式**：
+   * 年/月/周/日决定**范围**（整年 / 当月 / 本周 / 当天），列表决定**排版**。
+   * 所以切时间段时列表自动换范围，不必再点一次「列表」。
+   *
+   * 放在 ctx 上而非 panel 内部局部变量：面板可能被重建（思源侧栏重建、移动端 Dock 复用），
+   * 局部变量会丢；而「上次是列表模式」属于本机 UI 偏好，与 viewMode 同级。
+   */
+  listMode: boolean;
   cursor: string; // 当前聚焦日期 YYYY-MM-DD
   /** 排序方式：开始/结束/优先级/完成/创建/分类/标题 */
   sortMode: SortMode;
@@ -83,6 +95,15 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           <button class="caldav-seg-btn" data-view="week">周</button>
           <button class="caldav-seg-btn" data-view="day">日</button>
         </div>
+        <!--
+          「列表」按钮（2026-10-25 雄哥拍板方案 A）：放在 年/月/周/日 **右边**。
+          它是横切在时间段之上的**正交开关** —— 年/月/周/日决定范围，
+          列表决定呈现方式（见 PanelCtx.listMode）。因此切时间段时列表自动换范围，
+          不用再点一次「列表」。单独成组（不塞进 .caldav-seg 内）是为了视觉上
+          与「时间段选择」区分开 —— 挤在一个分段控件里会被误读成第五种时间段。
+        -->
+        <button class="caldav-list-toggle" data-action="toggle-list"
+                title="列表视图" aria-label="列表视图" aria-pressed="false">列表</button>
       </div>
       <!--
         任务视图的统计条挂载点。放在 toolbar-right **之前** —— 任务视图时左中两块
@@ -170,6 +191,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   const cursorTitleEl = root.querySelector(".caldav-cursor-title") as HTMLElement;
   const ctxMenu = root.querySelector(".caldav-ctxmenu") as HTMLElement;
   const segBtns = Array.from(root.querySelectorAll(".caldav-seg-btn")) as HTMLElement[];
+  const listToggleBtn = root.querySelector('[data-action="toggle-list"]') as HTMLButtonElement;
   const viewToggleBtn = root.querySelector('[data-action="toggle-view"]') as HTMLElement;
   const syncBtn = root.querySelector('[data-action="sync-now"]') as HTMLButtonElement;
   /** 同步按钮的「正在同步」闸：连点时直接忽略第二次 */
@@ -245,6 +267,21 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     app.classList.toggle("is-task", ctx.viewMode === "task");
     cursorTitleEl.textContent = cursorTitle();
     renderViewToggle();
+    renderListToggle();
+  }
+
+  /**
+   * 「列表」按钮的状态（2026-10-25 方案 A）。
+   *
+   * 按钮本身**不切换时间段** —— 时间段由 年/月/周/日 决定。
+   * 它只切换「列表 / 网格」这层呈现方式，所以高亮态是独立的一段。
+   */
+  function renderListToggle(): void {
+    const on = ctx.listMode && ctx.viewMode !== "task";
+    listToggleBtn.classList.toggle("is-active", on);
+    listToggleBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    // 任务视图下没有「时间段」可言，列表按钮无意义 → 直接隐藏
+    listToggleBtn.hidden = ctx.viewMode === "task";
   }
 
   /** 视图切换按钮：图标表示「点击后将切换到的视图」，标题同步说明，随当前视图模式更新 */
@@ -281,11 +318,20 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       root.querySelector('[data-slot="task-stats"]')?.replaceChildren();
     }
     const args = { ctx, viewEl, occurrences: visibleOccurrences };
+    // 任务视图优先：它是**另一个维度**（工作台 vs 日历），列表开关在任务视图下隐藏
+    if (ctx.viewMode === "task") {
+      renderTaskView(args);
+      return;
+    }
+    // 列表是正交开关：开启时用列表渲染当前时间段的内容（范围仍由 viewMode 决定）
+    if (ctx.listMode) {
+      renderListView(args);
+      return;
+    }
     if (ctx.viewMode === "year") renderYearView(args);
     else if (ctx.viewMode === "month") renderMonthView(args);
     else if (ctx.viewMode === "week") renderWeekView(args, 7);
-    else if (ctx.viewMode === "day") renderWeekView(args, 1);
-    else renderTaskView(args);
+    else renderWeekView(args, 1);
   }
 
   function renderAll(): void {
@@ -584,6 +630,12 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       return;
     }
     const action = target.dataset.action;
+    if (action === "toggle-list") {
+      // 列表是正交开关：只切呈现方式，**不动时间段**（范围仍由 年/月/周/日 决定）
+      ctx.listMode = !ctx.listMode;
+      renderAll();
+      return;
+    }
     if (action === "toggle-view") {
       // 日历视图（年/月/周/日）↔ 任务视图 互切；从任务视图返回时回到
       // 上次使用的日历视图（2026-10-20 雄哥要求，原来是硬编码落回月视图）。

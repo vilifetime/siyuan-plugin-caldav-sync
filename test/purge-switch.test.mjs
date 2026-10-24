@@ -349,4 +349,27 @@ await t("设置页必须提供「立即清理」与「恢复」两个入口", ()
   assert.ok(/purgeArmed/.test(code), "应有二次点击确认逻辑");
 });
 
+await t("按钮文案不得用 textContent 写 SVG（会把 <svg> 源码当纯文本显示）", () => {
+  // 回归点（2026-10-24 雄哥截图）：`btn.textContent = \`${icons.trash} 清理 N 条\``
+  // 会把 SVG 源码原样显示在按钮上。图标必须与文字分开，JS 只改文字节点。
+  const src = fs.readFileSync(path.join(root, "src/ui/settings-dialog.ts"), "utf8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const bad = [...code.matchAll(/(\w+)\.textContent\s*=\s*[^;]*icons\./g)];
+  assert.strictEqual(bad.length, 0, `不得用 textContent 写图标：${bad.map((m) => m[0]).join(" | ")}`);
+  // 按钮模板里图标与文字必须用 span 分开
+  assert.ok(/data-purge-now-label/.test(code), "清理按钮的文字应有独立节点");
+  assert.ok(/data-purge-restore-label/.test(code), "恢复按钮的文字应有独立节点");
+  // 全仓兜底：任何 .textContent = 赋值都不能内嵌 <svg
+  const svgText = [...code.matchAll(/textContent\s*=\s*[^;\n]*<svg/gi)];
+  assert.strictEqual(svgText.length, 0, "textContent 里不得含 <svg");
+});
+
+await t("恢复按钮的 hidden 需有 CSS 兜底（.caldav-btn 是 inline-flex 会盖掉 UA 规则）", () => {
+  const css = fs.readFileSync(path.join(root, "src/index.css"), "utf8");
+  assert.ok(
+    /\.caldav-btn\[hidden\]\s*\{\s*display:\s*none/.test(css),
+    "缺 .caldav-btn[hidden]{display:none} → 无备份时恢复按钮藏不住"
+  );
+});
+
 console.log(`\n[purge] 通过 ${passed} 项`);

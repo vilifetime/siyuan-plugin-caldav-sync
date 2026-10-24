@@ -111,6 +111,10 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     const purgeInfo = el.querySelector("[data-purge-info]") as HTMLElement | null;
     const purgeRestoreBtn = el.querySelector("[data-action='purge-restore']") as HTMLButtonElement | null;
     const purgeNowBtn = el.querySelector("[data-action='purge-now']") as HTMLButtonElement | null;
+    // 按钮文案单独放 span 里：图标是 SVG 源码串，**不能用 textContent 写**——
+    // textContent 不解析 HTML，会把 <svg ...> 当纯文本显示出来（2026-10-24 实测）。
+    const purgeNowLabel = el.querySelector("[data-purge-now-label]") as HTMLElement | null;
+    const purgeRestoreLabel = el.querySelector("[data-purge-restore-label]") as HTMLElement | null;
 
     /** 刷新「本地数据」区块的说明文字与按钮可用状态 */
     const refreshPurgeUi = (): void => {
@@ -134,12 +138,18 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         // 没有备份就禁用并隐藏（点下去无事可做只会让人困惑）
         purgeRestoreBtn.hidden = !bk || !bk.items.length;
         purgeRestoreBtn.disabled = !bk || !bk.items.length;
+        if (purgeRestoreLabel) {
+          purgeRestoreLabel.textContent = bk && bk.items.length
+            ? `恢复上次清理的 ${bk.count} 条`
+            : "恢复上次清理的条目";
+        }
       }
       if (purgeNowBtn) {
         purgeNowBtn.disabled = !orphans.length;
-        purgeNowBtn.textContent = orphans.length
-          ? `${icons.trash} 清理 ${orphans.length} 条旧服务器条目`
-          : `${icons.trash} 立即清理旧服务器条目`;
+        // 只改文字节点，图标（SVG）原样保留
+        if (purgeNowLabel) {
+          purgeNowLabel.textContent = orphans.length ? `清理 ${orphans.length} 条旧服务器条目` : "立即清理旧服务器条目";
+        }
       }
     };
     refreshPurgeUi();
@@ -160,7 +170,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       }
       if (!purgeArmed) {
         purgeArmed = true;
-        purgeNowBtn.textContent = `再点一次确认清理 ${orphans.length} 条`;
+        if (purgeNowLabel) purgeNowLabel.textContent = `再点一次确认清理 ${orphans.length} 条`;
         if (purgeArmTimer) clearTimeout(purgeArmTimer);
         purgeArmTimer = setTimeout(() => {
           purgeArmed = false;
@@ -336,7 +346,8 @@ function formatTimeText(iso: string): string {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string {
+/** 设置页 HTML。**导出供回归测试渲染校验**（按钮图标是否被当纯文本显示等）。 */
+export function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string {
   return `
 <div class="caldav-settings-form">
   <div class="caldav-section caldav-section--card">
@@ -483,8 +494,8 @@ function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string
       判定按「服务器地址」（协议 + 主机 + 端口），同一台服务器上的多个日历都会保留。
     </p>
     <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash} 立即清理旧服务器条目</button>
-      <button class="caldav-btn caldav-btn--sm" data-action="purge-restore">${icons.reset} 恢复上次清理的条目</button>
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash}<span data-purge-now-label>立即清理旧服务器条目</span></button>
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-restore">${icons.reset}<span data-purge-restore-label>恢复上次清理的条目</span></button>
       <span class="caldav-set-msg" data-purge-msg></span>
     </div>
     <p class="caldav-set-hint" data-purge-info></p>

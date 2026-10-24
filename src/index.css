@@ -1125,6 +1125,10 @@
 .caldav-attach-msg.is-error { color: var(--caldav-danger); }
 .caldav-btn--sm { padding: 3px 8px; font-size: 12px; }
 .caldav-btn--danger { color: var(--caldav-danger); }
+/* hidden 属性必须显式生效：.caldav-btn 是 display:inline-flex，会盖掉 UA 的
+ * [hidden]{display:none} —— 不写这条，「恢复上次清理的条目」按钮在无备份时
+ * 藏不住，会露出一个点不动的灰按钮（2026-10-24）。 */
+.caldav-btn[hidden] { display: none; }
 
 /* 附件行：按钮与链接输入框**等高**、图标同比例放大（2026-10-23 雄哥截图）。
  * 输入框显式 36px（与 select 同款口径：8px padding + 13px 行高 + 2px 边框），

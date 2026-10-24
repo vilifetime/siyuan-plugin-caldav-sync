@@ -851,8 +851,14 @@ await t("syncAll 入口清遗留错误（源码防漂移）", () => {
   assert.ok(i > 0, "要能找到 syncAll 的入口闸");
   const body = srcSync.slice(i, i + 500);
   assert.ok(/this\.store\.lastError = undefined/.test(body), "入口必须清 lastError");
-  assert.ok(/this\.store\.syncing = true/.test(body), "入口必须置 syncing");
-  assert.ok(/this\.store\.notify\(\)/.test(body), "置位后要 notify，Dock 才能即时刷新");
+  // 2026-10-25 起置位改走 beginSyncing()（引用计数：手动同步与「保存即推」
+  // 共用一套「同步中」状态，先结束的那条不抹掉另一条的转动）。它内部负责
+  // store.syncing = true + notify()，所以断言跟着换成 beginSyncing。
+  assert.ok(/this\.beginSyncing\(\)/.test(body), "入口必须经 beginSyncing 置 syncing");
+  assert.ok(
+    /private beginSyncing\(\)[\s\S]*?this\.store\.syncing = true[\s\S]*?this\.store\.notify\(\)/.test(srcSync),
+    "beginSyncing 内部必须置 syncing + notify（Dock 才能即时刷新）"
+  );
 });
 
 await t("renderStatus 认同步中状态（两条入口表现一致）", () => {

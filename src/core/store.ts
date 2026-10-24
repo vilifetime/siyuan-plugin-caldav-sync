@@ -29,8 +29,13 @@ export class CalStore {
    * syncAll 置位/复位时走 notify() 通知各面板：Dock 与主窗口两条同步入口
    * 由此显示一致的「同步中…」，且同步期间不再挂着上次的过时错误
    * （2026-10-16 雄哥实测：主窗口点刷新后 Dock 显示上次的 412、按钮转几分钟）。
+   * 2026-10-25 起「保存即推」（pushAndPersist）同样置位 —— 雄哥要求
+   * 条目改动提交服务器时同步按钮也要转，与手动点同步同一套规矩。
+   * 用 `= false` 而非 `?: boolean`：后者初始为 undefined，测试里
+   * `assert.strictEqual(syncing, false)` 会因 undefined !== false 转红，
+   * 把「不置位」和「没复位」两种失败混成一个难辨的信号。
    */
-  syncing?: boolean;
+  syncing = false;
   /** 上次同步的中性提示（对账自愈等），**不是错误**，见 types.ts 的 SyncState */
   lastNote?: string;
   /**

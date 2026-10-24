@@ -103,6 +103,17 @@ function altHrefOf(href: string, uid: string): string {
 export class SyncEngine {
   private syncing = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * 「同步中」可见状态的**引用计数**（2026-10-25 雄哥要求：保存即推时
+   * 同步按钮也要转，示意该条目已同步到服务器）。
+   *
+   * 为什么用计数而不是布尔：两条推送路径可能**并存** —— 用户点「立即同步」
+   * 跑全量同步的同时又保存了一条（保存即推走 pushAndPersist），
+   * 先结束的那条不能把还在跑的那条的转动也抹掉。
+   *
+   * 置位方：syncAll（手动/定时全量同步）与 doPushAndPersist（保存即推）。
+   */
+  private syncDepth = 0;
 
   constructor(
     private store: CalStore,
@@ -111,6 +122,23 @@ export class SyncEngine {
 
   private auth(): DavAuth {
     return { username: this.store.settings.username, password: this.store.settings.password };
+  }
+
+  /** 置「同步中」：界面据此转同步按钮、Dock 状态条显示「同步中…」 */
+  private beginSyncing(): void {
+    this.syncDepth++;
+    this.store.syncing = true;
+    // notify() 只通知不落盘 —— 同步中是瞬时状态，不该写进数据文件
+    this.store.notify();
+  }
+
+  /** 退「同步中」：计数归零才真正复位（并存的另一条可能还在跑） */
+  private endSyncing(): void {
+    this.syncDepth = Math.max(0, this.syncDepth - 1);
+    if (this.syncDepth === 0 && this.store.syncing) {
+      this.store.syncing = false;
+      this.store.notify();
+    }
   }
 
   private channel(): Channel {
@@ -143,8 +171,7 @@ export class SyncEngine {
     // 点刷新，Dock 显示上次的 412 错误、按钮转几分钟，最后才弹本次失败）。
     // notify() 只通知不落盘——同步中是瞬时状态，不该写进数据文件。
     this.store.lastError = undefined;
-    this.store.syncing = true;
-    this.store.notify();
+    this.beginSyncing();
     const t0 = Date.now();
     const report: SyncReport = {
       ok: true,
@@ -303,7 +330,7 @@ export class SyncEngine {
       this.store.lastNote = undefined;
     } finally {
       this.syncing = false;
-      this.store.syncing = false;
+      this.endSyncing();
       report.elapsedMs = Date.now() - t0;
       await this.store.persist();
       // 通知订阅者（Dock 状态栏等）刷新，否则自动同步失败时界面不会更新
@@ -759,6 +786,10 @@ export class SyncEngine {
   }
 
   private async doPushAndPersist(): Promise<void> {
+    // 「保存即推」也要让界面转起来：用户新建/编辑/勾选完要看到「已经上云了」，
+    // 与手动点同步同一套可见状态（2026-10-25 雄哥要求）。此前这条路不置
+    // store.syncing，按钮只有在手动点同步时才转，用户以为改动还没提交。
+    this.beginSyncing();
     // 单条上传/删除后立即落盘。**不做对账** —— 刚建的条目此刻还没被服务端列进清单，
     // 拿去比对只会把它误判成幽灵。
     const report: SyncReport = {
@@ -774,22 +805,28 @@ export class SyncEngine {
       uploadedKeys: [],
       deletedKeys: []
     };
-    await this.pushDirty(report);
-    // 这一轮的成功不能就这么丢掉 —— 用户随后点全量同步时已无事可做，
-    // 会看到「上传 0 · 删除 0」，以为改动没同步（2026-10-10 实测）。
-    // **按条目 key 去重攒**：同一条目被编辑 N 次会推 N 次，按轮次累加会让
-    // 同步报告虚报「上传 N 条」（2026-10-19 雄哥实测：操作几次就报上传几次）。
-    for (const k of report.uploadedKeys ?? []) this.store.markUploaded(k);
-    for (const k of report.deletedKeys ?? []) this.store.markDeleted(k);
-    // 立刻给一次反馈：用户点完保存/删除要看得到「已经上云了」
-    const pushed: string[] = [];
-    if (report.uploaded) pushed.push(`已同步到服务端：上传 ${report.uploaded} 条`);
-    if (report.deleted) pushed.push(`已同步到服务端：删除 ${report.deleted} 条`);
-    const noteParts = [...pushed, ...report.conflicts];
-    if (noteParts.length) this.store.lastNote = noteParts.join("; ");
-    this.store.lastError = report.errors.length ? report.errors.join("; ") : this.store.lastError;
-    await this.store.persist();
-    this.store.notify();
+    try {
+      await this.pushDirty(report);
+      // 这一轮的成功不能就这么丢掉 —— 用户随后点全量同步时已无事可做，
+      // 会看到「上传 0 · 删除 0」，以为改动没同步（2026-10-10 实测）。
+      // **按条目 key 去重攒**：同一条目被编辑 N 次会推 N 次，按轮次累加会让
+      // 同步报告虚报「上传 N 条」（2026-10-19 雄哥实测：操作几次就报上传几次）。
+      for (const k of report.uploadedKeys ?? []) this.store.markUploaded(k);
+      for (const k of report.deletedKeys ?? []) this.store.markDeleted(k);
+      // 立刻给一次反馈：用户点完保存/删除要看得到「已经上云了」
+      const pushed: string[] = [];
+      if (report.uploaded) pushed.push(`已同步到服务端：上传 ${report.uploaded} 条`);
+      if (report.deleted) pushed.push(`已同步到服务端：删除 ${report.deleted} 条`);
+      const noteParts = [...pushed, ...report.conflicts];
+      if (noteParts.length) this.store.lastNote = noteParts.join("; ");
+      this.store.lastError = report.errors.length ? report.errors.join("; ") : this.store.lastError;
+      await this.store.persist();
+      this.store.notify();
+    } finally {
+      // 放在 persist/notify 之后：最后一次通知让界面直接看到终态
+      //（syncing 已复位 + lastNote 已更新），少一次中间态闪烁。
+      this.endSyncing();
+    }
   }
 }
 

@@ -680,14 +680,14 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       //（引擎内部有 syncing闸，但用户看到的是「点了没反应」）。
       if (syncBusy || !ctx.syncNow) return;
       syncBusy = true;
-      syncBtn.classList.add("is-syncing");
       syncBtn.disabled = true;
+      // 转圈不在这里手动加 class 了 —— 由 onChange 按 store.syncing 统一驱动
+      //（手动同步与保存即推共用一套，见上方 onChange 的注释）。
       void ctx
         .syncNow()
         .catch(() => undefined)
         .finally(() => {
           syncBusy = false;
-          syncBtn.classList.remove("is-syncing");
           syncBtn.disabled = false;
         });
       return;
@@ -742,6 +742,15 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   document.addEventListener("scroll", onReflow, true);
 
   const unsub = ctx.store.onChange(() => {
+    // 同步按钮的转动由 `store.syncing` **单一来源**驱动：手动同步（syncAll）与
+    // 「保存即推」（pushAndPersist → doPushAndPersist）都经 SyncEngine.beginSyncing
+    // 置位，按钮不再由点击处理器自己加/减 class —— 否则手动同步结束时会把
+    // 保存即推的转动一并抹掉（两条路径并存时的竞态，2026-10-25 雄哥要求
+    // 「条目改动提交服务器时这个按钮也要转一下」）。
+    // ⚠️ 这一步**不随 suppressRerender 抑制**：快速勾选待办时会置 suppress
+    //（避免整视图重渲染闪烁），但那条路径同样在推服务器（updateItem →
+    // pushAndPersist），按钮必须照样转。
+    syncBtn.classList.toggle("is-syncing", !!ctx.store.syncing);
     if (!suppressRerender) renderAll();
   });
   renderAll();

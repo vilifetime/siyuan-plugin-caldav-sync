@@ -1,7 +1,7 @@
 /**
  * 本地存储与条目仓库：插件私有数据读写 + 内存索引 + 订阅
  */
-import type { CalAttachment, CalItem, CalSettings, PersistData } from "./types";
+import type { CalAttachment, CalItem, CalSettings, PersistData, PurgeBackup } from "./types";
 import { DEFAULT_SETTINGS, normalizeCalendarColors } from "./types";
 import {
   adoptKeyring,
@@ -12,6 +12,7 @@ import {
   isLegacyEncrypted
 } from "./secret";
 import { sanitizeEtag } from "./caldav";
+import { serverOriginOf } from "./server-id";
 
 export interface StoreEnv {
   loadData: () => Promise<any>;
@@ -45,6 +46,13 @@ export class CalStore {
   pendingUnlock = false;
   /** 随数据持久化的主密钥（云同步会把它带到别的设备，见 core/secret.ts） */
   keyring = "";
+  /**
+   * 最近一次「清理旧服务器条目」的备份（见 types.ts 的 PurgeBackup）。
+   *
+   * 存顶层而不是 settings 里 —— settings 会被 Obsidian 侧的「配置备份」单独
+   * 抄走，那个文件明确只存配置不存条目。
+   */
+  purgeBackup?: PurgeBackup;
   /** 磁盘上的原始密文：解密失败时用它回写，绝不把密文覆盖成空串 */
   private rawCipher = "";
   private listeners = new Set<() => void>();
@@ -76,6 +84,7 @@ export class CalStore {
       this.pendingUploadedKeys = Array.isArray(data.sync?.pendingUploadedKeys) ? data.sync.pendingUploadedKeys : [];
       this.pendingDeletedKeys = Array.isArray(data.sync?.pendingDeletedKeys) ? data.sync.pendingDeletedKeys : [];
       this.keyring = (data as any).keyring || "";
+      this.purgeBackup = data.purgeBackup;
     }
     // 先注入主密钥再解密：密钥的权威副本随数据走，新生成的由 sink 回写持久化
     adoptKeyring(this.keyring, (k) => {
@@ -163,6 +172,7 @@ export class CalStore {
       keyring: getKeyring() || this.keyring,
       settings: { ...this.settings, password },
       items: Array.from(this.items.values()),
+      purgeBackup: this.purgeBackup,
       sync: {
         lastSync: this.lastSync,
         lastError: this.lastError,
@@ -223,6 +233,131 @@ export class CalStore {
   remove(key: string): void {
     this.items.delete(key);
     this.emit();
+  }
+
+  /**
+   * 当前**真正在用**的服务器身份集合（来自启用日历的集合地址）。
+   *
+   * 为什么不用 settings.serverUrl 直接判定：用户改了服务器地址但还没重新点
+   * 「发现日历」时，启用日历仍指向旧服务器 —— 那时按新地址判定就会把**旧服务器
+   * 正在用的条目**当成「其他服务器的」清掉，那是真的丢数据。
+   * 启用日历才是「插件此刻在跟谁同步」的权威依据。
+   *
+   * 判据是 origin（协议+主机+端口，见 core/server-id.ts）：同一台服务器上的
+   * 多个日历集合算同一个身份，必须一起保留。
+   */
+  activeServerOrigins(): Set<string> {
+    const out = new Set<string>();
+    for (const c of this.settings.calendars) {
+      if (!c.enabled) continue;
+      const o = serverOriginOf(c.url || "");
+      if (o) out.add(o);
+    }
+    return out;
+  }
+
+  /**
+   * 「孤儿条目」：本地留着、但属于**其它服务器**的条目。
+   *
+   * 典型来源：换服务器后旧服务器的条目（2026-10-24 实测换 iCloud → 自建服务器
+   * 后残留一批）。它们既不显示也不同步（没有对应日历），却一直占着本地存储，
+   * 换回去时还会「诈尸」冒出来。
+   *
+   * ⚠️ 一个启用日历都没有时返回空数组（**不清任何东西**）——
+   *    配置还没填好时绝不能把全部数据当成孤儿清空。
+   *
+   * ⚠️ calendarUrl 为空/异常的条目保留（判不出归属就别动）。
+   */
+  orphanItems(): CalItem[] {
+    const active = this.activeServerOrigins();
+    if (!active.size) return [];
+    const out: CalItem[] = [];
+    for (const it of this.items.values()) {
+      const o = serverOriginOf(it.calendarUrl || "");
+      if (!o) continue;
+      if (!active.has(o)) out.push(it);
+    }
+    return out;
+  }
+
+  /**
+   * 清理孤儿条目，并把被删内容备份进 `purgeBackup`（见 types.ts）。
+   *
+   * **只清本地，不动服务端** —— 旧服务器上的条目还在，用户哪天换回去照样能拉到。
+   * 清理前必须留备份：这是删除动作，用户后悔了要能一键恢复。
+   *
+   * 返回清理条数（0 = 没有可清的）。
+   */
+  async purgeOrphanItems(): Promise<number> {
+    const victims = this.orphanItems();
+    if (!victims.length) return 0;
+    const active = this.activeServerOrigins();
+    const removed = new Set<string>();
+    for (const v of victims) {
+      const o = serverOriginOf(v.calendarUrl || "");
+      if (o) removed.add(o);
+      this.items.delete(keyOf(v));
+    }
+    this.purgeBackup = {
+      at: new Date().toISOString(),
+      keptServer: Array.from(active).join("、"),
+      removedServers: Array.from(removed).join("、"),
+      count: victims.length,
+      items: victims.map((v) => ({ ...v }))
+    };
+    this.emit();
+    // 立刻落盘：emit() 只 debounce 400ms，用户可能在这之前就关了窗口
+    await this.persist();
+    return victims.length;
+  }
+
+  /**
+   * 按开关决定是否清理孤儿条目。返回清理条数（0 = 没清或开关关着）。
+   *
+   * 这是「切换服务器时清理旧条目」的唯一执行入口：
+   * 开关关着 → 什么都不做；开关开着 → 把不属于当前启用日历服务器的条目清掉。
+   *
+   * ⚠️ 守卫：**启用日历必须全部指向当前服务器地址**，否则一律跳过。
+   *    否则用户正在设置页里逐字输入新地址时（每敲一个字符都会存一次设置），
+   *    启用日历还指着旧服务器，会把**正要切过去的那台服务器的条目**当成孤儿清掉 ——
+   *    切回去时数据已经没了。配置还没对齐时不动，是这里最重要的安全阀。
+   */
+  async purgeOrphansIfEnabled(): Promise<number> {
+    if (!this.settings.purgeOtherServerOnSwitch) return 0;
+    const active = this.activeServerOrigins();
+    if (!active.size) return 0;
+    const urlOrigin = serverOriginOf(this.settings.serverUrl || "");
+    if (!urlOrigin) return 0;
+    for (const o of active) {
+      if (o !== urlOrigin) return 0; // 配置未对齐（还没重新「发现日历」）→ 不动
+    }
+    return this.purgeOrphanItems();
+  }
+
+  /**
+   * 恢复最近一次清理掉的条目。返回恢复条数。
+   *
+   * 键冲突（本地已有同 UID 条目）时**跳过不覆盖** —— 覆盖会把用户现在的数据
+   * 换成备份里的旧数据，那是另一种数据丢失。
+   *
+   * 恢复出来的条目一律置 `dirty=false / deleted=false`：它们是「别的服务器」的
+   * 资源，带着脏标记会被当成本服务器的新条目推上去（重复条目）。保持干净，
+   * 用户换回旧服务器时由同步重新对齐即可。
+   */
+  async restorePurgedItems(): Promise<number> {
+    const b = this.purgeBackup;
+    if (!b || !b.items.length) return 0;
+    let n = 0;
+    for (const it of b.items) {
+      const k = keyOf(it);
+      if (this.items.has(k)) continue;
+      this.items.set(k, { ...it, dirty: false, deleted: false });
+      n++;
+    }
+    this.purgeBackup = undefined;
+    this.emit();
+    await this.persist();
+    return n;
   }
 
   /** 用一批服务端条目合并替换同日历的远端态（保留本地脏数据） */

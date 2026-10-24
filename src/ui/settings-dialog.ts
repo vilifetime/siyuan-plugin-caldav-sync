@@ -99,6 +99,99 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       /* 仅保存时生效 */
     });
 
+    // ── 「本地数据」区块：切换服务器清理旧条目 ──────────────────────
+    //
+    // 两件事：
+    //   1. 「立即清理」按钮 —— 手动触发一次清理（二次点击确认）。
+    //   2. 保存时若检测到服务器地址变了且开关开着 —— 自动清理。
+    //
+    // ⚠️ 判定用的是「服务器身份」（协议+主机+端口），不是地址字符串：
+    //    同一台服务器的多个日历集合必须一起保留（见 core/server-id.ts）。
+    const purgeMsg = el.querySelector("[data-purge-msg]") as HTMLElement | null;
+    const purgeInfo = el.querySelector("[data-purge-info]") as HTMLElement | null;
+    const purgeRestoreBtn = el.querySelector("[data-action='purge-restore']") as HTMLButtonElement | null;
+    const purgeNowBtn = el.querySelector("[data-action='purge-now']") as HTMLButtonElement | null;
+
+    /** 刷新「本地数据」区块的说明文字与按钮可用状态 */
+    const refreshPurgeUi = (): void => {
+      const orphans = ctx.store.orphanItems();
+      const bk = ctx.store.purgeBackup;
+      if (purgeInfo) {
+        const parts: string[] = [];
+        parts.push(
+          orphans.length
+            ? `当前有 ${orphans.length} 条属于其他服务器的本地条目`
+            : ctx.store.activeServerOrigins().size
+              ? "当前没有属于其他服务器的本地条目"
+              : "尚未启用任何日历（无法判定哪些条目属于其他服务器）"
+        );
+        if (bk) {
+          parts.push(`上次清理于 ${formatTimeText(bk.at)}，共 ${bk.count} 条${bk.removedServers ? `（来自 ${bk.removedServers}）` : ""}`);
+        }
+        purgeInfo.textContent = parts.join("；");
+      }
+      if (purgeRestoreBtn) {
+        // 没有备份就禁用并隐藏（点下去无事可做只会让人困惑）
+        purgeRestoreBtn.hidden = !bk || !bk.items.length;
+        purgeRestoreBtn.disabled = !bk || !bk.items.length;
+      }
+      if (purgeNowBtn) {
+        purgeNowBtn.disabled = !orphans.length;
+        purgeNowBtn.textContent = orphans.length
+          ? `${icons.trash} 清理 ${orphans.length} 条旧服务器条目`
+          : `${icons.trash} 立即清理旧服务器条目`;
+      }
+    };
+    refreshPurgeUi();
+
+    // 「立即清理」：**二次点击确认**（不用 confirm()，见项目约定）。
+    // 第一次点只把按钮文案改成「再点一次确认清理」，第二次才真删。
+    let purgeArmed = false;
+    let purgeArmTimer: ReturnType<typeof setTimeout> | null = null;
+    purgeNowBtn?.addEventListener("click", async () => {
+      const orphans = ctx.store.orphanItems();
+      if (!orphans.length) {
+        if (purgeMsg) {
+          purgeMsg.textContent = "没有需要清理的旧服务器条目";
+          purgeMsg.classList.remove("is-ok");
+          purgeMsg.classList.add("is-err");
+        }
+        return;
+      }
+      if (!purgeArmed) {
+        purgeArmed = true;
+        purgeNowBtn.textContent = `再点一次确认清理 ${orphans.length} 条`;
+        if (purgeArmTimer) clearTimeout(purgeArmTimer);
+        purgeArmTimer = setTimeout(() => {
+          purgeArmed = false;
+          refreshPurgeUi();
+        }, 5000);
+        return;
+      }
+      purgeArmed = false;
+      if (purgeArmTimer) clearTimeout(purgeArmTimer);
+      // 手动清理**不受开关限制** —— 用户点了就是明确意图
+      const n = await ctx.store.purgeOrphanItems();
+      if (purgeMsg) {
+        purgeMsg.textContent = n ? `已清理 ${n} 条旧服务器条目（已备份，可恢复）` : "没有需要清理的条目";
+        purgeMsg.classList.toggle("is-ok", n > 0);
+        purgeMsg.classList.remove("is-err");
+      }
+      refreshPurgeUi();
+      ctx.refreshPanels?.();
+    });
+
+    purgeRestoreBtn?.addEventListener("click", async () => {
+      const n = await ctx.store.restorePurgedItems();
+      if (purgeMsg) {
+        purgeMsg.textContent = n ? `已恢复 ${n} 条条目` : "没有可恢复的条目";
+        purgeMsg.classList.toggle("is-ok", n > 0);
+        purgeMsg.classList.remove("is-err");
+      }
+      refreshPurgeUi();
+      ctx.refreshPanels?.();
+    });
+
     // 服务器类型切换：选 iCloud 且地址为空时自动填 https://caldav.icloud.com
     $("select[data-s='serverType']").addEventListener("change", (e) => {
       const sel = (e.target as HTMLSelectElement).value;
@@ -176,6 +269,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       const wasRemindOn = s.enableReminders;
       s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement).checked;
       s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement).checked;
+      s.purgeOtherServerOnSwitch = ($("input[data-s='purgeOnSwitch']") as HTMLInputElement).checked;
       // 勾选的日历
       el.querySelectorAll<HTMLElement>(".caldav-set-cal").forEach((row) => {
         const c = s.calendars[+row.dataset.idx!];
@@ -192,6 +286,13 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       normalizeCalendarColors(s.calendars);
       s.defaultCalendarUrl = s.calendars.find((c) => c.enabled)?.url;
       await ctx.store.persist();
+      // 「切换服务器时清理旧条目」开关开着 → 清掉不属于当前启用日历服务器的本地条目。
+      //
+      // ⚠️ 判据是「启用日历所属的服务器」，**不是** settings.serverUrl：
+      //    用户改了地址但还没重新「发现日历」时，启用日历仍指向旧服务器 ——
+      //    那时若按新地址判定，会把**旧服务器正在用的条目**当成孤儿清掉，那是真丢数据。
+      //    按启用日历判定则安全：换了服务器并重新发现日历后，旧服务器的条目自然成为孤儿。
+      const purged = await ctx.store.purgeOrphansIfEnabled();
       // 凭据或服务器地址可能刚被改过：丢掉 Digest 协商缓存，
       // 否则下次请求会拿着旧 nonce/旧密码重发，白挨一次 401
       clearAuthCache();
@@ -201,6 +302,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       // persist() 只落盘、不 emit，所以保存后已打开的面板不会自己重渲染 ——
       // 这里统一刷一次。日历勾选 / 颜色 / 同步窗口这些改了都得立刻看得见。
       ctx.refreshPanels?.();
+      if (purged) {
+        showMessage(`已清理 ${purged} 条旧服务器的本地条目（可在设置里恢复）`, 6000, "info");
+      }
       // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
       // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
       if (s.enableReminders) {
@@ -217,6 +321,19 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       resolve();
     });
   });
+}
+
+/**
+ * ISO 时间戳 → 本地可读时间（如 "2026/10/24 17:40"）。
+ *
+ * 解析不了就原样返回，绝不显示 "Invalid Date" —— 那看着像出了故障。
+ */
+function formatTimeText(iso: string): string {
+  const ms = Date.parse(iso || "");
+  if (Number.isNaN(ms)) return iso || "某个时间";
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string {
@@ -352,6 +469,25 @@ function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string
       <input type="checkbox" data-s="includeOverdue" ${s.includeOverdueTodos ? "checked" : ""}/>
       <span>插入日记时包含逾期待办（默认只写当日 / 本周 / 本月范围内的条目，逾期任务不写）</span>
     </label>
+  </div>
+
+  <div class="caldav-section caldav-section--card">
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.layers}</span>本地数据</div>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="purgeOnSwitch" ${s.purgeOtherServerOnSwitch ? "checked" : ""}/>
+      <span>切换服务器时清理旧服务器的本地条目（只清本地缓存，服务端不动；清理前自动备份，可随时恢复）</span>
+    </label>
+    <p class="caldav-set-hint">
+      换服务器后，旧服务器的条目会一直留在本地：既不显示也不同步，却占着存储，
+      换回去时还会「诈尸」冒出来。打开上面的开关，检测到服务器地址变更时会自动清掉它们。
+      判定按「服务器地址」（协议 + 主机 + 端口），同一台服务器上的多个日历都会保留。
+    </p>
+    <div class="caldav-actions-row">
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash} 立即清理旧服务器条目</button>
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-restore">${icons.reset} 恢复上次清理的条目</button>
+      <span class="caldav-set-msg" data-purge-msg></span>
+    </div>
+    <p class="caldav-set-hint" data-purge-info></p>
   </div>
 
 </div>

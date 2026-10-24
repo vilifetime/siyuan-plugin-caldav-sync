@@ -286,6 +286,43 @@ export interface CalSettings {
    * 自己的服务器上限更大就把这里调大（报错文案里的数字也取此值）。
    */
   icsSizeMaxMB?: number;
+  /**
+   * 切换服务器时，自动清理**属于旧服务器的本地条目**。默认 false（关）。
+   *
+   * 为什么要它：从 iCloud 换到自建服务器后，本地会留着一大批旧服务器的条目
+   * （2026-10-24 实测 40 条）。它们既不显示也不同步（没有对应日历），
+   * 但一直占着存储、并在换回去时「诈尸」出现。
+   *
+   * 判定口径是**服务器身份**（scheme://host:port，iCloud 统一算一个），
+   * 不是地址字符串 —— 同一台服务器的多个日历集合必须一起保留。
+   */
+  purgeOtherServerOnSwitch?: boolean;
+}
+
+/**
+ * 「清理旧服务器条目」的备份。
+ *
+ * 存的是**条目快照**（含 raw 原文），恢复时直接写回本地仓库即可，
+ * 不需要再跟服务端同步一趟。
+ *
+ * ⚠️ 它存在**数据文件的顶层**（PersistData.purgeBackup），不是 settings 里 ——
+ * settings 会被 Obsidian 的「配置备份」单独抄走（core/config-backup.ts 明确
+ * 只存配置、不存条目），把条目快照塞进 settings 会让那个备份文件凭空膨胀
+ * 几十 MB，破坏它「轻量配置备份」的定位。
+ */
+export interface PurgeBackup {
+  /** 清理时间（ISO 字符串） */
+  at: string;
+  /** 清理后保留的服务器身份（serverOriginOf 的结果） */
+  keptServer: string;
+  /** 被清理掉的服务器身份（可能有多个，逗号分隔） */
+  removedServers: string;
+  /** 被清理的条目数 */
+  count: number;
+  /** 被清理的条目快照 */
+  items: CalItem[];
+  /** 一并被移除的日历配置（切服务器后旧日历 URL 已失效，留着只会同步报错） */
+  calendars?: CalCalendar[];
 }
 
 /**
@@ -323,7 +360,8 @@ export const DEFAULT_SETTINGS: CalSettings = {
   categoryMulti: false,
   includeOverdueTodos: false,
   attachSizeMaxMB: 5,
-  icsSizeMaxMB: 10
+  icsSizeMaxMB: 10,
+  purgeOtherServerOnSwitch: false
 };
 
 export interface SyncState {
@@ -363,6 +401,13 @@ export interface PersistData {
    * 详见 core/secret.ts 里对 v2（设备绑定密钥）被淘汰的原因说明。
    */
   keyring?: string;
+  /**
+   * 最近一次「清理旧服务器条目」的备份（见 PurgeBackup）。
+   *
+   * 放顶层而不是 settings 里 —— settings 会被 Obsidian 的「配置备份」单独抄走，
+   * 那个文件明确只存配置不存条目（见 core/config-backup.ts 的取舍说明）。
+   */
+  purgeBackup?: PurgeBackup;
 }
 
 export function pad2(n: number): string {

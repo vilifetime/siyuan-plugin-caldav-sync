@@ -672,4 +672,66 @@ t("describeNetworkError：直连被拦时把用户引到「请求通道」", () 
   );
 });
 
+console.log("[core] 待办/日程 互转");
+// 带 VTIMEZONE + ORGANIZER 的事件，验证非受管属性在转换后不丢
+const eventRaw = [
+  "BEGIN:VCALENDAR",
+  "VERSION:2.0",
+  "PRODID:-//x//CN",
+  "BEGIN:VTIMEZONE",
+  "TZID:Asia/Shanghai",
+  "END:VTIMEZONE",
+  "BEGIN:VEVENT",
+  "UID:evt-conv@test",
+  "SUMMARY:项目评审",
+  "ORGANIZER;CN=boss:mailto:boss@x",
+  "DTSTART:20261023T100000Z",
+  "DTEND:20261023T113000Z",
+  "END:VEVENT",
+  "END:VCALENDAR"
+].join("\r\n");
+const evtItems = ics.itemsFromICS(eventRaw, "http://x/cal/", "http://x/cal/evt-conv.ics", "etag1");
+const evt = evtItems[0];
+t("事件解析带 raw", () => assert.ok(evt.raw && evt.raw.includes("BEGIN:VEVENT")));
+
+const todo = ics.convertItemKind(evt, "todo");
+t("事件→待办：组件翻成 VTODO", () => assert.ok(todo.raw.includes("BEGIN:VTODO") && !todo.raw.includes("BEGIN:VEVENT")));
+t("事件→待办：DTEND→DUE", () => assert.ok(todo.raw.includes("DUE:20261023T113000")));
+t("事件→待办：DTSTART→start（DTSTART 仍存在）", () => assert.ok(todo.raw.includes("DTSTART:20261023T100000")));
+t("事件→待办：保留 VTIMEZONE 与 ORGANIZER", () => {
+  assert.ok(todo.raw.includes("BEGIN:VTIMEZONE"));
+  assert.ok(todo.raw.includes("ORGANIZER"));
+});
+t("事件→待办：UID 不变", () => assert.strictEqual(todo.uid, evt.uid));
+t("事件→待办：默认待办状态", () => {
+  assert.strictEqual(todo.kind, "todo");
+  assert.strictEqual(todo.percent, 0);
+  assert.strictEqual(todo.status, "NEEDS-ACTION");
+});
+t("转换结果可被 itemToEditedICS 再次编辑", () => {
+  const again = ics.itemToEditedICS(todo);
+  assert.ok(again.includes("BEGIN:VTODO"));
+});
+
+const todoRaw = [
+  "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VTODO",
+  "UID:todo-conv@test", "SUMMARY:交周报", "DUE:20261025T180000Z",
+  "PRIORITY:1", "PERCENT-COMPLETE:40", "STATUS:IN-PROCESS",
+  "END:VTODO", "END:VCALENDAR"
+].join("\r\n");
+const tdItems = ics.itemsFromICS(todoRaw, "http://x/cal/", "http://x/cal/todo-conv.ics", "etag2");
+const td = tdItems[0];
+const ev = ics.convertItemKind(td, "event");
+t("待办→事件：组件翻成 VEVENT", () => assert.ok(ev.raw.includes("BEGIN:VEVENT") && !ev.raw.includes("BEGIN:VTODO")));
+t("待办→事件：DUE→DTSTART", () => assert.ok(ev.raw.includes("DTSTART:20261025T180000")));
+t("待办→事件：丢弃 priority/percent/status", () => {
+  assert.ok(!ev.raw.includes("PRIORITY"));
+  assert.ok(!ev.raw.includes("PERCENT-COMPLETE"));
+  assert.ok(!ev.raw.includes("STATUS"));
+});
+t("待办→事件：默认 1 小时时长（DTEND=DTSTART+1h）", () => {
+  assert.ok(ev.raw.includes("DTEND:20261025T190000"));
+});
+t("待办→事件：UID 不变", () => assert.strictEqual(ev.uid, td.uid));
+
 console.log(`[core] 合计 ${passed} 项通过（含提醒引擎与 HTTP 通道）`);

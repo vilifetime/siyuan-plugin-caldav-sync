@@ -502,7 +502,19 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   function updateTodoCheckDOM(root: HTMLElement, key: string, done: boolean): void {
     root
       .querySelectorAll<HTMLElement>(`[data-toggle="${key}"]`)
-      .forEach((btn) => (btn.title = done ? "标记未完成" : "标记完成"));
+      .forEach((btn) => {
+        btn.title = done ? "标记未完成" : "标记完成";
+        // ⚠️ 必须同步 textContent，不能只切 is-done class。
+        // 任务视图的勾是**渲染时写死在 HTML 里**的（完成才有 ✓，见 view-task.ts），
+        // 就地更新不重建 DOM，只切 class 的症状就是「圆圈填充了、勾子没有」。
+        //   ⚠️ 只认这两个勾圈类，**不能一律赋 ✓**：
+        //   · `.cal-chip-check` 日历视图（view-common / view-week）✓ 常驻、CSS 控显隐
+        //   · `.cal-task-check` 任务视图（view-task）✓ 按完成态写进内容
+        //   Dock 的 `.caldav-dock-check` 是真 <input type=checkbox>，不能被塞文字节点。
+        if (btn.classList.contains("cal-chip-check") || btn.classList.contains("cal-task-check")) {
+          btn.textContent = done ? "✓" : "";
+        }
+      });
     root
       .querySelectorAll<HTMLElement>(`[data-open="${key}"]`)
       .forEach((el) => el.classList.toggle("is-done", done));

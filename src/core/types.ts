@@ -114,6 +114,23 @@ export interface CalItem {
   raw?: string;
   /** 编辑器会话态：粘贴标题时自动识别其中的日期时间（仅编辑器内使用，不持久化到 ICS） */
   aiParse?: boolean;
+  /**
+   * 「换日历搬家」的来源资源：上传成功后要把它从原日历里删掉，否则服务端留孤儿。
+   *
+   * 触发场景：① 编辑器里直接换日历；② 日程↔待办互转时，原日历不支持目标类型
+   * （iCloud 的日历只收 VEVENT、提醒事项只收 VTODO）必须搬到支持它的日历。
+   *
+   * ⚠️ 顺序铁律：**先 PUT 新资源，成功后再删旧的**。先删后建一旦新建被拒（403/400），
+   * 服务端那一条就彻底没了（2026-10-24 雄哥实测）。删除失败只记提示、不阻断上传。
+   */
+  movedFrom?: {
+    /** 原日历里的资源地址 */
+    href: string;
+    /** 原日历集合地址（DELETE 要用原集合的权限与路径） */
+    calendarUrl?: string;
+    /** 原 etag（带 If-Match 删，避免误删他人改动） */
+    etag?: string;
+  };
 }
 
 export interface CalCalendar {
@@ -134,6 +151,16 @@ export interface CalCalendar {
   supportsTodo?: boolean;
   /** 支持 VEVENT */
   supportsEvent?: boolean;
+  /**
+   * 是否已真正向服务端问过 `supported-calendar-component-set`（RFC 4791 §5.2.3）。
+   *
+   * ⚠️ 为什么需要这个标记：`supportsEvent/supportsTodo` 缺省就是 `true`，光看字段
+   * 分不清「服务端确实支持」和「压根没问过、取了默认值」。2026-10-24 之前发现日历
+   * 的 PROPFIND **根本没请求**这个属性，于是 iCloud 的「提醒事项」集合也被标成
+   * 「既支持日程又支持待办」，往里 PUT VEVENT 被 403（雄哥实测），且当时的降级
+   * 策略先删了服务端旧资源才重建，把待办直接删没了。缺此标记的老配置要在同步前补探测。
+   */
+  componentSetProbed?: boolean;
   /** sync-collection 支持的 sync-token，空则回退全量 */
   syncToken?: string;
   /** 描述（如 Nextcloud 共享说明） */

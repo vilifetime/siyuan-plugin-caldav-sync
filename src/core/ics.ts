@@ -6,7 +6,7 @@
  */
 import type { Alarm, CalAttachment, CalItem, CalKind, CalSettings, LocalStamp, Recurrence } from "./types";
 import {
-  dateStampOfMs, isDateOnly, parseLocalStamp, stampOfMs, zoneOffsetMs, weekdayIndexOfCode, padDate
+  addDays, dateStampOfMs, isDateOnly, parseLocalStamp, stampOfMs, zoneOffsetMs, weekdayIndexOfCode, padDate
 } from "./date";
 import { pad2 } from "./types";
 
@@ -817,6 +817,110 @@ export function itemToEditedICS(item: CalItem): string {
   };
   for (const c of root.children) emit(c);
   return lines.join("\r\n") + "\r\n";
+}
+
+/**
+ * 转换条目种类（VEVENT ↔ VTODO）时用的序列化：保留同一 ICS 资源（UID/href 不变），
+ * 把里面的组件类型翻成 `newItem.kind` 对应的那一个，并移植旧组件里的非受管属性
+ * （VTIMEZONE 在信封层；ORGANIZER / ATTENDEE / X- 在组件层，由 `rebuildComponent` 原样带回）。
+ *
+ * 为什么不能直接 `itemToEditedICS`：它按 `item.kind` 找旧组件，翻 kind 后
+ * `findComponents(root, 新类型)` 在旧 raw 里永远找不到 → 抛错。本函数按 `oldItem.kind`
+ * 找旧组件、按 `newItem.kind` 输出新类型，正好补这个缺口。
+ *
+ * @param oldItem 转换前的条目（提供 raw 与旧 kind）
+ * @param newItem 转换后的条目（kind 已在外部翻好、时间字段也已映射）
+ */
+export function itemToConvertedICS(oldItem: CalItem, newItem: CalItem): string {
+  if (!oldItem.raw) {
+    throw new Error(
+      `转换失败：缺少 ICS 原文（UID=${oldItem.uid}），无法保留 VTIMEZONE/ORGANIZER 等属性`
+    );
+  }
+  const root = parseICS(oldItem.raw);
+  const oldType = oldItem.kind === "event" ? "VEVENT" : "VTODO";
+  const newType = newItem.kind === "event" ? "VEVENT" : "VTODO";
+  const match = findTargetComponent(findComponents(root, oldType), oldItem);
+  // 找不到旧组件：与 itemToEditedICS 同口径，抛错而非退回整份重拼（否则会抹掉其它属性）。
+  if (!match) {
+    throw new Error(
+      `ICS 原文里找不到 ${oldType}（UID=${oldItem.uid}${oldItem.recurId ? " RECURRENCE-ID=" + oldItem.recurId : ""}），` +
+        `已中止转换以免丢失其它属性`
+    );
+  }
+  const rebuilt = rebuildComponent(match, newItem);
+  rebuilt.type = newType; // ← 翻组件类型的关键一步：BEGIN:VEVENT → BEGIN:VTODO（或反之）
+  const hasEnvelope = findComponents(root, "VCALENDAR").length > 0;
+  const emitBody = (): string[] => {
+    const out: string[] = [];
+    const emit = (c: IcsComponent): void => {
+      if (c === match) {
+        out.push(...compToLines(rebuilt));
+        return;
+      }
+      out.push(`BEGIN:${c.type}`);
+      for (const p of c.props) {
+        const params = Object.entries(p.params).map(([k, v]) => `;${k}=${v}`).join("");
+        out.push(foldLine(`${p.name}${params}:${p.value}`));
+      }
+      for (const child of c.children) emit(child);
+      out.push(`END:${c.type}`);
+    };
+    for (const c of root.children) emit(c);
+    return out;
+  };
+  if (!hasEnvelope) {
+    return [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//WorkBuddy//SiYuan CalDAV//CN",
+      ...emitBody(),
+      "END:VCALENDAR"
+    ].join("\r\n") + "\r\n";
+  }
+  return emitBody().join("\r\n") + "\r\n";
+}
+
+/**
+ * 把条目从一种种类转换为另一种（原地，保留 UID/href/资源身份、附件、重复规则）。
+ *
+ * 时间字段映射（契合「待办看 DUE、事件看开始时间」的既有约定）：
+ *  - 事件 → 待办：`DTEND` → 待办 `DUE`，`DTSTART` → 待办 `start`
+ *  - 待办 → 事件：`DUE` → 事件 `DTSTART`，默认时长 1 小时（全天则占一整天 / 次日）
+ *
+ * 目标为事件时丢弃待办专属字段（`priority` / `percent` / `status` / `completedAt`）；
+ * 目标为待办时补默认状态（`NEEDS-ACTION` / 0%）。
+ *
+ * 返回的新对象的 `raw` 已被重写为目标组件类型，可直接交给保存路径（保存时
+ * `itemToEditedICS` 会按新 kind 找到新组件并继续增量编辑）。
+ */
+export function convertItemKind(item: CalItem, target: CalKind): CalItem {
+  const next: CalItem = { ...item, kind: target };
+  const addHoursLocal = (s: string, h: number): LocalStamp =>
+    stampOfMs(parseLocalStamp(s).getTime() + h * 3600000);
+  if (target === "todo") {
+    next.end = item.end || item.start; // 事件结束 → 待办截止
+    next.start = item.start;
+    next.priority = 0;
+    next.percent = 0;
+    next.status = "NEEDS-ACTION";
+    next.completedAt = undefined;
+  } else {
+    // 待办 → 事件：截止 → 开始
+    next.start = item.end || item.start;
+    next.end = item.allDay
+      ? addDays(next.start, 1) // 全天：占一整天
+      : isDateOnly(next.start)
+        ? next.start // 非全天却是日期型（罕见）：兜底同日
+        : addHoursLocal(next.start, 1); // 定时：默认 1 小时
+    next.priority = undefined;
+    next.percent = undefined;
+    next.status = undefined;
+    next.completedAt = undefined;
+  }
+  next.raw = itemToConvertedICS(item, next);
+  next.dirty = item.dirty; // 沿用原脏标记；是否落库由上层保存决定
+  return next;
 }
 
 /** RRULE 展开给定时间窗内的实例开始时间（不含 EXDATE 过滤） */

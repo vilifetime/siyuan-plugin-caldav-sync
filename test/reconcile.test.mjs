@@ -84,7 +84,7 @@ const reportMultistatus = (href, etag, ics) =>
 function withFetch(router) {
   const orig = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    const req = { url: String(url), method: init?.method || "GET", body: String(init?.body || "") };
+    const req = { url: String(url), method: init?.method || "GET", body: String(init?.body || ""), headers: init?.headers || {} };
     const r = router(req);
     return fakeRes(r.status, r.body ?? "", r.headers);
   };
@@ -365,6 +365,36 @@ await t("冲突策略两个分支都在，且默认不是「删本地」以外�
   assert.ok(/report\.requeued\+\+/.test(srcSync), "本地优先要计数");
   assert.ok(/this\.store\.remove\(keyOf\(it\)\)/.test(srcSync), "服务端优先要真的删本地");
   assert.ok(/report\.reconciled\+\+/.test(srcSync), "服务端优先要计数");
+});
+
+await t("发现日历的 PROPFIND 点名请求 supported-calendar-component-set", () => {
+  // 这是 protected 属性：allprop 不带、不点名就永远拿不到 → supportsEvent/Todo 会停在
+  // 缺省的 true，于是把 iCloud 的提醒事项集合误判成「也收 VEVENT」，互转必 403。
+  assert.ok(
+    /supported-calendar-component-set\/>/.test(srcCaldav),
+    "不点名请求就拿不到能力，日历能力永远取缺省值"
+  );
+  assert.ok(/probeCalendarComponents/.test(srcCaldav), "缺单日历补探测入口（老配置要能补齐能力）");
+  assert.ok(/ensureCalendarCapabilities/.test(srcSync), "syncAll 里没调能力补齐");
+  assert.ok(/componentSetProbed/.test(srcTypes), "CalCalendar 缺 componentSetProbed 标记");
+});
+
+await t("403 降级顺序铁律：先 PUT 新地址，成功后再 DELETE 旧地址", () => {
+  const i403 = srcSync.indexOf("=== 403) {");
+  assert.ok(i403 > 0, "未找到 403 分支（条件已从 `403 && item.etag` 放宽为 `403`，别按旧串找）");
+  const seg = srcSync.slice(i403, i403 + 2600);
+  const iPut = seg.indexOf("const r = await putItem(");
+  const iDel = seg.indexOf("await deleteItem(");
+  assert.ok(iPut > 0 && iDel > 0, "403 分支里 PUT/DELETE 都要在");
+  assert.ok(
+    iPut < iDel,
+    "必须先 PUT 新地址再 DELETE 旧地址 —— 反过来就是 2026-10-24 事故（旧资源已删、新资源建不回来，服务端那条直接没了）"
+  );
+});
+
+await t("日历不支持目标类型时只报错，绝不动服务端旧资源", () => {
+  assert.ok(/targetSupported/.test(srcSync), "403 分支要先判「集合是否接受该组件类型」");
+  assert.ok(/movedFrom\?:/.test(srcTypes), "CalItem 缺 movedFrom（换日历搬家要留旧地址）");
 });
 
 await t("SyncReport 必须带 reconciled / requeued，三处构造都要补齐", () => {
@@ -926,6 +956,263 @@ await t("即时推送成功后又编辑、本轮同步再推同一条目 → 并
     await eng.updateItem({ ...it, percent: 60, dirty: true }); // 后台推送失败 → 留脏
     const rep = await eng.syncAll(); // 本轮 pushDirty 重推成功 → 本轮 key 与 pending 同 key
     assert.strictEqual(rep.uploaded, 1, "同一条目跨轮推送只算 1 条，实际 " + rep.uploaded);
+  } finally {
+    restore();
+  }
+});
+
+// ---- 2026-10-23 雄哥实测：待办转日程后「原任务没删除 + 同步出错」。根因两层： ----
+//      ① keyOf 把 kind 编进主键 → 转换保存变成另立新条（uid|todo 残留、uid|event 带旧 href/etag）；
+//      ② 多数 CalDAV 服务端把资源组件类型与 href 绑定校验，对已有 VTODO 资源 PUT VEVENT 回 403。
+//      修法：主键去掉 kind（UID 在日历内本就唯一）+ 403 时自动「删旧资源→同 URI 重建」降级。
+
+const EVENT_ICS = [
+  "BEGIN:VCALENDAR",
+  "VERSION:2.0",
+  "PRODID:-//test//EN",
+  "BEGIN:VEVENT",
+  "UID:u1@test",
+  "SUMMARY:测试任务",
+  "DTSTART:20261023T070000Z",
+  "DTEND:20261023T080000Z",
+  "END:VEVENT",
+  "END:VCALENDAR"
+].join("\r\n");
+
+await t("待办转日程保存：同 UID 覆盖同一条目，不另立新条（主键不含 kind）", async () => {
+  const it = mkItem({ uid: "u1@test", href: CAL_URL + "u1.ics", summary: "测试任务" });
+  const st = await mkStore([it]);
+  const restore = withFetch((req) => {
+    if (req.method === "PUT") return { status: 201, body: "", headers: { etag: '"conv-etag"' } };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    // 编辑器转换后的条目：kind 翻成 event、raw 换成 VEVENT、继承旧 href/etag、置脏
+    await eng.updateItem({ ...it, kind: "event", summary: "测试任务", raw: EVENT_ICS, dirty: true });
+    assert.strictEqual(st.getAll().length, 1, "转换后本地必须只剩 1 条，实际 " + st.getAll().length);
+    const left = st.getAll()[0];
+    assert.strictEqual(left.kind, "event", "留下的应是转换后的日程");
+    assert.strictEqual(left.dirty, false, "上传成功后不应再脏");
+    assert.strictEqual(left.etag, "conv-etag", "etag 应取上传响应的新值");
+  } finally {
+    restore();
+  }
+});
+
+await t("待办转日程遇 403（服务端拒改组件类型）：非破坏性降级——先建新地址、成功再删旧", async () => {
+  const it = mkItem({ uid: "u1@test", href: CAL_URL + "u1.ics", summary: "测试任务", etag: '"old-etag"' });
+  const st = await mkStore([it]);
+  const calls = [];
+  let putCount = 0;
+  const restore = withFetch((req) => {
+    calls.push(req);
+    if (req.method === "PUT") {
+      putCount++;
+      // 第一次 PUT（If-Match 改写既有 VTODO 资源）被服务端以 403 拒绝；
+      // 降级后往**同集合的新地址** PUT（不带 If-Match）应成功
+      return putCount === 1
+        ? { status: 403, body: "" }
+        : { status: 201, body: "", headers: { etag: '"new-etag"' } };
+    }
+    if (req.method === "DELETE") return { status: 204, body: "" };
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    await eng.updateItem({ ...it, kind: "event", summary: "测试任务", raw: EVENT_ICS, dirty: true });
+    assert.strictEqual(putCount, 2, "应恰好 PUT 两次（403 后换地址重试 1 次），实际 " + putCount);
+    const puts = calls.filter((c) => c.method === "PUT");
+    const deletes = calls.filter((c) => c.method === "DELETE");
+    assert.strictEqual(deletes.length, 1, "只应 DELETE 旧地址 1 次，实际 " + deletes.length);
+    assert.ok(puts[0].headers["If-Match"], "第一次 PUT 应带 If-Match（改写既有资源）");
+    assert.ok(!puts[1].headers["If-Match"], "第二次 PUT（换地址新建）不应带 If-Match");
+    assert.notStrictEqual(puts[1].url, puts[0].url, "重试必须换一个新地址，同 href 再 PUT 仍会被拒");
+    assert.strictEqual(deletes[0].url, CAL_URL + "u1.ics", "删的应是旧地址");
+    // ⚠️ 顺序铁律：先建后删。反过来的话（2026-10-24 事故）新建一失败，服务端那条就没了。
+    assert.ok(
+      calls.indexOf(deletes[0]) > calls.indexOf(puts[1]),
+      "DELETE 必须排在换地址 PUT 成功之后，否则新建失败就丢数据"
+    );
+    const left = st.getAll()[0];
+    assert.strictEqual(left.kind, "event", "降级上传成功后转换应生效");
+    assert.strictEqual(left.dirty, false, "降级上传成功后不应再脏");
+    assert.strictEqual(left.etag, "new-etag", "etag 应取第二次 PUT 响应的新值");
+    assert.notStrictEqual(left.href, CAL_URL + "u1.ics", "条目应落在新地址上");
+  } finally {
+    restore();
+  }
+});
+
+// ---- 2026-10-24：iCloud 日历/提醒事项是分开的集合，日历只收 VEVENT、提醒事项只收 VTODO ----
+//      往不支持目标类型的集合里 PUT，RFC 4791 §5.2.3 规定必须报错（实测 403）。此时
+//      换地址重试也是白搭，必须给出可操作提示，且**绝不能删服务端旧资源**。
+
+await t("parseComponentSet：VEVENT-only / VTODO-only / 缺失 / 空集合 四种形态", async () => {
+  const wrap = (inner) =>
+    `<D:propstat><D:prop><C:supported-calendar-component-set xmlns:C="urn:ietf:params:xml:ns:caldav">${inner}</C:supported-calendar-component-set></D:prop></D:propstat>`;
+  const evOnly = caldav.parseComponentSet(wrap(`<C:comp name="VEVENT"/>`));
+  assert.deepStrictEqual([evOnly.supportsEvent, evOnly.supportsTodo], [true, false], "iCloud 日历：只收事件");
+  const tdOnly = caldav.parseComponentSet(wrap(`<C:comp name="VTODO"/>`));
+  assert.deepStrictEqual([tdOnly.supportsEvent, tdOnly.supportsTodo], [false, true], "iCloud 提醒事项：只收待办");
+  const both = caldav.parseComponentSet(wrap(`<C:comp name="VEVENT"/><C:comp name="VTODO"/>`));
+  assert.deepStrictEqual([both.supportsEvent, both.supportsTodo], [true, true], "Radicale/Baikal：两者都收");
+  // 属性缺失 = 服务端不限制（RFC：absence ⇒ server MUST accept all），绝不能反过来全判 false
+  const none = caldav.parseComponentSet(`<D:propstat><D:prop><D:displayname>x</D:displayname></D:prop></D:propstat>`);
+  assert.deepStrictEqual([none.supportsEvent, none.supportsTodo], [true, true], "属性缺失应视为不限制");
+  const empty = caldav.parseComponentSet(wrap(``));
+  assert.deepStrictEqual([empty.supportsEvent, empty.supportsTodo], [true, true], "空集合同样视为不限制");
+});
+
+await t("403 + 日历不支持目标类型：给可操作提示，且绝不删服务端旧资源", async () => {
+  const it = mkItem({ uid: "u1@test", href: CAL_URL + "u1.ics", summary: "测试任务", etag: '"old-etag"' });
+  // 该集合只收 VTODO（iCloud 提醒事项），转出来的 VEVENT 必被拒
+  const st = await mkStore([it], { calendars: [{ ...cal, supportsEvent: false, supportsTodo: true }] });
+  const calls = [];
+  const restore = withFetch((req) => {
+    calls.push(req);
+    if (req.method === "PUT") return { status: 403, body: "" };
+    return { status: 204, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    await eng.updateItem({ ...it, kind: "event", summary: "测试任务", raw: EVENT_ICS, dirty: true });
+    assert.strictEqual(
+      calls.filter((c) => c.method === "DELETE").length,
+      0,
+      "目标类型不被支持时一个字节都不该删——删了就再也建不回来"
+    );
+    assert.strictEqual(calls.filter((c) => c.method === "PUT").length, 1, "明知不支持就别换地址白重试");
+    assert.ok(
+      /不支持日程/.test(st.lastError || ""),
+      "错误要直说「不支持日程」而不是干巴巴的 403，实际：" + st.lastError
+    );
+  } finally {
+    restore();
+  }
+});
+
+await t("被降级清掉 etag 后仍 403（雄哥那条卡住的「测试任务」）：同样给明确提示", async () => {
+  // 现状复刻：kind=event、etag 已被上一版降级清掉、dirty 常驻，每轮同步都撞 403
+  const it = mkItem({ uid: "u1@test", href: CAL_URL + "u1.ics", summary: "测试任务", etag: undefined });
+  const st = await mkStore([it], { calendars: [{ ...cal, supportsEvent: false, supportsTodo: true }] });
+  const calls = [];
+  const restore = withFetch((req) => {
+    calls.push(req);
+    if (req.method === "PUT") return { status: 403, body: "" };
+    return { status: 204, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    await eng.updateItem({ ...it, kind: "event", raw: EVENT_ICS, dirty: true });
+    assert.ok(
+      /不支持日程/.test(st.lastError || ""),
+      "没有 etag 也要走「不支持」分支给出可操作提示，实际：" + st.lastError
+    );
+    assert.strictEqual(calls.filter((c) => c.method === "DELETE").length, 0, "依然一个字节都不该删");
+  } finally {
+    restore();
+  }
+});
+
+await t("403 + 无 etag（URL 归档污染）：也要换新地址重试，成功后清掉搬家残留", async () => {
+  // 2026-10-24 实测：iCloud 对「先 DELETE 再 PUT 过另一种类型」的地址留归档记录，
+  // 之后向它 PUT 新类型永远 403（invalid attempt to update record from type …），
+  // 而搬家后的条目 etag 恰好是空的 —— 不能因 !etag 就放弃换地址重试（非破坏性）。
+  const it = mkItem({
+    uid: "u2@test",
+    href: CAL_URL + "u2.ics",
+    summary: "测试任务",
+    etag: undefined,
+    movedFrom: { href: CAL_URL + "old/u2.ics", calendarUrl: CAL_URL, etag: '"mv-etag"' }
+  });
+  const st = await mkStore([it]);
+  const calls = [];
+  const restore = withFetch((req) => {
+    calls.push(req);
+    if (req.method === "PUT") {
+      // 原 u2.ics 已被污染 → 403；换到 altHref（u2-xxxx.ics）→ 201
+      return /u2\.ics$/.test(req.url)
+        ? { status: 403, body: "invalid attempt to update record from type 'EventArchiveV1' to 'ReminderArchiveV1'" }
+        : { status: 201, body: "", headers: { etag: '"fresh-etag"' } };
+    }
+    return { status: 204, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    const TODO_ICS = EVENT_ICS.replace(/u1@test/g, "u2@test").replace("BEGIN:VEVENT", "BEGIN:VTODO").replace("END:VEVENT", "END:VTODO").replace("DTEND:", "DUE:");
+    await eng.updateItem({ ...it, kind: "todo", summary: "测试任务", raw: TODO_ICS, dirty: true });
+    const puts = calls.filter((c) => c.method === "PUT");
+    assert.strictEqual(puts.length, 2, "应 PUT 两次（污染地址 403 + 新地址成功），实际 " + puts.length);
+    const left = st.getAll()[0];
+    assert.notStrictEqual(left.href, CAL_URL + "u2.ics", "必须换到新地址");
+    assert.match(left.href, /u2test-[a-z0-9]+\.ics$/, "新地址应是 altHrefOf 生成的文件名");
+    assert.strictEqual(left.dirty, false, "重试成功后不应再脏");
+    assert.strictEqual(left.etag, "fresh-etag", "etag 应取新地址 PUT 响应的值");
+    assert.strictEqual(left.movedFrom, undefined, "成功后要清掉搬家残留");
+    assert.strictEqual((st.lastError || "").length, 0, "重试成功就不该有错误，实际：" + st.lastError);
+    const delUrls = calls.filter((c) => c.method === "DELETE").map((c) => c.url);
+    assert.ok(delUrls.some((u) => /old\/u2\.ics$/.test(u)), "movedFrom 指向的原日历那份要被删掉");
+  } finally {
+    restore();
+  }
+});
+
+await t("换日历搬家：先 PUT 新地址，成功后删掉原日历里那份（movedFrom）", async () => {
+  const it = mkItem({
+    uid: "u1@test",
+    href: OTHER_URL + "u1.ics",
+    calendarUrl: OTHER_URL,
+    summary: "搬家的任务",
+    movedFrom: { href: CAL_URL + "u1.ics", calendarUrl: CAL_URL, etag: '"old-etag"' }
+  });
+  const st = await mkStore([it]);
+  const calls = [];
+  const restore = withFetch((req) => {
+    calls.push(req);
+    if (req.method === "PUT") return { status: 201, body: "", headers: { etag: '"moved-etag"' } };
+    return { status: 204, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    await eng.updateItem({ ...it, dirty: true });
+    const puts = calls.filter((c) => c.method === "PUT");
+    const dels = calls.filter((c) => c.method === "DELETE");
+    assert.strictEqual(puts[0].url, OTHER_URL + "u1.ics", "应先 PUT 到新日历");
+    assert.strictEqual(dels.length, 1, "随后删旧日历里那份，实际 " + dels.length);
+    assert.strictEqual(dels[0].url, CAL_URL + "u1.ics", "删的是原地址");
+    assert.ok(calls.indexOf(dels[0]) > calls.indexOf(puts[0]), "顺序必须是先建后删");
+    assert.strictEqual(st.getAll()[0].movedFrom, undefined, "处理完要清掉 movedFrom，避免每轮重复删");
+  } finally {
+    restore();
+  }
+});
+
+await t("搬家后旧资源删不掉：只记中性提示，不把同步报成失败", async () => {
+  const it = mkItem({
+    uid: "u1@test",
+    href: OTHER_URL + "u1.ics",
+    calendarUrl: OTHER_URL,
+    summary: "搬家的任务",
+    dirty: true,
+    movedFrom: { href: CAL_URL + "u1.ics", calendarUrl: CAL_URL }
+  });
+  const st = await mkStore([it]);
+  const restore = withFetch((req) => {
+    if (req.method === "PUT") return { status: 201, body: "", headers: { etag: '"moved-etag"' } };
+    if (req.method === "DELETE") return { status: 403, body: "" }; // 旧日历只读
+    return { status: 200, body: "" };
+  });
+  try {
+    const eng = new syncMod.SyncEngine(st, () => "direct");
+    const rep = await eng.syncAll();
+    assert.strictEqual(rep.errors.length, 0, "旧资源删不掉不该算错误，实际：" + rep.errors.join("; "));
+    assert.ok(rep.ok, "同步整体仍应判定成功");
+    assert.ok(
+      (rep.notes || []).some((n) => /未能删除/.test(n)),
+      "应给出「旧位置那份未能删除」的中性提示，实际 notes=" + JSON.stringify(rep.notes)
+    );
+    assert.strictEqual(st.getAll()[0].dirty, false, "新地址已落地，不该继续脏");
   } finally {
     restore();
   }

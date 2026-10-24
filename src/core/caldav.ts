@@ -127,7 +127,11 @@ export async function discoverCalendars(
   const listRes = await dav(
     home,
     "PROPFIND",
-    `<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:a="urn:ietf:params:xml:ns:caldav-extensions"><D:prop><D:resourcetype/><D:displayname/><cs:getctag/><a:calendar-color/><D:current-user-privilege-set/></D:prop></D:propfind>`,
+    // ⚠️ 必须显式请求 supported-calendar-component-set（RFC 4791 §5.2.3）：它是
+    //    protected 属性，allprop 不会带，不点名就永远拿不到 → supportsEvent/Todo
+    //    全落缺省值 true → iCloud「提醒事项」集合被误判成也收 VEVENT → PUT 403
+    //    （2026-10-24 雄哥实测：待办转日程同步失败，且降级把服务端旧待办删没了）。
+    `<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:a="urn:ietf:params:xml:ns:caldav-extensions"><D:prop><D:resourcetype/><D:displayname/><cs:getctag/><a:calendar-color/><D:current-user-privilege-set/><c:supported-calendar-component-set/></D:prop></D:propfind>`,
     channel,
     auth,
     "1"
@@ -150,15 +154,7 @@ export async function discoverCalendars(
     if (!/^#[0-9a-fA-F]{6}$/.test(color)) color = COLORS[colorIdx++ % COLORS.length];
     const supported = pickHrefXml(chunk); // 无用，占位
     void supported;
-    const compM = chunk.match(/<(?:[A-Za-z0-9_-]+:)?comp[^>]*name="(VEVENT|VTODO)"/g);
-    let supportsEvent = true;
-    let supportsTodo = true;
-    if (compM && compM.length) {
-      const set = new Set(compM.map((c) => /name="(VEVENT|VTODO)"/.exec(c)![1]));
-      supportsEvent = set.has("VEVENT");
-      supportsTodo = set.has("VTODO");
-      if (!set.size) { supportsEvent = true; supportsTodo = true; }
-    }
+    const { supportsEvent, supportsTodo } = parseComponentSet(chunk);
     const url = toAbsolute(base, href);
     const desc = pickTextXml(chunk, "description")[0] || "";
     calendars.push({
@@ -170,10 +166,65 @@ export async function discoverCalendars(
       enabled: true,
       supportsEvent,
       supportsTodo,
+      // 这次确实点名问过该属性了（服务端没回 = 不限制，按 RFC 也视为全部支持）
+      componentSetProbed: true,
       description: desc
     });
   }
   return { principal: principal || undefined, home, calendars };
+}
+
+/**
+ * 解析 PROPFIND 响应里的 `supported-calendar-component-set`（RFC 4791 §5.2.3）。
+ *
+ * 语义要点：**属性缺失 = 服务端不限制组件类型**（规范原文「In the absence of this
+ * property, the server MUST accept all component types」），所以拿不到就返回全 true，
+ * 绝不能反过来当成「什么都不支持」——那会让所有日历一次性全废。
+ *
+ * @param chunk 单个 `<response>` 块
+ */
+export function parseComponentSet(chunk: string): { supportsEvent: boolean; supportsTodo: boolean } {
+  // 只认 supported-calendar-component-set 里的 <comp name="..."/>；别处（如 filter）
+  // 出现 comp 不算。属性名带命名空间前缀，统一用「可选前缀」匹配。
+  const m = /<(?:[A-Za-z0-9_.-]+:)?supported-calendar-component-set\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_.-]+:)?supported-calendar-component-set>/.exec(chunk);
+  if (!m) return { supportsEvent: true, supportsTodo: true };
+  const comps = m[1].match(/<(?:[A-Za-z0-9_.-]+:)?comp\b[^>]*\bname\s*=\s*["']?([A-Za-z]+)/g) || [];
+  const set = new Set(
+    comps.map((c) => (/name\s*=\s*["']?([A-Za-z]+)/i.exec(c)?.[1] || "").toUpperCase())
+  );
+  if (!set.size) return { supportsEvent: true, supportsTodo: true }; // 空元素 = 不限制
+  return { supportsEvent: set.has("VEVENT"), supportsTodo: set.has("VTODO") };
+}
+
+/**
+ * 单独探测一个日历集合支持哪些组件类型（Depth 0，只问这一个属性）。
+ *
+ * 用途：老配置里的 `supportsEvent/Todo` 是没问过服务端时的缺省值（全 true），
+ * 靠 `componentSetProbed` 标记识别出来，在同步前补一次探测刷新，无需整站重新发现。
+ *
+ * 失败（网络/权限/不支持 PROPFIND）返回 null，调用方保持原值，绝不因此禁用日历。
+ */
+export async function probeCalendarComponents(
+  cal: CalCalendar,
+  channel: Channel,
+  auth: DavAuth
+): Promise<{ supportsEvent: boolean; supportsTodo: boolean } | null> {
+  try {
+    const res = await dav(
+      cal.url,
+      "PROPFIND",
+      `<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><D:prop><c:supported-calendar-component-set/></D:prop></D:propfind>`,
+      channel,
+      auth,
+      "0"
+    );
+    if (res.status >= 400) return null;
+    const chunks = res.body.split(/<(?:[A-Za-z0-9_-]+:)?response\b[^>]*>/i).slice(1);
+    if (!chunks.length) return parseComponentSet(res.body);
+    return parseComponentSet(chunks[0]);
+  } catch {
+    return null;
+  }
 }
 
 /** 全量拉取一个日历（calendar-query 时间窗） */

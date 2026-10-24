@@ -212,7 +212,7 @@ export function openMonthDayPopup(
   pop.querySelectorAll<HTMLElement>(".cal-chip").forEach((chip) => {
     chip.addEventListener("click", (e) => {
       const key = chip.dataset.open || "";
-      // ⚠️ 必须用 view-common 导出的 keyOfItem（uid|recurId|kind），别自己另写一套 ——
+      // ⚠️ 必须用 view-common 导出的 keyOfItem（uid|recurId，不含 kind），别自己另写一套 ——
       //    月视图 chip 的 data-open 就是这个口径的键，自写会一个都匹配不上。
       const target = ctx.store.getAll().find((x) => keyOfItem(x) === key);
       if (!target) return;

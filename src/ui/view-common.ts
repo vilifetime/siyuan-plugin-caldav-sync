@@ -30,7 +30,8 @@ export function todoDueOccurrences(it: CalItem, startMs: number, endMs: number):
 }
 
 export function keyOfItem(it: CalItem): string {
-  return it.recurId ? `${it.uid}|${it.recurId}|${it.kind}` : `${it.uid}|${it.kind}`;
+  // 与 core/store.ts 的 keyOf 保持同一口径（主键不含 kind，日程↔待办互转才能覆盖同一条目）
+  return it.recurId ? `${it.uid}|${it.recurId}` : it.uid;
 }
 
 /**
@@ -66,7 +67,7 @@ export function monthChipHtml(it: CalItem, occ: string, calColor: string): strin
   const timeRow = it.allDay
     ? ""
     : `<div class="cal-chip-row cal-chip-row-time"><span class="cal-chip-time">${occ.slice(11, 16)}</span></div>`;
-  return `<div class="cal-chip cal-chip-month ${done ? "is-done" : ""}" data-open="${k}" style="--cal-color:${calColor}">
+  return `<div class="cal-chip cal-chip-month ${done ? "is-done" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColor}">
     <div class="cal-chip-row">${check}<span class="cal-chip-title">${repeatMark(it)}${escape(it.summary || "(无标题)")}</span></div>
     ${timeRow}
   </div>`;

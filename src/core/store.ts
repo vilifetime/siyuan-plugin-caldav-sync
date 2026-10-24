@@ -362,6 +362,10 @@ export class CalStore {
 }
 
 export function keyOf(item: CalItem): string {
-  // 同一资源同一 UID 一条；重复实例覆盖用 recurId 区分
-  return item.recurId ? `${item.uid}|${item.recurId}|${item.kind}` : `${item.uid}|${item.kind}`;
+  // 主键只用 UID（重复实例覆盖多一段 recurId）。**刻意不含 kind**：日程↔待办互转
+  // 会翻转 kind，若 kind 参与主键，转换保存就会变成「另立新条」，旧待办残留本地、
+  // 新条目带着旧资源的 href/etag 上传，同步必然错乱（2026-10-23 雄哥实测）。
+  // 同一日历集合内 UID 本就要求唯一（RFC 4791），「同 UID 一 VEVENT 一 VTODO」
+  // 属非规范数据，撞键时后写者胜，可接受。
+  return item.recurId ? `${item.uid}|${item.recurId}` : item.uid;
 }

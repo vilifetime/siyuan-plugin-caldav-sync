@@ -2594,6 +2594,17 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   color: #fff;
 }
 
+/* 「转为待办 / 转为日程」：左侧、强调色描边（区别于危险的删除红、中性的取消灰） */
+.caldav-foot-btn--convert {
+  color: var(--caldav-accent);
+  border-color: color-mix(in srgb, var(--caldav-accent) 35%, var(--caldav-border));
+  background: var(--caldav-bg);
+}
+.caldav-foot-btn--convert:hover {
+  background: color-mix(in srgb, var(--caldav-accent) 8%, var(--caldav-bg));
+  border-color: var(--caldav-accent);
+}
+
 .caldav-foot-btn svg { width: 14px; height: 14px; }
 
 /* 缩放手柄（右下角） */

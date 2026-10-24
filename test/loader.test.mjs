@@ -762,9 +762,10 @@ assert.ok(
 );
 
 // ---- 「日历视图中显示待办任务」开关：关掉后日历视图只留日程，任务视图不受影响 ----
-// 关键字形：keyOf() 产出 "<uid>|<kind>"（重复实例多一段 recurId），所以用后缀选 kind。
-const todoChips = () => tabEl.querySelectorAll('.caldav-view [data-open$="|todo"]').length;
-const eventChips = () => tabEl.querySelectorAll('.caldav-view [data-open$="|event"]').length;
+// 关键字形：主键 keyOf() 产出 "<uid>"（重复实例 "<uid>|<recurId>"，不含 kind），
+// chip 上用 data-kind 标种类，按它选 kind。
+const todoChips = () => tabEl.querySelectorAll('.caldav-view [data-kind="todo"]').length;
+const eventChips = () => tabEl.querySelectorAll('.caldav-view [data-kind="event"]').length;
 const showTodosBox = () => tabEl.querySelector('.caldav-calfilter-pop [data-opt="showTodos"]');
 const setShowTodos = (on) => {
   const box = showTodosBox();
@@ -904,7 +905,7 @@ const chipStyle = (key) =>
 // 上午跑和深夜跑结论不同（深夜时当天日程全已结束，排序结果不一样）。按类型取任意一条
 // 可见的 chip，断言的意图（日程取 eventColor、待办取 todoColor）完全一致，且不再看时钟脸色。
 const chipStyleOfKind = (kind) =>
-  (tabEl.querySelector(`.cal-chip-month[data-open$="|${kind}"]`)?.style.getPropertyValue("--cal-color") || "").trim();
+  (tabEl.querySelector(`.cal-chip-month[data-kind="${kind}"]`)?.style.getPropertyValue("--cal-color") || "").trim();
 assert.strictEqual(chipStyleOfKind("event"), "#ff5252", "无分类的日程应使用日历的日程默认色");
 assert.strictEqual(chipStyleOfKind("todo"), "#00c853", "无分类的待办应使用日历的待办默认色");
 assert.notStrictEqual(chipStyleOfKind("event"), chipStyleOfKind("todo"), "同一日历下日程/待办默认色应互相独立");
@@ -915,14 +916,14 @@ catItem.categories = ["工作"]; // 工作 = #e05a4c
 plugin.store.putAndEmit(catItem);
 click(tabEl.querySelector('[data-view="month"]'));
 assert.strictEqual(
-  chipStyle("seed-11@test|todo"),
+  chipStyle("seed-11@test"),
   "#e05a4c",
   "命中分类的待办仍取分类颜色，不应被 todoColor 覆盖"
 );
 catItem.categories = undefined;
 plugin.store.putAndEmit(catItem);
 click(tabEl.querySelector('[data-view="month"]'));
-assert.strictEqual(chipStyle("seed-11@test|todo"), "#00c853", "去掉分类后应回落到待办默认色");
+assert.strictEqual(chipStyle("seed-11@test"), "#00c853", "去掉分类后应回落到待办默认色");
 
 document.querySelector(".b3-dialog .b3-dialog--close")?.remove();
 settingsEl?.closest(".b3-dialog")?.remove();

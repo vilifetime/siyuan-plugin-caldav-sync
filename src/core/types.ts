@@ -252,6 +252,21 @@ export interface CalAccount {
   /** 显示范围：过去 N 天 / 未来 N 天 */
   pastDays: number;
   futureDays: number;
+  /**
+   * 单个内联附件的硬上限（MB），超过在挑选时直接拒绝。默认 5。
+   *
+   * ⚠️ 这是**服务器特性**（2026-10-26 雄哥拍板下沉到账户）：附件以 base64 内联进
+   * ICS 同步，体积涨约 1/3；服务端普遍限制单条日历数据大小（Radicale 默认 10MB、
+   * PHP post_max_size 8MB、iCloud 另有一套），不同服务器上限不同，所以每个账户各配。
+   */
+  attachSizeMaxMB?: number;
+  /**
+   * 整份 ICS（含全部 base64 附件）的硬上限（MB），超过拒绝保存/上传。默认 10。
+   *
+   * 单文件上限挡不住「多个 4MB 凑 12MB」，所以按真实序列化结果卡总账。
+   * 同样是服务器特性，账户级配置（报错文案里的数字也取此值）。
+   */
+  icsSizeMaxMB?: number;
   /** 该账户发现的日历集合 */
   calendars: CalCalendar[];
 }
@@ -295,12 +310,15 @@ export function migrateToAccounts(s: any): void {
         conflict: s.conflict || "server",
         pastDays: typeof s.pastDays === "number" ? s.pastDays : 90,
         futureDays: typeof s.futureDays === "number" ? s.futureDays : 370,
+        // 附件/ICS 上限原来是全局值，本质是服务器特性 → 迁移时原值带给每个账户
+        attachSizeMaxMB: typeof s.attachSizeMaxMB === "number" ? s.attachSizeMaxMB : undefined,
+        icsSizeMaxMB: typeof s.icsSizeMaxMB === "number" ? s.icsSizeMaxMB : undefined,
         calendars: Array.isArray(s.calendars) ? s.calendars : []
       }
     ];
   }
   // 老字段从 settings 上摘掉：留着就会被 persist 原样写回，变成第二处真相
-  for (const k of ["serverUrl", "username", "password", "calendarPath", "serverType", "channel", "conflict", "pastDays", "futureDays", "calendars"]) {
+  for (const k of ["serverUrl", "username", "password", "calendarPath", "serverType", "channel", "conflict", "pastDays", "futureDays", "calendars", "attachSizeMaxMB", "icsSizeMaxMB"]) {
     delete s[k];
   }
 }
@@ -352,14 +370,21 @@ export function accountOfItem(s: CalSettings, item: CalItem): CalAccount | undef
 }
 
 /**
- * 新建条目的默认日历：全局一个 `defaultCalendarUrl`，失效时回退到
- * **第一个启用账户的第一个启用日历**（账户停用/日历删掉时不能指着空气）。
+ * 新建条目的默认日历：设置页按「默认账户 → 默认日历」两级选，最终落在
+ * `defaultCalendarUrl`。解析顺序：① url 仍有效（属于启用账户且日历启用）；
+ * ② defaultAccountId 指向的启用账户的第一个启用日历；③ 回退到**第一个启用
+ * 账户的第一个启用日历**（账户停用/日历删掉时不能指着空气）。
  */
 export function resolveDefaultCalendar(s: CalSettings): CalCalendar | undefined {
   const all = enabledCalendars(s);
   if (s.defaultCalendarUrl) {
     const hit = all.find((c) => c.url === s.defaultCalendarUrl);
     if (hit) return hit;
+  }
+  if (s.defaultAccountId) {
+    const acc = enabledAccounts(s).find((a) => a.id === s.defaultAccountId);
+    const cal = acc?.calendars.find((c) => c.enabled);
+    if (cal) return cal;
   }
   return all[0];
 }
@@ -377,9 +402,15 @@ export interface CalSettings {
   enableReminders?: boolean;
   /**
    * 新建条目的默认日历（全局一个，不区分账户）。
+   * 配套 defaultAccountId 组成设置页的「默认账户 + 默认日历」两级选择；
    * 停用/删除后由 resolveDefaultCalendar() 回退到第一个启用账户的第一个启用日历。
    */
   defaultCalendarUrl?: string;
+  /**
+   * 新建条目的默认**账户**（设置页第一级下拉）。只影响设置页联动与回退顺序，
+   * 最终生效的仍是 defaultCalendarUrl（日历 url 全仓唯一）。
+   */
+  defaultAccountId?: string;
   /**
    * 日历视图（年/月/周/日）是否显示待办任务，默认 true。
    * 关掉后日历视图只显示日程事件 —— 待办仍可在「任务视图」与 Dock 列表中看到与勾选，
@@ -413,20 +444,6 @@ export interface CalSettings {
    * 会在「日程与待办」小节最前面追加一个 `### 逾期待办` 子节。
    */
   includeOverdueTodos?: boolean;
-  /**
-   * 单个内联附件的硬上限（MB），超过在挑选时直接拒绝、不给确认机会。默认 5。
-   *
-   * 附件以 base64 内联进 ICS 同步，体积会涨约 1/3；服务端普遍限制单条日历数据
-   * 大小（Radicale 默认 10MB、PHP 默认 post_max_size 8MB），超了必然 413。
-   */
-  attachSizeMaxMB?: number;
-  /**
-   * 整份 ICS（含全部 base64 附件）的硬上限（MB），超过拒绝保存/上传。默认 10。
-   *
-   * 单文件上限挡不住「多个 4MB 凑 12MB」，所以按真实序列化结果卡总账。
-   * 自己的服务器上限更大就把这里调大（报错文案里的数字也取此值）。
-   */
-  icsSizeMaxMB?: number;
 }
 
 /**
@@ -479,9 +496,7 @@ export const DEFAULT_SETTINGS: CalSettings = {
   showExpiredEventsInTaskView: false,
   categories: DEFAULT_CATEGORIES,
   categoryMulti: false,
-  includeOverdueTodos: false,
-  attachSizeMaxMB: 5,
-  icsSizeMaxMB: 10
+  includeOverdueTodos: false
 };
 
 export interface SyncState {

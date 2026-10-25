@@ -276,9 +276,17 @@ await t("老数据整包搬进 accounts[0]：凭据/日历/通道/冲突/窗口�
 await t("老字段从 settings 上摘掉 —— 留着会被 persist 写回，变成第二处真相", () => {
   const s = { serverUrl: "http://nas:5232/", username: "bob", password: "p", calendars: [] };
   migrateToAccounts(s);
-  for (const k of ["serverUrl", "username", "password", "calendarPath", "serverType", "channel", "conflict", "pastDays", "futureDays", "calendars"]) {
+  for (const k of ["serverUrl", "username", "password", "calendarPath", "serverType", "channel", "conflict", "pastDays", "futureDays", "calendars", "attachSizeMaxMB", "icsSizeMaxMB"]) {
     assert.ok(!(k in s), `老键 ${k} 应被摘掉`);
   }
+});
+
+await t("全局附件/ICS 上限（服务器特性）迁移时原值带给账户（2026-10-26 下沉）", () => {
+  const s = { serverUrl: "http://nas:5232/", username: "bob", password: "p", calendars: [], attachSizeMaxMB: 8, icsSizeMaxMB: 9 };
+  migrateToAccounts(s);
+  assert.strictEqual(s.accounts[0].attachSizeMaxMB, 8, "附件上限应搬进 accounts[0]");
+  assert.strictEqual(s.accounts[0].icsSizeMaxMB, 9, "ICS 上限应搬进 accounts[0]");
+  assert.ok(!("attachSizeMaxMB" in s) && !("icsSizeMaxMB" in s), "全局老键应摘掉");
 });
 
 await t("幂等：重复调用不产生第二个账户、不改内容", () => {
@@ -361,6 +369,21 @@ await t("resolveDefaultCalendar：失效（指向停用日历/不存在）回退
   assert.strictEqual(hit?.url, CAL_A, "停用日历不能当默认，应回退到第一个启用日历");
   const hit2 = resolveDefaultCalendar({ ...twoAcc, defaultCalendarUrl: "http://gone.test/" });
   assert.strictEqual(hit2?.url, CAL_A);
+});
+
+await t("resolveDefaultCalendar：url 失效时回退 defaultAccountId 账户的第一个启用日历", () => {
+  // 默认账户必须是**第二个**启用账户才有区分度（否则与「回退第一个启用账户」撞结果）
+  const a1 = mkAccount({ id: "acc-1", name: "一", calendars: [mkCal({ url: CAL_A })] });
+  const a2 = mkAccount({ id: "acc-2", name: "二", serverUrl: "http://dav-b.test/", calendars: [mkCal({ url: CAL_B })] });
+  const hit = resolveDefaultCalendar({ accounts: [a1, a2], defaultAccountId: "acc-2" });
+  assert.strictEqual(hit?.url, CAL_B, "应取默认账户的日历，而不是第一个启用账户的");
+  const hit2 = resolveDefaultCalendar({ accounts: [a1, a2], defaultCalendarUrl: CAL_A + "off/", defaultAccountId: "acc-2" });
+  assert.strictEqual(hit2?.url, CAL_B, "url 失效也应落回默认账户");
+});
+
+await t("resolveDefaultCalendar：defaultAccountId 指向停用账户 ⇒ 继续回退第一个启用账户", () => {
+  const hit = resolveDefaultCalendar({ ...twoAcc, defaultCalendarUrl: undefined, defaultAccountId: "acc-b" });
+  assert.strictEqual(hit?.url, CAL_A, "停用账户不能当默认，回退第一个启用账户");
 });
 
 await t("resolveDefaultCalendar：全部停用 ⇒ undefined（调用方要能兜住）", () => {
@@ -519,6 +542,8 @@ const htmlSettings = {
       ...mkAccount({
         id: "acc-a",
         name: "公司",
+        attachSizeMaxMB: 7,
+        icsSizeMaxMB: 14,
         calendars: [
           { url: CAL_A, displayName: "工作", enabled: true, supportsEvent: true, supportsTodo: true, eventColor: "#3b82f6", todoColor: "#f97316" },
           { url: CAL_A + "off/", displayName: "停用的", enabled: false, supportsEvent: true, supportsTodo: true, eventColor: "#3b82f6", todoColor: "#f97316" }
@@ -539,8 +564,7 @@ const htmlSettings = {
   ],
   syncIntervalMin: 10,
   enableReminders: true,
-  attachSizeMaxMB: 5,
-  icsSizeMaxMB: 10
+  defaultAccountId: "acc-a"
 };
 
 const doc = new JSDOM(`<body>${settingsHtml(htmlSettings, false, "acc-a")}</body>`).window.document;
@@ -594,12 +618,28 @@ await t("停用账户卡片带 is-off（置灰）", () => {
   assert.ok(!doc.querySelector('.caldav-acc[data-acc="acc-a"]').classList.contains("is-off"));
 });
 
-await t("全局段控件在位（同步间隔/默认日历/附件上限）", () => {
+await t("全局段控件在位（同步间隔/默认账户/默认日历）", () => {
   assert.ok(doc.querySelector('[data-s="interval"]'), "同步间隔");
+  assert.ok(doc.querySelector('[data-s="defaultAcc"]'), "默认账户下拉（2026-10-26 两级化）");
   assert.ok(doc.querySelector('[data-s="defaultCal"]'), "默认日历下拉");
-  assert.ok(doc.querySelector('[data-s="attachMax"]'), "附件上限");
-  assert.ok(doc.querySelector('[data-s="icsMax"]'), "ICS 上限");
   assert.ok(doc.querySelector('[data-s="reminders"]'), "提醒开关");
+});
+
+await t("附件/ICS 上限输入移进展开账户卡（服务器特性随账户走）且值取账户", () => {
+  const am = doc.querySelector("[data-s='attachMax']");
+  const im = doc.querySelector("[data-s='icsMax']");
+  assert.ok(am && im, "两个上限输入应在位");
+  assert.ok(am.closest(".caldav-acc"), "应在账户卡内（展开卡 body），不再是全局段");
+  assert.strictEqual(doc.querySelectorAll("[data-s='attachMax']").length, 1, "只有展开卡渲染这一份");
+  assert.strictEqual(am.value, "7", "附件上限应取 acc-a 的账户值");
+  assert.strictEqual(im.value, "14", "ICS 上限应取 acc-a 的账户值");
+});
+
+await t("账户内第三段标题是「策略」且默认账户下拉只含启用账户", () => {
+  const titles = Array.from(doc.querySelectorAll(".caldav-acc-body .caldav-acc-subtitle")).map((e) => e.textContent.trim());
+  assert.ok(titles.some((t) => t.includes("策略")), "账户内「同步」段应改名「策略」，实际 " + JSON.stringify(titles));
+  const accOpts = Array.from(doc.querySelector('[data-s="defaultAcc"]').querySelectorAll("option")).map((o) => o.getAttribute("value")).filter(Boolean);
+  assert.deepStrictEqual(accOpts, ["acc-a"], "默认账户下拉只列启用账户");
 });
 
 await t("默认日历下拉只含启用账户的启用日历", () => {

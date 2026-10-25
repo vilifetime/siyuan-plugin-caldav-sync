@@ -1,8 +1,9 @@
 /**
  * 设置面板：多日历账户（2026-10-25 重构）。
  *
- * 结构：顶部「账户」段（卡片列表 + 手风琴展开「服务器 / 日历 / 同步」三段，
- * 这三段已从全局下沉到账户）+ 全局段（同步间隔 / 附件上限 / 提醒 / 日记 /
+ * 结构：顶部「账户」段（卡片列表 + 手风琴展开「服务器 / 日历 / 策略」三段，
+ * 服务器/日历/同步/附件上限已下沉到账户——附件与 ICS 上限是服务器特性，
+ * 2026-10-26 随账户走）+ 全局段（同步间隔 / 默认账户与日历 / 提醒 / 日记 /
  * 本地数据）。老单账户数据由 core/types.ts 的 migrateToAccounts() 迁进
  * accounts[0]，本页读写都走账户。
  */
@@ -13,7 +14,9 @@ import type { CalAccount, CalCalendar, CalSettings } from "../core/types";
 import {
   calEventColor,
   calTodoColor,
+  enabledAccounts,
   enabledCalendars,
+  findCalendarByUrl,
   migrateToAccounts,
   newAccountId,
   normalizeCalendarColors,
@@ -147,6 +150,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       acc.conflict = (q("select[data-s='conflict']")?.value || "server") as CalAccount["conflict"];
       acc.pastDays = Math.max(7, +(q("input[data-s='past']")?.value || "0") || 90);
       acc.futureDays = Math.max(30, +(q("input[data-s='future']")?.value || "0") || 370);
+      // 附件/ICS 体积上限（MB）：服务器特性，账户级。留空或非法 → 回退默认（与 ics.ts 常量一致）
+      acc.attachSizeMaxMB = Math.max(1, +(q("input[data-s='attachMax']")?.value || "0") || 5);
+      acc.icsSizeMaxMB = Math.max(1, +(q("input[data-s='icsMax']")?.value || "0") || 10);
       // 勾选的日历
       card.querySelectorAll<HTMLElement>(".caldav-acc-cal").forEach((row) => {
         const c = acc.calendars[+row.dataset.idx!];
@@ -479,14 +485,13 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         }
         // ── 全局字段 ──
         s.syncIntervalMin = Math.max(0, +($("input[data-s='interval']")?.value || "0") || 0);
-        // 附件/ICS 体积上限（MB）。留空或非法 → 回退默认值（与 ics.ts 的 *_MB 常量一致）
-        s.attachSizeMaxMB = Math.max(1, +($("input[data-s='attachMax']")?.value || "0") || 5);
-        s.icsSizeMaxMB = Math.max(1, +($("input[data-s='icsMax']")?.value || "0") || 10);
         const wasRemindOn = s.enableReminders;
         s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement | null)?.checked;
         s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement | null)?.checked;
-        // 默认日历：显式选择（「自动」= 空串）。选中的日历被停用/删掉时
-        // resolveDefaultCalendar() 会回退第一个启用账户的第一个启用日历
+        // 默认账户/日历：两级选择（「自动」= 空串）。选中的日历被停用/删掉时
+        // resolveDefaultCalendar() 会回退默认账户 → 第一个启用账户的第一个启用日历
+        const daSel = $("select[data-s='defaultAcc']")?.value || "";
+        s.defaultAccountId = daSel || undefined;
         const dcSel = $("select[data-s='defaultCal']")?.value || "";
         s.defaultCalendarUrl = dcSel || undefined;
         await ctx.store.persist();
@@ -523,8 +528,30 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       bindRemind();
       bindPurge();
       bindSave();
+      bindDefaultPicker();
       // 每个账户 body 里的取色药丸各自绑定（事件委托在 innerHTML 重渲后会丢）
       el.querySelectorAll<HTMLElement>("[data-cals]").forEach(bindColorPills);
+    }
+
+    /** 默认账户 → 默认日历两级联动：换账户后日历下拉重填为该账户的启用日历（只改 options，不重渲整页） */
+    function bindDefaultPicker(): void {
+      const accSel = el.querySelector<HTMLSelectElement>("select[data-s='defaultAcc']");
+      const calSel = el.querySelector<HTMLSelectElement>("select[data-s='defaultCal']");
+      accSel?.addEventListener("change", () => {
+        if (!calSel) return;
+        const acc = s.accounts.find((a) => a.id === accSel.value && a.enabled);
+        const cals = acc ? (acc.calendars || []).filter((c) => c.enabled) : enabledCalendars(s);
+        // 原默认日历若仍在新账户的列表里就保持选中，否则回落「自动」
+        const keep = !!s.defaultCalendarUrl && cals.some((c) => c.url === s.defaultCalendarUrl);
+        calSel.innerHTML =
+          `<option value="" ${keep ? "" : "selected"}>自动（所选账户的第一个启用日历）</option>` +
+          cals
+            .map(
+              (c) =>
+                `<option value="${escape(c.url)}" ${s.defaultCalendarUrl === c.url ? "selected" : ""}>${escape(c.displayName)}</option>`
+            )
+            .join("");
+      });
     }
 
     if (ctx.store.secretBroken) {
@@ -572,42 +599,37 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
 
   <div class="caldav-section caldav-section--card">
     <div class="caldav-section-title"><span class="caldav-section-icon">${icons.sync}</span>同步</div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">自动同步间隔（分钟，0 关闭；全局一个周期，会同步所有启用账户）</label>
+      <input class="caldav-input" type="number" min="0" data-s="interval" value="${s.syncIntervalMin}"/>
+    </div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">自动同步间隔（分钟，0 关闭；全局一个周期，会同步所有启用账户）</label>
-        <input class="caldav-input" type="number" min="0" data-s="interval" value="${s.syncIntervalMin}"/>
-      </div>
-      <div class="caldav-field">
-        <label class="caldav-field-label">新建条目的默认日历</label>
+        <label class="caldav-field-label">新建条目的默认账户</label>
         <div class="caldav-input-wrap">
-          <select class="caldav-input" data-s="defaultCal">
-            <option value="" ${!s.defaultCalendarUrl ? "selected" : ""}>自动（第一个启用账户的第一个启用日历）</option>
-            ${enabledCalendars(s)
+          <select class="caldav-input" data-s="defaultAcc">
+            <option value="" ${!s.defaultAccountId ? "selected" : ""}>自动（第一个启用账户）</option>
+            ${enabledAccounts(s)
               .map(
-                (c) =>
-                  `<option value="${escape(c.url)}" ${s.defaultCalendarUrl === c.url ? "selected" : ""}>${escape(c.displayName)}</option>`
+                (a) =>
+                  `<option value="${escape(a.id)}" ${s.defaultAccountId === a.id ? "selected" : ""}>${escape(a.name)}</option>`
               )
               .join("")}
           </select>
           <span class="caldav-input-suffix">${icons.chevron}</span>
         </div>
       </div>
-    </div>
-    <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">附件大小限制（MB）</label>
-        <input class="caldav-input" type="number" min="1" data-s="attachMax" value="${s.attachSizeMaxMB ?? 5}"/>
-      </div>
-      <div class="caldav-field">
-        <label class="caldav-field-label">单个ICS文件限制（MB）</label>
-        <input class="caldav-input" type="number" min="1" data-s="icsMax" value="${s.icsSizeMaxMB ?? 10}"/>
+        <label class="caldav-field-label">新建条目的默认日历</label>
+        <div class="caldav-input-wrap">
+          <select class="caldav-input" data-s="defaultCal">
+            <option value="" ${!s.defaultCalendarUrl ? "selected" : ""}>自动（所选账户的第一个启用日历）</option>
+            ${defaultCalOptions(s)}
+          </select>
+          <span class="caldav-input-suffix">${icons.chevron}</span>
+        </div>
       </div>
     </div>
-    <p class="caldav-set-hint">
-      待办附件以 base64 内联进日历条目同步：附件大小限制是单个文件的上限，超过直接在编辑时拒绝；
-      单个 ICS 文件限制是整条日历数据（含全部附件）的上限，超过服务器会拒绝（HTTP 413）。
-      默认 5 / 10 对齐 Radicale 的默认上限，自己的服务器上限更大就把数值调大。
-    </p>
   </div>
 
   <div class="caldav-section caldav-section--card">
@@ -658,6 +680,24 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
   <button class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} 取消</button>
   <button class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} 保存</button>
 </div>`;
+}
+
+/**
+ * 「新建条目的默认日历」下拉的选项：默认账户（defaultAccountId）的启用日历；
+ * 没选账户时列全部启用日历。当前默认日历即使不在列表里（属于其他账户，或账户
+ * 刚被停用）也要补回 —— 和编辑器日历下拉同一个兼容思路，保证原值可见、可选。
+ */
+function defaultCalOptions(s: CalSettings): string {
+  const acc = enabledAccounts(s).find((a) => a.id === s.defaultAccountId);
+  const base = acc ? (acc.calendars || []).filter((c) => c.enabled) : enabledCalendars(s);
+  const cur = s.defaultCalendarUrl ? findCalendarByUrl(s, s.defaultCalendarUrl) : undefined;
+  const list = cur && !base.some((c) => c.url === cur.url) ? [...base, cur] : base;
+  return list
+    .map(
+      (c) =>
+        `<option value="${escape(c.url)}" ${s.defaultCalendarUrl === c.url ? "selected" : ""}>${escape(c.displayName)}</option>`
+    )
+    .join("");
 }
 
 /** 一张账户卡片（手风琴：点头部展开「服务器 / 日历 / 同步」三段） */
@@ -762,7 +802,7 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
     <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.calendar}</span>日历</div>
     <div class="caldav-acc-cals" data-cals>${calChecksHtml(a.calendars || [])}</div>
 
-    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.sync}</span>同步</div>
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.sync}</span>策略</div>
     <div class="caldav-field-row">
       <div class="caldav-field">
         <label class="caldav-field-label">冲突策略</label>
@@ -783,6 +823,21 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
         <input class="caldav-input" type="number" min="30" data-s="future" value="${a.futureDays}"/>
       </div>
     </div>
+    <div class="caldav-field-row">
+      <div class="caldav-field">
+        <label class="caldav-field-label">附件大小限制（MB）</label>
+        <input class="caldav-input" type="number" min="1" data-s="attachMax" value="${a.attachSizeMaxMB ?? 5}"/>
+      </div>
+      <div class="caldav-field">
+        <label class="caldav-field-label">单个ICS文件限制（MB）</label>
+        <input class="caldav-input" type="number" min="1" data-s="icsMax" value="${a.icsSizeMaxMB ?? 10}"/>
+      </div>
+    </div>
+    <p class="caldav-set-hint">
+      附件大小限制是单个文件的上限，超过直接在编辑时拒绝；单个 ICS 文件限制是整条日历数据（含全部附件）的上限，
+      超过服务器会拒绝（HTTP 413）。这两项是**服务器特性**（随账户走）：默认 5 / 10 对齐 Radicale 的默认上限，
+      iCloud / 自己的服务器上限更大就把数值调大。
+    </p>
   </div>`
     : ""}
 </div>`;

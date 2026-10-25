@@ -96,7 +96,7 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
       ctx.store.settings.categories?.length ? ctx.store.settings.categories : DEFAULT_CATEGORIES,
       !!ctx.store.settings.categoryMulti,
       isNew,
-      attachSizeMaxBytes(ctx.store.settings),
+      attachSizeMaxBytes(accountOfUrl(ctx.store.settings, it.calendarUrl)),
       isIcloud
     )}</div>`,
     width: mobile ? "100vw" : isTodo ? "560px" : "520px",
@@ -804,7 +804,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
     // 提示语实时刷新：开弹窗后的上限快照会过期（设置里改大后旧弹窗仍显示老数字），
     // 每次挑选文件时按当前设置重写，保证显示与校验一致。
     const refreshHint = (): void => {
-      if (hintEl) hintEl.innerHTML = attachHintHtml(attachSizeMaxBytes(ctx.store.settings), isIcloud);
+      if (hintEl) hintEl.innerHTML = attachHintHtml(attachSizeMaxBytes(accountOfUrl(ctx.store.settings, it.calendarUrl)), isIcloud);
     };
     const setMsg = (text: string, isErr = false): void => {
       if (!msgEl) return;
@@ -893,7 +893,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       //    editorHtml 渲染时的上限是开弹窗那一刻的快照，用户在设置里改大上限后，
       //    旧弹窗的提示语还挂着老数字，看着就像设置没生效。挑选这一刻按当前
       //    设置重写提示语，保证「显示的上限」与「实际校验的上限」永远一致。
-      const maxBytes = attachSizeMaxBytes(ctx.store.settings);
+      const maxBytes = attachSizeMaxBytes(accountOfUrl(ctx.store.settings, it.calendarUrl));
       refreshHint();
       if (file.size > maxBytes) {
         setMsg(
@@ -1443,7 +1443,7 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
       : it;
   const icsDraft = itemToEditedICS(draftForSize);
   const icsBytes = new TextEncoder().encode(icsDraft).length;
-  const icsMax = icsSizeMaxBytes(ctx.store.settings);
+  const icsMax = icsSizeMaxBytes(accountOfUrl(ctx.store.settings, it.calendarUrl));
   if (icsBytes > icsMax) {
     const bigNames = (it.attachments || [])
       .filter((a) => a.b64)

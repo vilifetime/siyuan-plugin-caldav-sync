@@ -77,7 +77,7 @@ check("提示语显示默认回退上限 5.0 MB", hintEl.textContent.includes("�
 
 console.log("\n大文件确认流：设置改大后放行 + 提示语实时刷新（雄哥报的场景）");
 
-plugin.store.settings.attachSizeMaxMB = 7; // 等价于设置弹窗保存（同一对象）
+plugin.store.settings.accounts[0].attachSizeMaxMB = 7; // 等价于设置弹窗保存（2026-10-26 起上限在账户上）
 pick("超大文件.jpg", 6 * 1024 * 1024);
 await settle();
 const bar = attach.querySelector("[data-attach-confirm]");

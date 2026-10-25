@@ -611,8 +611,8 @@ console.log("\n附件：大文件确认流（只说一遍 / 三态 / 提示语�
   check(
     "挑选文件时按当前设置实时刷新提示语（在校验之前）",
     // ⚠️ 仓库是 CRLF：两行之间的间隔用 \s*，别写死 \n（本项目踩过的坑）
-    /const maxBytes = attachSizeMaxBytes\(ctx\.store\.settings\);\s*refreshHint\(\);/.test(editorSrc) &&
-      /hintEl\.innerHTML = attachHintHtml\(attachSizeMaxBytes\(ctx\.store\.settings\), isIcloud\)/.test(editorSrc),
+    /const maxBytes = attachSizeMaxBytes\(accountOfUrl\(ctx\.store\.settings, it\.calendarUrl\)\);\s*refreshHint\(\);/.test(editorSrc) &&
+      /hintEl\.innerHTML = attachHintHtml\(attachSizeMaxBytes\(accountOfUrl\(ctx\.store\.settings, it\.calendarUrl\)\), isIcloud\)/.test(editorSrc),
     "开弹窗后的快照会过期：设置里 5 改 7，旧弹窗仍显示 5.0 MB，就像设置没生效"
   );
 }
@@ -898,11 +898,8 @@ console.log("\n附件体积硬上限（设置项：附件大小限制 / 单个IC
     "单文件上限挡不住多个 4MB 凑 12MB；默认值对齐 Radicale 的 max_resource_size"
   );
   check(
-    "设置项有两个上限字段（CalSettings + DEFAULT_SETTINGS）",
-    /attachSizeMaxMB\?: number/.test(typesSrc) &&
-      /icsSizeMaxMB\?: number/.test(typesSrc) &&
-      /attachSizeMaxMB: 5/.test(typesSrc) &&
-      /icsSizeMaxMB: 10/.test(typesSrc),
+    "设置项有两个上限字段（2026-10-26 起下沉到 CalAccount：服务器特性随账户走）",
+    /attachSizeMaxMB\?: number/.test(typesSrc) && /icsSizeMaxMB\?: number/.test(typesSrc),
     "缺字段 → 设置弹窗存不进去、解析器取不到值"
   );
   check(
@@ -912,12 +909,12 @@ console.log("\n附件体积硬上限（设置项：附件大小限制 / 单个IC
   );
   check(
     "挑选时超过单文件上限直接拒绝（不给确认机会，上限取自设置）",
-    /const maxBytes = attachSizeMaxBytes\(ctx\.store\.settings\)[\s\S]{0,200}?if \(file\.size > maxBytes\)[\s\S]{0,500}?return;/.test(editorSrc),
+    /const maxBytes = attachSizeMaxBytes\(accountOfUrl\(ctx\.store\.settings, it\.calendarUrl\)\)[\s\S]{0,200}?if \(file\.size > maxBytes\)[\s\S]{0,500}?return;/.test(editorSrc),
     "只警告不硬拦 → 用户点一下确认就造出一个永远 413 的待办（2026-10-15 实测）"
   );
   check(
     "保存前按真实序列化结果卡总账（itemToEditedICS，上限取自设置）",
-    /const icsDraft = itemToEditedICS\(draftForSize\);[\s\S]{0,700}?const icsMax = icsSizeMaxBytes\(ctx\.store\.settings\)[\s\S]{0,200}?if \(icsBytes > icsMax\)/.test(editorSrc),
+    /const icsDraft = itemToEditedICS\(draftForSize\);[\s\S]{0,700}?const icsMax = icsSizeMaxBytes\(accountOfUrl\(ctx\.store\.settings, it\.calendarUrl\)\)[\s\S]{0,200}?if \(icsBytes > icsMax\)/.test(editorSrc),
     "不卡总账 → 多个中等附件叠加照样超限，保存成功但同步永远失败"
   );
   check(
@@ -933,17 +930,16 @@ console.log("\n附件体积硬上限（设置项：附件大小限制 / 单个IC
     "不传参 → 设置改了不生效，还是按默认值卡"
   );
   check(
-    "sync.ts 把 settings.icsSizeMaxMB 传进 putItem",
-    // 多账户（2026-10-25）：通道/凭据按账户取（channelOf/authOf），上限仍是全局设置
-    /putItem\(item, ics, this\.channelOf\(acc\), this\.authOf\(acc\), this\.store\.settings\.icsSizeMaxMB\)/.test(syncSrc),
+    "sync.ts 把账户的 icsSizeMaxMB 传进 putItem（2026-10-26 起上限是服务器特性，随账户走）",
+    /putItem\(item, ics, this\.channelOf\(acc\), this\.authOf\(acc\), acc\?\.icsSizeMaxMB\)/.test(syncSrc),
     "两个调用点（新建/编辑 + 412 覆盖）都要传，漏一个那条路径就失控"
   );
   check(
-    "设置弹窗有这两个输入框且保存时接线",
+    "设置弹窗有这两个输入框且保存时接线（写回展开账户）",
     /data-s="attachMax"/.test(settingsSrc) &&
       /data-s="icsMax"/.test(settingsSrc) &&
-      /s\.attachSizeMaxMB = Math\.max\(1/.test(settingsSrc) &&
-      /s\.icsSizeMaxMB = Math\.max\(1/.test(settingsSrc),
+      /acc\.attachSizeMaxMB = Math\.max\(1/.test(settingsSrc) &&
+      /acc\.icsSizeMaxMB = Math\.max\(1/.test(settingsSrc),
     "只加 UI 不保存 ＝ 白改"
   );
   check(

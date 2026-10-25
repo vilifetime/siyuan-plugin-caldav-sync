@@ -4,7 +4,7 @@
  * - 序列化时在原 ICS 基础上替换目标组件，尽量保留本插件不管理的属性（ORGANIZER / ATTENDEE 等）
  * - 写出的时间统一为 UTC（Z 后缀），避免时区歧义
  */
-import type { Alarm, CalAttachment, CalItem, CalKind, CalSettings, LocalStamp, Recurrence } from "./types";
+import type { Alarm, CalAttachment, CalItem, CalKind, LocalStamp, Recurrence } from "./types";
 import {
   addDays, dateStampOfMs, isDateOnly, parseLocalStamp, stampOfMs, zoneOffsetMs, weekdayIndexOfCode, padDate
 } from "./date";
@@ -37,13 +37,16 @@ export function mbToBytes(mb: number | undefined, fallbackMB: number): number {
   return v * 1024 * 1024;
 }
 
-/** 生效的单附件上限（字节）——设置里可改，老数据缺省回默认 5MB */
-export function attachSizeMaxBytes(s?: CalSettings | null): number {
+/**
+ * 生效的单附件上限（字节）——**账户级**设置（服务器特性，2026-10-26 下沉），
+ * 老数据缺省回默认 5MB。入参传 CalAccount（或任何带 attachSizeMaxMB 的对象）。
+ */
+export function attachSizeMaxBytes(s?: { attachSizeMaxMB?: number } | null): number {
   return mbToBytes(s?.attachSizeMaxMB, ATTACH_SIZE_MAX_MB);
 }
 
-/** 生效的整份 ICS 上限（字节）——设置里可改，老数据缺省回默认 10MB */
-export function icsSizeMaxBytes(s?: CalSettings | null): number {
+/** 生效的整份 ICS 上限（字节）——账户级设置，老数据缺省回默认 10MB */
+export function icsSizeMaxBytes(s?: { icsSizeMaxMB?: number } | null): number {
   return mbToBytes(s?.icsSizeMaxMB, ICS_SIZE_MAX_MB);
 }
 

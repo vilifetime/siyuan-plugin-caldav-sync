@@ -535,7 +535,7 @@ export class SyncEngine {
         // 托管形态是苹果官方路径。非 iCloud 服务器直接跳过（return 无副作用）。
         await this.uploadIcloudAttachments(item);
         const ics = item.raw ? itemToEditedICS(item) : itemToNewICS(item);
-        const r = await putItem(item, ics, this.channelOf(acc), this.authOf(acc), this.store.settings.icsSizeMaxMB);
+        const r = await putItem(item, ics, this.channelOf(acc), this.authOf(acc), acc?.icsSizeMaxMB);
         item.etag = r.etag;
         item.dirty = false;
         item.raw = item.raw || ics; // 新建后保留原文
@@ -552,7 +552,7 @@ export class SyncEngine {
               // 与上面同一判据：有原文才走增量改写，否则整份重拼会丢掉
               // 服务端的 ATTACH / ORGANIZER / VTIMEZONE 等未管理属性。
               const ics = item.raw ? itemToEditedICS(item) : itemToNewICS(item);
-              const r = await putItem(item, ics, this.channelOf(acc), this.authOf(acc), this.store.settings.icsSizeMaxMB);
+              const r = await putItem(item, ics, this.channelOf(acc), this.authOf(acc), acc?.icsSizeMaxMB);
               item.etag = r.etag || keep;
               item.dirty = false;
               report.uploaded++;
@@ -619,7 +619,7 @@ export class SyncEngine {
           const altHref = altHrefOf(oldHref, item.uid);
           try {
             const ics = item.raw ? itemToEditedICS(item) : itemToNewICS(item);
-            const r = await putItem({ ...item, href: altHref, etag: undefined }, ics, this.channelOf(acc), this.authOf(acc), this.store.settings.icsSizeMaxMB);
+            const r = await putItem({ ...item, href: altHref, etag: undefined }, ics, this.channelOf(acc), this.authOf(acc), acc?.icsSizeMaxMB);
             item.href = altHref;
             item.etag = r.etag;
             item.dirty = false;
@@ -719,7 +719,7 @@ export class SyncEngine {
         attachments: item.attachments.filter((a) => !(a.b64 || "").trim())
       };
       const ics0 = item.raw ? itemToEditedICS(draft) : itemToNewICS(draft);
-      const r0 = await putItem(item, ics0, this.channelOf(acc), this.authOf(acc), this.store.settings.icsSizeMaxMB);
+      const r0 = await putItem(item, ics0, this.channelOf(acc), this.authOf(acc), acc?.icsSizeMaxMB);
       item.etag = r0.etag;
       item.raw = item.raw || ics0;
     }

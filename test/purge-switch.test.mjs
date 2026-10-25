@@ -80,9 +80,24 @@ function mkStore(items, calendars, serverUrl = NAS, extraSettings = {}) {
     saveData: async () => {}
   };
   const st = new storeMod.CalStore(env);
-  st.settings.serverUrl = serverUrl;
-  st.settings.calendars = calendars;
-  st.settings.purgeOtherServerOnSwitch = false;
+  // 多账户（2026-10-25）： calendars/serverUrl 收进 accounts[0]
+  st.settings.accounts = [
+    {
+      id: "a1",
+      name: "账户",
+      enabled: true,
+      serverUrl,
+      username: "u",
+      password: "p",
+      calendarPath: "",
+      serverType: "caldav",
+      channel: "auto",
+      conflict: "server",
+      pastDays: 90,
+      futureDays: 370,
+      calendars
+    }
+  ];
   Object.assign(st.settings, extraSettings);
   for (const it of items) st.put(it);
   return st;
@@ -242,16 +257,17 @@ await t("没有备份时恢复返回 0（不抛错）", async () => {
 
 await t("清理后备份落盘在数据顶层（不在 settings 里，避免污染配置备份）", async () => {
   let saved = null;
-  const st = new storeMod.CalStore({
+  const st = mkStore([mkItem("c", OLD_CAL)], [cal(NAS_CAL, true)]);
+  // 换成带 saveData 的环境再清理一次，验证落盘结构
+  const st2 = new storeMod.CalStore({
     loadData: async () => undefined,
     saveData: async (d) => {
       saved = d;
     }
   });
-  st.settings.serverUrl = NAS;
-  st.settings.calendars = [cal(NAS_CAL, true)];
-  st.put(mkItem("c", OLD_CAL));
-  await st.purgeOrphanItems();
+  st2.settings.accounts = st.settings.accounts;
+  for (const it of st.getAll()) st2.put(it);
+  await st2.purgeOrphanItems();
   assert.ok(saved, "应已落盘");
   assert.ok(saved.purgeBackup, "purgeBackup 应在顶层");
   assert.strictEqual(saved.purgeBackup.count, 1);
@@ -259,13 +275,7 @@ await t("清理后备份落盘在数据顶层（不在 settings 里，避免污�
 });
 
 await t("重新加载后备份仍在（重启也能恢复）", async () => {
-  const st1 = new storeMod.CalStore({
-    loadData: async () => undefined,
-    saveData: async () => {}
-  });
-  st1.settings.serverUrl = NAS;
-  st1.settings.calendars = [cal(NAS_CAL, true)];
-  st1.put(mkItem("c", OLD_CAL));
+  const st1 = mkStore([mkItem("c", OLD_CAL)], [cal(NAS_CAL, true)]);
   await st1.purgeOrphanItems();
 
   const st2 = new storeMod.CalStore({
@@ -279,52 +289,43 @@ await t("重新加载后备份仍在（重启也能恢复）", async () => {
 
 // ================================================================ ④ 开关入口与安全阀
 
-console.log("[purge] 开关入口与安全阀");
+console.log("[purge] 删账户清理（purgeAccountItems，2026-10-25 取代原「切换服务器清理」开关）");
 
-await t("开关关闭 → purgeOrphansIfEnabled 什么都不做", async () => {
+await t("删账户清理：该账户全部本地条目被清掉（含停用日历的）", async () => {
+  const st = mkStore(
+    [mkItem("a", NAS_CAL), mkItem("b", NAS_CAL2), mkItem("c", OLD_CAL)],
+    [cal(NAS_CAL, true), cal(NAS_CAL2, false)]
+  );
+  const n = await st.purgeAccountItems("a1");
+  assert.strictEqual(n, 2, "只清该账户的两个日历（含已停用的 NAS_CAL2）");
+  assert.strictEqual(st.getAll().length, 1, "别的服务器的条目不动");
+});
+
+await t("删账户清理：留下可恢复的备份", async () => {
   const st = mkStore([mkItem("a", NAS_CAL), mkItem("c", OLD_CAL)], [cal(NAS_CAL, true)]);
-  assert.strictEqual(await st.purgeOrphansIfEnabled(), 0);
+  await st.purgeAccountItems("a1");
+  assert.ok(st.purgeBackup, "应有备份");
+  assert.strictEqual(st.purgeBackup.count, 1);
+  assert.strictEqual(st.purgeBackup.removedServers, "账户");
+  const n = await st.restorePurgedItems();
+  assert.strictEqual(n, 1);
   assert.strictEqual(st.getAll().length, 2);
 });
 
-await t("开关打开 + 配置已对齐 → 清理孤儿", async () => {
-  const st = mkStore([mkItem("a", NAS_CAL), mkItem("c", OLD_CAL)], [cal(NAS_CAL, true)], NAS, {
-    purgeOtherServerOnSwitch: true
-  });
-  assert.strictEqual(await st.purgeOrphansIfEnabled(), 1);
+await t("删账户清理：账户不存在 / 无日历时返回 0，不动数据", async () => {
+  const st = mkStore([mkItem("a", NAS_CAL)], [cal(NAS_CAL, true)]);
+  assert.strictEqual(await st.purgeAccountItems("no-such"), 0);
+  assert.strictEqual(st.getAll().length, 1);
+  st.settings.accounts[0].calendars = [];
+  assert.strictEqual(await st.purgeAccountItems("a1"), 0);
   assert.strictEqual(st.getAll().length, 1);
 });
 
-await t("安全阀：启用日历还指着旧服务器 → 一条都不清", async () => {
-  // 用户改了 serverUrl 但还没重新「发现日历」——此时清理会误删正在用的数据
-  const st = mkStore([mkItem("a", OLD_CAL), mkItem("c", NAS_CAL)], [cal(OLD_CAL, true)], NAS, {
-    purgeOtherServerOnSwitch: true
-  });
-  assert.strictEqual(await st.purgeOrphansIfEnabled(), 0, "配置未对齐时必须跳过");
-  assert.strictEqual(st.getAll().length, 2);
-});
-
-await t("安全阀：serverUrl 为空 → 跳过", async () => {
-  const st = mkStore([mkItem("a", NAS_CAL), mkItem("c", OLD_CAL)], [cal(NAS_CAL, true)], "", {
-    purgeOtherServerOnSwitch: true
-  });
-  assert.strictEqual(await st.purgeOrphansIfEnabled(), 0);
-});
-
-await t("安全阀：一个启用日历都没有 → 跳过", async () => {
-  const st = mkStore([mkItem("a", NAS_CAL)], [cal(NAS_CAL, false)], NAS, {
-    purgeOtherServerOnSwitch: true
-  });
-  assert.strictEqual(await st.purgeOrphansIfEnabled(), 0);
-});
-
-await t("iCloud → 自建服务器切换：iCloud 的条目被认出为孤儿", async () => {
-  const st = mkStore([mkItem("x", ICLOUD_CAL), mkItem("y", NAS_CAL)], [cal(NAS_CAL, true)], NAS, {
-    purgeOtherServerOnSwitch: true
-  });
+await t("iCloud → 自建服务器切换：iCloud 的条目被认出为孤儿（orphanItems 判据不变）", async () => {
+  const st = mkStore([mkItem("x", ICLOUD_CAL), mkItem("y", NAS_CAL)], [cal(NAS_CAL, true)], NAS);
   const orphans = st.orphanItems().map((i) => i.uid);
   assert.deepStrictEqual(orphans, ["x"]);
-  assert.strictEqual(await st.purgeOrphansIfEnabled(), 1);
+  assert.strictEqual(await st.purgeOrphanItems(), 1);
 });
 
 // ================================================================ ⑤ 源码级约束
@@ -340,9 +341,12 @@ await t("备份条目快照不得放进 CalSettings（会污染 Obsidian 配置�
 
 await t("设置页必须提供「立即清理」与「恢复」两个入口", () => {
   const src = fs.readFileSync(path.join(root, "src/ui/settings-dialog.ts"), "utf8");
+  const srcStore = fs.readFileSync(path.join(root, "src/core/store.ts"), "utf8");
   assert.ok(/data-action="purge-now"/.test(src), "应有「立即清理」按钮");
   assert.ok(/data-action="purge-restore"/.test(src), "应有「恢复」按钮");
-  assert.ok(/purgeOtherServerOnSwitch/.test(src), "应读写开关字段");
+  // 多账户（2026-10-25）：「切换服务器清理」开关已废除，改由删账户时显式选择
+  assert.ok(/purgeAccountItems/.test(srcStore), "store 应有 purgeAccountItems");
+  assert.ok(!/purgeOtherServerOnSwitch/.test(src), "开关字段应已移除");
   // 删注释再查：注释里会写「不用 confirm()」这类说明，不能误判
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   assert.ok(!/[^.\w]confirm\s*\(/.test(code), "删除类操作禁用 confirm()，用二次点击确认");

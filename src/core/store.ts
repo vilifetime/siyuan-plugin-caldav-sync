@@ -1,8 +1,8 @@
 /**
  * 本地存储与条目仓库：插件私有数据读写 + 内存索引 + 订阅
  */
-import type { CalAttachment, CalItem, CalSettings, PersistData, PurgeBackup } from "./types";
-import { DEFAULT_SETTINGS, normalizeCalendarColors } from "./types";
+import type { CalAttachment, CalAccount, CalItem, CalSettings, PersistData, PurgeBackup } from "./types";
+import { DEFAULT_SETTINGS, enabledCalendars, migrateToAccounts, normalizeCalendarColors } from "./types";
 import {
   adoptKeyring,
   decryptSecretDeep,
@@ -58,8 +58,8 @@ export class CalStore {
    * 抄走，那个文件明确只存配置不存条目。
    */
   purgeBackup?: PurgeBackup;
-  /** 磁盘上的原始密文：解密失败时用它回写，绝不把密文覆盖成空串 */
-  private rawCipher = "";
+  /** 磁盘上的原始密文（按账户 ID 索引）：解密失败时用它回写，绝不把密文覆盖成空串 */
+  private rawCiphers = new Map<string, string>();
   private listeners = new Set<() => void>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -69,8 +69,11 @@ export class CalStore {
     const data = (await this.env.loadData()) as PersistData | undefined;
     if (data) {
       this.settings = { ...JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), ...data.settings };
-      // 老数据：单一日历色 → eventColor + todoColor（不改变现有观感，见 types.ts）
-      normalizeCalendarColors(this.settings.calendars);
+      // 老数据：单账户平铺字段 → accounts[0]（幂等，见 types.ts）
+      migrateToAccounts(this.settings);
+      // 老数据：单一日历色 → eventColor + todoColor（不改变现有观感，见 types.ts）。
+      // 多账户后每个账户各跑一遍。
+      for (const acc of this.settings.accounts) normalizeCalendarColors(acc.calendars);
       this.items = new Map(
         (data.items || []).map((it) => {
           // 幂等自愈：历史上拉取回来的 etag 被服务端 XML 转义成 &quot;xxxx&quot; 残留在本地
@@ -96,63 +99,69 @@ export class CalStore {
       this.keyring = k;
       this.persistSoon();
     });
-    await this.unlockPassword();
+    await this.unlockPasswords();
   }
 
   /**
-   * 把持久化的密码还原为内存明文；旧明文会在下次保存时自动改写为密文。
+   * 把持久化的密码还原为内存明文（逐账户）；旧明文会在下次保存时自动改写为密文。
    *
-   * 三条铁律（缺一条就会「丢密码」，见 core/secret.ts 的说明）：
+   * 三条铁律（缺一条就会「丢密码」，见 core/secret.ts 的说明）——
+   * 多账户后每条都要对**每个账户**成立：
    *   1. 密钥未就绪（unavailable）**不算**密码损坏：不置 secretBroken、不写盘，等重试；
-   *   2. 解不开（mismatch）也只做提示，**原密文留在 rawCipher**，由 persist() 原样写回；
+   *   2. 解不开（mismatch）也只做提示，**原密文留在 rawCiphers**，由 persist() 原样写回；
    *   3. 内存 password 为空 ≠ 用户想清空密码 —— persist() 必须能区分这两种情况。
    */
-  private async unlockPassword(): Promise<void> {
-    const raw = this.settings.password || "";
-    this.rawCipher = raw;
-    if (!raw) return;
-    if (!isEncrypted(raw)) {
-      // 旧版明文：兼容使用，并立即回写一份密文
-      void this.persist();
-      return;
+  private async unlockPasswords(): Promise<void> {
+    for (const acc of this.settings.accounts) {
+      const raw = acc.password || "";
+      this.rawCiphers.set(acc.id, raw);
+      if (!raw) continue;
+      if (!isEncrypted(raw)) {
+        // 旧版明文：兼容使用，并立即回写一份密文
+        void this.persist();
+        continue;
+      }
+      // 逐层剥：兼容旧版把 enc:v3 当明文再包一层的套娃密文（升级过渡期）
+      const r = await decryptSecretDeep(raw);
+      if (r.ok) {
+        acc.password = r.value ?? "";
+        this.secretBroken = false;
+        this.pendingUnlock = false;
+        // v1/v2 密文的密钥是本机派生的，别的设备永远读不了 —— 既然本机解得开，
+        // 立刻重存为 v3（密钥随数据走），否则下次照样「丢密码」。
+        if (isLegacyEncrypted(raw)) void this.persist();
+        continue;
+      }
+      acc.password = "";
+      if (r.reason === "unavailable") {
+        // 密钥还没到位：别惊动用户，更别动磁盘上的密文，等 retryUnlock()
+        this.pendingUnlock = true;
+        console.warn("[caldav] 密钥尚未就绪，暂缓解密密码（磁盘上的密文保持原样）");
+        continue;
+      }
+      this.secretBroken = true;
+      // 写进 lastError，让 Dock 状态栏能直接显示出来（否则只在控制台，用户看不到）
+      this.lastError = `账户「${acc.name}」的密码密文与本地密钥不匹配（可能由另一台设备写入），请重新输入密码`;
+      console.warn("[caldav] 密码解密失败（密钥不匹配），请在设置中重新输入密码");
     }
-    // 逐层剥：兼容旧版把 enc:v3 当明文再包一层的套娃密文（升级过渡期）
-    const r = await decryptSecretDeep(raw);
-    if (r.ok) {
-      this.settings.password = r.value ?? "";
-      this.secretBroken = false;
-      this.pendingUnlock = false;
-      // v1/v2 密文的密钥是本机派生的，别的设备永远读不了 —— 既然本机解得开，
-      // 立刻重存为 v3（密钥随数据走），否则下次照样「丢密码」。
-      if (isLegacyEncrypted(raw)) void this.persist();
-      return;
-    }
-    this.settings.password = "";
-    this.pendingUnlock = r.reason === "unavailable";
-    this.secretBroken = !this.pendingUnlock;
-    if (this.pendingUnlock) {
-      // 密钥还没到位：别惊动用户，更别动磁盘上的密文，等 retryUnlock()
-      console.warn("[caldav] 密钥尚未就绪，暂缓解密密码（磁盘上的密文保持原样）");
-      return;
-    }
-    // 写进 lastError，让 Dock 状态栏能直接显示出来（否则只在控制台，用户看不到）
-    this.lastError = "密码密文与本地密钥不匹配（可能由另一台设备写入），请重新输入密码";
-    console.warn("[caldav] 密码解密失败（密钥不匹配），请在设置中重新输入密码");
   }
 
   /** 密钥就绪后重试解密（例如设备标识迟到，或数据由另一台设备同步过来） */
   async retryUnlock(): Promise<void> {
     if (!this.pendingUnlock) return;
-    await this.unlockPassword();
+    await this.unlockPasswords();
     if (!this.pendingUnlock) this.notify();
   }
 
 
-  /** 凭据是否可用（用于同步前检查与界面提示） */
+  /** 凭据是否可用（用于同步前检查与界面提示）；多账户下逐个检查，报第一个有问题的 */
   credentialsIssue(): string | undefined {
     if (this.pendingUnlock) return "密码待解密（密钥未就绪），稍后会自动重试";
     if (this.secretBroken) return "密码解不开（密文来自另一台设备或已换设备），请在设置中重新输入密码";
-    if (this.settings.serverUrl && !this.settings.password) return "未填写密码，请在设置中填写";
+    for (const acc of this.settings.accounts) {
+      if (!acc.enabled) continue;
+      if (acc.serverUrl && !acc.password) return `账户「${acc.name}」未填写密码，请在设置中填写`;
+    }
     return undefined;
   }
 
@@ -166,16 +175,24 @@ export class CalStore {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    const plain = this.settings.password || "";
+    const plain = (acc: CalAccount) => acc.password || "";
     // 内存里没有明文有两种完全不同的含义 ——
     //   a) 已解开密文、用户本来就没密码 → 存空；
-    //   b) 还没解开（密钥未就绪 / 密钥不匹配）→ **必须原样写回 rawCipher**。
+    //   b) 还没解开（密钥未就绪 / 密钥不匹配）→ **必须原样写回 rawCiphers**。
     // 曾经不区分，b 会把磁盘上的密文覆盖成空串，密文永久丢失（「总是丢密码」的放大器）。
+    // 多账户后按账户 ID 各写各的。
     const locked = this.secretBroken || this.pendingUnlock;
-    const password = plain ? await encryptSecret(plain) : locked ? this.rawCipher : "";
+    const accounts: CalAccount[] = [];
+    for (const acc of this.settings.accounts) {
+      const p = plain(acc);
+      accounts.push({
+        ...acc,
+        password: p ? await encryptSecret(p) : locked ? this.rawCiphers.get(acc.id) ?? "" : ""
+      });
+    }
     await this.env.saveData({
       keyring: getKeyring() || this.keyring,
-      settings: { ...this.settings, password },
+      settings: { ...this.settings, accounts },
       items: Array.from(this.items.values()),
       purgeBackup: this.purgeBackup,
       sync: {
@@ -241,10 +258,10 @@ export class CalStore {
   }
 
   /**
-   * 当前**真正在用**的服务器身份集合（来自启用日历的集合地址）。
+   * 当前**真正在用**的服务器身份集合（来自启用账户下启用日历的集合地址）。
    *
-   * 为什么不用 settings.serverUrl 直接判定：用户改了服务器地址但还没重新点
-   * 「发现日历」时，启用日历仍指向旧服务器 —— 那时按新地址判定就会把**旧服务器
+   * 为什么不用账户的 serverUrl 直接判定：用户改了服务器地址但还没重新点
+   * 「发现日历」时，日历 url 仍是旧地址 —— 那时按新地址判定就会把**旧服务器
    * 正在用的条目**当成「其他服务器的」清掉，那是真的丢数据。
    * 启用日历才是「插件此刻在跟谁同步」的权威依据。
    *
@@ -253,8 +270,7 @@ export class CalStore {
    */
   activeServerOrigins(): Set<string> {
     const out = new Set<string>();
-    for (const c of this.settings.calendars) {
-      if (!c.enabled) continue;
+    for (const c of enabledCalendars(this.settings)) {
       const o = serverOriginOf(c.url || "");
       if (o) out.add(o);
     }
@@ -317,26 +333,42 @@ export class CalStore {
   }
 
   /**
-   * 按开关决定是否清理孤儿条目。返回清理条数（0 = 没清或开关关着）。
+   * 清理**某个账户**在本地留下的全部条目（删账户时用，2026-10-25 多账户）。
    *
-   * 这是「切换服务器时清理旧条目」的唯一执行入口：
-   * 开关关着 → 什么都不做；开关开着 → 把不属于当前启用日历服务器的条目清掉。
+   * 与已废除的「切换服务器时清理旧条目」的区别：那时是插件按开关自动判「孤儿」，
+   * 多账户后「切换服务器」这个概念不复存在；现在由用户在删账户时**显式选择**，
+   * 判据也从「origin 不在启用集合」收紧为「calendarUrl 属于该账户的任一日历」——
+   * 包括已停用的日历，删账户就该删干净。
    *
-   * ⚠️ 守卫：**启用日历必须全部指向当前服务器地址**，否则一律跳过。
-   *    否则用户正在设置页里逐字输入新地址时（每敲一个字符都会存一次设置），
-   *    启用日历还指着旧服务器，会把**正要切过去的那台服务器的条目**当成孤儿清掉 ——
-   *    切回去时数据已经没了。配置还没对齐时不动，是这里最重要的安全阀。
+   * **只清本地，不动服务端** —— 服务器上的条目还在，重新加回账户照样能拉到。
+   * 清理前留备份（purgeBackup，可一键恢复）。
+   *
+   * 返回清理条数（0 = 没有可清的）。
    */
-  async purgeOrphansIfEnabled(): Promise<number> {
-    if (!this.settings.purgeOtherServerOnSwitch) return 0;
-    const active = this.activeServerOrigins();
-    if (!active.size) return 0;
-    const urlOrigin = serverOriginOf(this.settings.serverUrl || "");
-    if (!urlOrigin) return 0;
-    for (const o of active) {
-      if (o !== urlOrigin) return 0; // 配置未对齐（还没重新「发现日历」）→ 不动
+  async purgeAccountItems(accountId: string): Promise<number> {
+    const acc = this.settings.accounts.find((a) => a.id === accountId);
+    if (!acc) return 0;
+    const urls = new Set((acc.calendars || []).map((c) => c.url));
+    if (!urls.size) return 0;
+    const victims: CalItem[] = [];
+    for (const it of this.items.values()) {
+      if (urls.has(it.calendarUrl)) victims.push(it);
     }
-    return this.purgeOrphanItems();
+    if (!victims.length) return 0;
+    this.purgeBackup = {
+      at: new Date().toISOString(),
+      keptServer: (this.settings.accounts.filter((a) => a.id !== accountId).map((a) => a.name).join("、") || "（无其他账户）"),
+      removedServers: acc.name,
+      count: victims.length,
+      items: victims.map((v) => ({ ...v })),
+      // 一并备份该账户的日历配置：恢复时连配置一起还原，用户可直接重新启用
+      calendars: (acc.calendars || []).map((c) => ({ ...c }))
+    };
+    for (const v of victims) this.items.delete(keyOf(v));
+    this.emit();
+    // 立刻落盘：emit() 只 debounce 400ms，用户可能在这之前就关了窗口
+    await this.persist();
+    return victims.length;
   }
 
   /**
@@ -486,8 +518,15 @@ export class CalStore {
     if (!this.pendingDeletedKeys.includes(key)) this.pendingDeletedKeys.push(key);
   }
 
+  /**
+   * 是否已配置可用：**任一启用账户**填了服务器地址 + 用户名 + 有启用日历。
+   *
+   * 多账户后不存在「唯一的 serverUrl」，逐个账户判、有一个能同步就算配好。
+   */
   isConfigured(): boolean {
-    return !!this.settings.serverUrl && !!this.settings.username && this.settings.calendars.some((c) => c.enabled);
+    return this.settings.accounts.some(
+      (a) => a.enabled && !!a.serverUrl && !!a.username && a.calendars.some((c) => c.enabled)
+    );
   }
 
   /** 手动通知订阅者（数据已被外部流程修改后） */

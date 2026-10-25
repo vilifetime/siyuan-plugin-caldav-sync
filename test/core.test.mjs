@@ -259,6 +259,20 @@ async function ta(name, fn) {
     process.exitCode = 1;
   }
 }
+
+/** 多账户（2026-10-25）后密码/服务器字段在 accounts[0] 上；空 settings
+ *  迁不出账户，测试里先补一个再赋值（与生产 migrateToAccounts 的口径一致）。 */
+function ensureAcc(st) {
+  if (!st.settings.accounts.length) {
+    st.settings.accounts.push({
+      id: "t1", name: "t", enabled: true, serverUrl: "", username: "", password: "",
+      calendarPath: "", serverType: "caldav", channel: "auto", conflict: "server",
+      pastDays: 90, futureDays: 370, calendars: []
+    });
+  }
+  return st.settings.accounts[0];
+}
+
 await ta("加解密往返一致", async () => {
   const cipher = await secret.encryptSecret("p@ss w0rd-中文");
   assert.ok(secret.isEncrypted(cipher), "应为密文格式: " + cipher);
@@ -284,16 +298,16 @@ await ta("Store 保存密文、读回明文", async () => {
     saveData: async (d) => { saved.data = d; }
   });
   await st.load();
-  st.settings.password = "secret-123";
+  ensureAcc(st).password = "secret-123";
   await st.persist();
-  assert.ok(secret.isEncrypted(saved.data.settings.password), "落盘应为密文");
+  assert.ok(secret.isEncrypted(saved.data.settings.accounts[0].password), "落盘应为密文");
   assert.ok(!JSON.stringify(saved.data).includes("secret-123"), "落盘数据不应包含明文");
   const st2 = new storeMod.CalStore({
     loadData: async () => saved.data,
     saveData: async () => {}
   });
   await st2.load();
-  assert.strictEqual(st2.settings.password, "secret-123");
+  assert.strictEqual(st2.settings.accounts[0].password, "secret-123");
   assert.strictEqual(st2.secretBroken, false);
 });
 await ta("旧明文密码自动迁移为密文", async () => {
@@ -303,9 +317,9 @@ await ta("旧明文密码自动迁移为密文", async () => {
     saveData: async (d) => { saved.data = d; }
   });
   await st.load();
-  assert.strictEqual(st.settings.password, "old-plain");
+  assert.strictEqual(ensureAcc(st).password, "old-plain");
   await st.persist();
-  assert.ok(secret.isEncrypted(saved.data.settings.password), "迁移后应为密文");
+  assert.ok(secret.isEncrypted(saved.data.settings.accounts[0].password), "迁移后应为密文");
 });
 await ta("凭据加密使用随数据同步的 v3 主密钥（与 iframe 端口无关）", async () => {
   secret.setSecretSeed("sysid-abc|D:/SiYuan");
@@ -323,10 +337,11 @@ await ta("换设备标识不再影响解密（v3 主密钥随数据走）", asyn
 await ta("凭据异常可被检出（用于界面提示）", async () => {
   const st = new storeMod.CalStore({ loadData: async () => undefined, saveData: async () => {} });
   await st.load();
-  st.settings.serverUrl = "http://x/";
-  st.settings.password = "";
+  const acc = ensureAcc(st);
+  acc.serverUrl = "http://x/";
+  acc.password = "";
   assert.ok(st.credentialsIssue(), "空密码应能检出");
-  st.settings.password = "p";
+  acc.password = "p";
   assert.strictEqual(st.credentialsIssue(), undefined);
 });
 

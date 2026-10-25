@@ -45,6 +45,7 @@ execSync(
 const require = createRequire(import.meta.url);
 const storeMod = require(path.join(outDir, "store.js"));
 const syncMod = require(path.join(outDir, "sync.js"));
+const migrateToAccounts = require(path.join(outDir, "types.js")).migrateToAccounts;
 
 let passed = 0;
 const t = async (name, fn) => {
@@ -146,16 +147,19 @@ const cal = { url: CAL_URL, displayName: "工作", enabled: true, supportsEvent:
 async function mkStore(items, settings = {}) {
   const st = new storeMod.CalStore({ loadData: async () => undefined, saveData: async () => {} });
   await st.load();
-  st.settings = {
+  // 多账户（2026-10-25）：fixture 按新结构搭；老的平铺参数（calendars/conflict…）
+  // 仍兼容 —— 先合并再 migrateToAccounts 搬进 accounts[0]。
+  const merged = {
     ...st.settings,
     serverUrl: "http://dav.test/",
     username: "u",
     password: "p",
     calendars: [{ ...cal }],
     conflict: "server",
-    syncIntervalMin: 0,
     ...settings
   };
+  migrateToAccounts(merged);
+  st.settings = { ...merged, syncIntervalMin: 0 };
   items.forEach((it) => st.put(it));
   return st;
 }
@@ -249,7 +253,7 @@ await t("全量之后 token 被重新写回 ⇒ 下一轮恢复增量（不是�
   try {
     const eng = new syncMod.SyncEngine(st, () => "direct");
     await eng.syncAll();
-    assert.ok(st.settings.calendars[0].syncToken, "全量后应写回新 token");
+    assert.ok(st.settings.accounts[0].calendars[0].syncToken, "全量后应写回新 token");
     assert.strictEqual(st.getAll().length, 1, "本地此时有数据了");
 
     calls.length = 0;

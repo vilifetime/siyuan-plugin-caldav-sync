@@ -22,7 +22,7 @@
 import { addDays, defaultStartStamp, diffDays, parseLocalStamp, startOfWeek, todayStamp } from "../core/date";
 import { occurrencesInRange } from "../core/ics";
 import type { CalItem } from "../core/types";
-import { calEventColor } from "../core/types";
+import { calEventColor, enabledCalendars, findCalendarByUrl, resolveDefaultCalendar } from "../core/types";
 import { calColorOf, escape, keyOfItem, matchesSearchQuery, todoDueOccurrences, type ViewArgs } from "./view-common";
 import { icons } from "./icons";
 
@@ -120,7 +120,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
 
   // 收集启用日历下的条目。默认只有待办（VTODO）；
   // 设置里打开「任务视图中显示日程事件」后，日程（VEVENT）也进同一列表。
-  const enabled = new Set(ctx.store.settings.calendars.filter((c) => c.enabled).map((c) => c.url));
+  const enabled = new Set(enabledCalendars(ctx.store.settings).map((c) => c.url));
   const showEvents = ctx.store.settings.showEventsInTaskView === true;
   const showExpired = ctx.store.settings.showExpiredEventsInTaskView === true;
   const rows: Row[] = [];
@@ -295,7 +295,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     const finished = isDone({ it, due, isEvent, expired });
     const overdue = !finished && !!due && due < today;
     const pr = priorityMeta(it.priority);
-    const cal = ctx.store.settings.calendars.find((c) => c.url === it.calendarUrl);
+    const cal = findCalendarByUrl(ctx.store.settings, it.calendarUrl);
     const kindLabel = isEvent ? "日程" : "待办";
     const dueText = finished
       ? it.completedAt
@@ -516,7 +516,9 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   input?.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && input.value.trim()) {
       const title = input.value.trim();
-      const cal = ctx.store.settings.calendars.find((c) => c.enabled && c.supportsTodo !== false) || ctx.store.settings.calendars[0];
+      // 快速添加待办：落在「默认日历」上（全局一个，失效时回退第一个启用账户的第一个启用日历）
+      const cal = enabledCalendars(ctx.store.settings).find((c) => c.supportsTodo !== false) || resolveDefaultCalendar(ctx.store.settings);
+      if (!cal) return; // 一个启用日历都没有：无从落笔（面板上有「去配置」入口）
       void ctx.sync
         .createItem({
           uid: genUid(),

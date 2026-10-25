@@ -34,6 +34,8 @@ const require = createRequire(import.meta.url);
 const caldav = require(path.join(outDir, "caldav.js"));
 const storeMod = require(path.join(outDir, "store.js"));
 const syncMod = require(path.join(outDir, "sync.js"));
+const typesMod = require(path.join(outDir, "types.js"));
+const migrateToAccounts = typesMod.migrateToAccounts;
 
 let passed = 0;
 const t = async (name, fn) => {
@@ -124,16 +126,19 @@ const mkItem = (over) => ({
 async function mkStore(items, settings = {}) {
   const st = new storeMod.CalStore({ loadData: async () => undefined, saveData: async () => {} });
   await st.load();
-  st.settings = {
-    ...st.settings,
+  // 多账户（2026-10-25）：fixture 也按新结构搭。仍支持老的平铺写法
+  // （settings.calendars / serverUrl 等）—— 先迁进 accounts[0] 再合并，
+  // 两种写法混用的用例都不用改。
+  const legacy = {
     serverUrl: "http://dav.test/",
     username: "u",
     password: "p",
     calendars: [{ ...cal }],
-    conflict: "server",
-    syncIntervalMin: 0,
-    ...settings
+    conflict: "server"
   };
+  const merged = { ...st.settings, ...legacy, ...settings };
+  migrateToAccounts(merged);
+  st.settings = { ...merged, syncIntervalMin: 0 };
   items.forEach((it) => st.put(it));
   return st;
 }
@@ -346,10 +351,11 @@ const srcTypes = fs.readFileSync(path.join(root, "src/core/types.ts"), "utf8");
 const srcPanel = fs.readFileSync(path.join(root, "src/ui/panel.ts"), "utf8");
 
 await t("syncAll 每个日历拉取成功后都要调 reconcile", () => {
-  assert.ok(/await this\.reconcile\(cal, report\)/.test(srcSync), "缺 reconcile 调用");
+  // 多账户后签名多了 acc：reconcile(cal, acc, report)
+  assert.ok(/await this\.reconcile\(cal, acc, report\)/.test(srcSync), "缺 reconcile 调用");
   // 必须放在 mergeServerItems 之后：先合并再对账，否则会把刚拉到的新条目误判成幽灵
   const iMerge = srcSync.indexOf("mergeServerItems(items, deletedKeys)");
-  const iRecon = srcSync.indexOf("await this.reconcile(cal, report)");
+  const iRecon = srcSync.indexOf("await this.reconcile(cal, acc, report)");
   assert.ok(iMerge > 0 && iRecon > iMerge, "reconcile 必须排在 mergeServerItems 之后");
 });
 
@@ -802,7 +808,8 @@ await t("删除遇 412 按冲突策略分叉（源码防漂移）", () => {
   const body = srcSync.slice(i, srcSync.indexOf("/** 新建条目"));
   assert.ok(/e\?\.status === 412/.test(body), "删除分支必须接 412 —— 不接就回到死循环");
   assert.ok(
-    /conflict === "local"[\s\S]{0,400}?deleteItem\(\{ \.\.\.item, etag: undefined \}/.test(body),
+    // 多账户后冲突策略按账户取：acc?.conflict || "server"
+    /\(acc\?\.conflict \|\| "server"\) === "local"[\s\S]{0,400}?deleteItem\(\{ \.\.\.item, etag: undefined \}/.test(body),
     "本地优先：去掉 If-Match 无条件删"
   );
   assert.ok(

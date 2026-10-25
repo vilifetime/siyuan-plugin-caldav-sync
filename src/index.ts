@@ -13,6 +13,7 @@ import { setDirectFallbackToProxy } from "@/core/http";
 import { occurrencesInRange } from "@/core/ics";
 import { todayStamp, fmtDateCn, fmtTime, stampOfMs, parseLocalStamp, diffDays } from "@/core/date";
 import type { CalItem } from "@/core/types";
+import { enabledAccounts, enabledCalendars, findCalendarByUrl, resolveDefaultCalendar } from "@/core/types";
 import { todoDueOccurrences } from "@/ui/view-common";
 import { initialViewMode as readLastView, saveViewMode as writeLastView, saveCalendarView } from "@/ui/view-pref";
 import { ReminderEngine } from "@/core/reminder";
@@ -138,7 +139,7 @@ export default class CalDavPlugin extends Plugin {
     if (this.store.pendingUnlock) {
       setTimeout(() => void this.retrySecretUnlock(), 2500);
     }
-    this.sync = new SyncEngine(this.store, () => this.store.settings.channel);
+    this.sync = new SyncEngine(this.store, () => "auto");
     this.mainCtx = this.createCtx();
 
     // 设置变更 / 同步落盘后：重算提醒开关并重新排程
@@ -732,7 +733,8 @@ export default class CalDavPlugin extends Plugin {
       this.refreshPanels();
       this.reminder?.reschedule();
       if (manual) {
-        const strategyLabel = this.store.settings.conflict === "local" ? "本地优先" : "服务端优先";
+        // 冲突策略已下沉到账户；提示只做概括文案，取第一个启用账户的口径
+        const strategyLabel = enabledAccounts(this.store.settings)[0]?.conflict === "local" ? "本地优先" : "服务端优先";
         if (report.errors.length > 0) {
           this.notify(`同步完成，但有 ${report.errors.length} 处出错：${report.errors[0] ?? ""}`, "error");
         } else if (report.conflicts.length > 0) {
@@ -822,7 +824,7 @@ export default class CalDavPlugin extends Plugin {
 
   /** 提醒文案：标题 + 时间 / 日历 / 提前量 */
   private reminderText(item: CalItem, anchorISO: string, alarmMin: number): { title: string; body: string } {
-    const cal = this.store.settings.calendars.find((c) => c.url === item.calendarUrl);
+    const cal = findCalendarByUrl(this.store.settings, item.calendarUrl);
     const when = item.allDay
       ? `全天 · ${fmtDateCn(anchorISO)}`
       : `${fmtDateCn(anchorISO)} ${fmtTime(anchorISO)}`;
@@ -918,7 +920,7 @@ export default class CalDavPlugin extends Plugin {
     const demo: CalItem = {
       uid: "caldav-test-reminder",
       kind: "event",
-      calendarUrl: this.store.settings.calendars[0]?.url || "",
+      calendarUrl: resolveDefaultCalendar(this.store.settings)?.url || "",
       href: "",
       summary: "提醒功能测试",
       allDay: false,
@@ -954,7 +956,7 @@ export default class CalDavPlugin extends Plugin {
       // 目标日记：默认今天，选「本周/本月 + 区间首日」时才换成周一 / 1 号
       const targetStamp = diaryTargetStamp(range, target, today);
       const targetLabel = (targetOptionsOf(range, today).find((o) => o.key === target) || { short: "今天" }).short;
-      const enabled = new Set(this.store.settings.calendars.filter((c) => c.enabled).map((c) => c.url));
+      const enabled = new Set(enabledCalendars(this.store.settings).map((c) => c.url));
 
       const rows: { ms: number; line: string }[] = [];
       // 跨日范围（本周/本月/所有）必须逐行带日期，否则一串 09:00 分不清是哪天；

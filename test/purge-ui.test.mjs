@@ -140,7 +140,8 @@ t("按钮可见文字里不含 <svg 源码", () => {
 });
 
 t("默认文案正确", () => {
-  assert.strictEqual(nowBtn.textContent.trim(), "立即清理旧服务器条目");
+  // 多账户（2026-10-25）后文案改为「其他服务器」（不属于任何已配置账户的本地条目）
+  assert.strictEqual(nowBtn.textContent.trim(), "立即清理其他服务器的本地条目");
   assert.strictEqual(restoreBtn.textContent.trim(), "恢复上次清理的条目");
 });
 

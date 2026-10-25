@@ -934,7 +934,8 @@ console.log("\n附件体积硬上限（设置项：附件大小限制 / 单个IC
   );
   check(
     "sync.ts 把 settings.icsSizeMaxMB 传进 putItem",
-    /putItem\(item, ics, this\.channel\(\), this\.auth\(\), this\.store\.settings\.icsSizeMaxMB\)/.test(syncSrc),
+    // 多账户（2026-10-25）：通道/凭据按账户取（channelOf/authOf），上限仍是全局设置
+    /putItem\(item, ics, this\.channelOf\(acc\), this\.authOf\(acc\), this\.store\.settings\.icsSizeMaxMB\)/.test(syncSrc),
     "两个调用点（新建/编辑 + 412 覆盖）都要传，漏一个那条路径就失控"
   );
   check(

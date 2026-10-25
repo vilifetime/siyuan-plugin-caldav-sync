@@ -8,7 +8,7 @@ import type { CalStore } from "../core/store";
 import { keyOf } from "../core/store";
 import type { SyncEngine } from "../core/sync";
 import type { CalAttachment, CalItem, CalKind, SortMode } from "../core/types";
-import { DEFAULT_CATEGORIES, calEventColor, setTaskViewEventsShown } from "../core/types";
+import { DEFAULT_CATEGORIES, calEventColor, enabledCalendars, setTaskViewEventsShown } from "../core/types";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
 import { icons } from "./icons";
@@ -125,7 +125,8 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           <button class="caldav-icon-btn" data-action="calfilter" title="日历筛选">${icons.layers}</button>
           <div class="caldav-calfilter-pop" data-pop="calfilter" hidden>
             <div class="caldav-cal-head">日历筛选</div>
-            <div class="caldav-cal-list"></div>
+            <!-- 多账户（2026-10-25）：按账户分组的日历勾选（与侧栏同一份渲染，点眼睛/整行即切换） -->
+            <div class="caldav-cal-list caldav-cal-list--filter"></div>
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
               <span class="caldav-switch-label">日历视图中显示待办任务</span>
               <span class="caldav-switch">
@@ -180,7 +181,6 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
 </div>`;
 
   const app = root.querySelector(".caldav-app") as HTMLElement;
-  const calListEl = root.querySelector(".caldav-cal-list") as HTMLElement;
   const calfilterPop = root.querySelector(".caldav-calfilter-pop") as HTMLElement;
   const showTodosInput = root.querySelector('[data-opt="showTodos"]') as HTMLInputElement;
   const showEventsInput = root.querySelector('[data-opt="showEvents"]') as HTMLInputElement;
@@ -201,25 +201,44 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   let ctxMenuKey: string | null = null;
 
   function renderCalList(): void {
-    const cals = ctx.store.settings.calendars;
-    if (!cals.length) {
-      calListEl.innerHTML = `<div class="caldav-cal-empty">尚未配置服务器<br><button class="caldav-link" data-action="settings">去配置 →</button></div>`;
+    const accounts = ctx.store.settings.accounts;
+    // 侧栏与「日历筛选」浮层各有一个容器，渲染同一份内容
+    const boxes = root.querySelectorAll<HTMLElement>(".caldav-cal-list");
+    if (!accounts.length) {
+      boxes.forEach((b) => {
+        b.innerHTML = `<div class="caldav-cal-empty">尚未配置服务器<br><button class="caldav-link" data-action="settings">去配置 →</button></div>`;
+      });
       return;
     }
-    calListEl.innerHTML = cals
-      .map(
-        (c, i) => `
-      <div class="caldav-cal-item ${c.enabled ? "" : "is-off"}" data-cal="${i}"
+    // 多账户（2026-10-25）：按账户分组渲染。停用账户整组置灰、组内眼睛禁用 ——
+    // 账户都不同步了，逐日历开关没有意义（要改先去设置里启用账户）。
+    const html = accounts
+      .map((acc) => {
+        const off = acc.enabled ? "" : " is-off";
+        const rows = (acc.calendars || [])
+          .map(
+            (c) => `
+      <div class="caldav-cal-item ${c.enabled ? "" : "is-off"}" data-cal-url="${escapeAttr(c.url)}"
            title="${c.enabled ? "点击在视图中隐藏此日历" : "点击在视图中显示此日历"}">
         <span class="caldav-cal-dot" style="background:${calEventColor(c)}"></span>
         <span class="caldav-cal-name" title="${escapeAttr(c.url)}">${escapeHtml(c.displayName)}</span>
-        <button class="caldav-icon-btn caldav-cal-toggle" type="button"
+        <button class="caldav-icon-btn caldav-cal-toggle" type="button"${acc.enabled ? "" : " disabled"}
                 aria-pressed="${c.enabled ? "true" : "false"}"
-                title="${c.enabled ? "隐藏此日历" : "显示此日历"}"
-                aria-label="${c.enabled ? "隐藏此日历" : "显示此日历"}">${c.enabled ? icons.eye : icons.eyeOff}</button>
+                title="${acc.enabled ? (c.enabled ? "隐藏此日历" : "显示此日历") : "账户已停用"}"
+                aria-label="${acc.enabled ? (c.enabled ? "隐藏此日历" : "显示此日历") : "账户已停用"}">${c.enabled ? icons.eye : icons.eyeOff}</button>
       </div>`
-      )
+          )
+          .join("");
+        return `
+      <div class="caldav-cal-group${off}">
+        <div class="caldav-cal-group-name" title="${escapeAttr(acc.serverUrl)}">${escapeHtml(acc.name)}${acc.enabled ? "" : '<span class="caldav-cal-group-state">已停用</span>'}</div>
+        ${rows || '<div class="caldav-cal-empty">该账户还没有发现日历</div>'}
+      </div>`;
+      })
       .join("");
+    boxes.forEach((b) => {
+      b.innerHTML = html;
+    });
   }
 
   /**
@@ -227,12 +246,17 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
    * 关掉后：日历视图、任务视图、Dock 列表与计数同时不再包含该日历的条目（都读 settings.calendars[].enabled）。
    * persist() 不触发 onChange，所以这里必须自己 renderAll()。
    */
-  function toggleCalendar(idx: number): void {
-    const cal = ctx.store.settings.calendars[idx];
-    if (!cal) return;
-    cal.enabled = !cal.enabled;
-    void ctx.store.persist();
-    renderAll();
+  function toggleCalendar(url: string): void {
+    // 跨所有账户按 url 找（含停用账户——组内行在停用账户下是 disabled，理论上点不到）
+    for (const acc of ctx.store.settings.accounts) {
+      const cal = (acc.calendars || []).find((c) => c.url === url);
+      if (cal) {
+        cal.enabled = !cal.enabled;
+        void ctx.store.persist();
+        renderAll();
+        return;
+      }
+    }
   }
 
   /** 「日历视图中显示待办任务」开关：未设置过（老数据）按开启处理 */
@@ -295,7 +319,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
 
   /** 当前启用日历下、时间窗内的展开实例（待办按到期日，见 view-common.todoDueOccurrences） */
   function visibleOccurrences(startMs: number, endMs: number): Map<CalItem, string[]> {
-    const enabled = new Set(ctx.store.settings.calendars.filter((c) => c.enabled).map((c) => c.url));
+    const enabled = new Set(enabledCalendars(ctx.store.settings).map((c) => c.url));
     const showTodos = todosShownInCalendar();
     const out = new Map<CalItem, string[]>();
     for (const it of ctx.store.getAll()) {
@@ -613,8 +637,8 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     // 于是后面那句 target.classList.contains("caldav-cal-toggle") 永远为 false —— 这正是
     // 「点了眼睛没任何反应」的原因（旧实现在此处静默失效）。
     const calItem = t0.closest(".caldav-cal-item") as HTMLElement | null;
-    if (calItem && app.contains(calItem) && calItem.dataset.cal !== undefined) {
-      toggleCalendar(+calItem.dataset.cal);
+    if (calItem && app.contains(calItem) && calItem.dataset.calUrl !== undefined) {
+      toggleCalendar(calItem.dataset.calUrl);
       ev.stopPropagation();
       return;
     }
@@ -985,7 +1009,7 @@ export function renderDockPanel(
       statusEl.classList.add("has-error");
       return;
     }
-    if (!s.serverUrl) {
+    if (!s.accounts.length) {
       statusEl.textContent = "未配置服务器";
       statusEl.title = "点击打开设置";
       statusEl.classList.remove("has-error");
@@ -1031,7 +1055,7 @@ export function renderDockPanel(
   let suppressDockRerender = false;
 
   function isEnabledCalendar(it: CalItem): boolean {
-    return opts.store.settings.calendars.some((c) => c.enabled && c.url === it.calendarUrl);
+    return enabledCalendars(opts.store.settings).some((c) => c.url === it.calendarUrl);
   }
 
   /** 条目用于「归属时间段」的日期：待办取到期日（DUE），事件取开始时间 */

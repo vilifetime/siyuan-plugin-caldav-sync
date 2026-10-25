@@ -101,6 +101,28 @@
   border-bottom: 1px solid var(--caldav-border);
 }
 
+/* 多账户（2026-10-25）：侧栏日历列表按账户分组。停用账户整组置灰、
+   组内行 pointer-events:none —— 账户都不同步了，逐日历开关没有意义。 */
+.caldav-cal-group + .caldav-cal-group { margin-top: 6px; }
+.caldav-cal-group-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--caldav-text-2);
+}
+.caldav-cal-group-state {
+  font-size: 10px;
+  font-weight: 400;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--caldav-bg-3);
+}
+.caldav-cal-group.is-off .caldav-cal-group-name { opacity: 0.55; }
+.caldav-cal-group.is-off .caldav-cal-item { pointer-events: none; opacity: 0.55; }
+
 .caldav-cal-item {
   display: flex;
   align-items: center;
@@ -2786,6 +2808,67 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   opacity: 0;
   cursor: pointer;
 }
+
+/* 多账户（2026-10-25）：设置页账户卡片（手风琴） */
+.caldav-acc {
+  border: 1px solid var(--caldav-border);
+  border-radius: 10px;
+  background: var(--caldav-bg);
+  overflow: hidden;
+}
+.caldav-acc + .caldav-acc { margin-top: 8px; }
+.caldav-acc.is-off { opacity: 0.6; }
+.caldav-acc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.caldav-acc-head:hover { background: var(--caldav-bg-3); }
+.caldav-acc.is-open .caldav-acc-head { background: var(--caldav-bg-3); border-bottom: 1px solid var(--caldav-border); }
+.caldav-acc-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+.caldav-acc-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.caldav-acc-sum {
+  flex: 1;
+  font-size: 11px;
+  color: var(--caldav-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caldav-acc-switch { display: inline-flex; margin-left: auto; }
+.caldav-acc-switch input { accent-color: var(--caldav-accent); width: 15px; height: 15px; cursor: pointer; }
+.caldav-acc-body { padding: 4px 12px 12px; }
+.caldav-acc-subtitle { margin: 12px 0 6px; font-size: 12px; }
+.caldav-acc-cals { display: flex; flex-direction: column; gap: 6px; }
+/* 删除确认条：二次点击展开（项目约定：删除类禁用 confirm()） */
+.caldav-acc-delconf { padding: 8px 10px; border-top: 1px solid var(--caldav-border); background: var(--caldav-bg-3); }
+.caldav-acc-delconf[hidden] { display: none; }
+.caldav-acc-delconf .caldav-actions-row { margin-top: 6px; }
+
+/* 账户内的日历行 = 原「日历」段同款布局 */
+.caldav-acc-cal {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--caldav-border);
+  border-radius: 10px;
+  background: var(--caldav-bg);
+  transition: border-color 0.15s, background 0.15s;
+}
+.caldav-acc-cal:hover { border-color: color-mix(in srgb, var(--caldav-accent) 45%, var(--caldav-border)); }
+.caldav-acc-cal input[type="checkbox"] { accent-color: var(--caldav-accent); width: 15px; height: 15px; }
+.caldav-acc-cal .caldav-input {
+  flex: 1;
+  background: transparent;
+  border-color: transparent;
+  padding: 6px 8px;
+}
+.caldav-acc-cal .caldav-input:hover { background: var(--caldav-input-bg); border-color: var(--caldav-border); }
+.caldav-acc-cal .caldav-input:focus { background: var(--caldav-input-bg); }
 
 .caldav-set-hint { font-size: 11px; color: var(--caldav-text-2); }
 

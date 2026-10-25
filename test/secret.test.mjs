@@ -126,7 +126,7 @@ await t("store：解密失败时 persist() 必须原样写回密文，绝不写�
   assert.strictEqual(st.secretBroken, true, "应提示用户重新输入密码");
   await st.persist();
   assert.strictEqual(
-    saved.settings.password,
+    saved.settings.accounts[0].password,
     cipher,
     "解密失败时落盘仍是原密文（曾经这里写空串，把密码永久抹掉了）"
   );
@@ -147,7 +147,7 @@ await t("store：密钥未就绪时不判定损坏，也不动磁盘上的密文
   assert.strictEqual(st.secretBroken, false, "密钥未就绪不能判定密码损坏");
   assert.strictEqual(st.pendingUnlock, true, "应处于待解密状态，等 retryUnlock()");
   await st.persist();
-  assert.strictEqual(saved.settings.password, cipher, "待解密期间也必须保留原密文");
+  assert.strictEqual(saved.settings.accounts[0].password, cipher, "待解密期间也必须保留原密文");
 });
 
 await t("store：主密钥随数据落盘，换实例只靠数据就能解开（模拟重启/换端口/换设备）", async () => {
@@ -160,15 +160,23 @@ await t("store：主密钥随数据落盘，换实例只靠数据就能解开（
     }
   });
   await a.load();
-  a.settings.password = "重启后仍可用";
+  // 多账户后密码在 accounts[0] 上；空 settings 迁不出账户，先补一个
+  if (!a.settings.accounts.length) {
+    a.settings.accounts.push({
+      id: "t1", name: "t", enabled: true, serverUrl: "", username: "", password: "",
+      calendarPath: "", serverType: "caldav", channel: "auto", conflict: "server",
+      pastDays: 90, futureDays: 370, calendars: []
+    });
+  }
+  a.settings.accounts[0].password = "重启后仍可用";
   await a.persist();
   assert.ok(saved.keyring && saved.keyring.length > 0, "主密钥必须随数据落盘");
-  assert.ok(String(saved.settings.password).startsWith("enc:v3:"), "密码应是 v3 密文");
+  assert.ok(String(saved.settings.accounts[0].password).startsWith("enc:v3:"), "密码应是 v3 密文");
 
   freshDevice(); // 清掉进程内的密钥，逼新实例只靠落盘数据
   const b = new CalStore({ loadData: async () => saved, saveData: async () => {} });
   await b.load();
-  assert.strictEqual(b.settings.password, "重启后仍可用", "仅凭落盘数据即可恢复密码");
+  assert.strictEqual(b.settings.accounts[0].password, "重启后仍可用", "仅凭落盘数据即可恢复密码");
   assert.strictEqual(b.secretBroken, false);
 });
 
@@ -188,10 +196,10 @@ await t("兼容：v2 旧密文仍能解开，并自动升级为 v3", async () =>
     }
   });
   await st.load();
-  assert.strictEqual(st.settings.password, "旧版密码");
+  assert.strictEqual(st.settings.accounts[0].password, "旧版密码");
   assert.strictEqual(st.secretBroken, false);
   await st.persist();
-  assert.ok(String(saved.settings.password).startsWith("enc:v3:"), "保存时应自动升级为 v3");
+  assert.ok(String(saved.settings.accounts[0].password).startsWith("enc:v3:"), "保存时应自动升级为 v3");
   assert.ok(saved.keyring, "升级的同时落盘 v3 主密钥");
 });
 
@@ -234,10 +242,10 @@ await t("过渡期：store.load() 从套娃密文里恢复密码，并重存为 
   });
   await st.load();
   assert.strictEqual(st.secretBroken, false, "这不是「密码损坏」，只是被套了一层");
-  assert.strictEqual(st.settings.password, "套娃密码", "不能把内层密文当成密码用");
+  assert.strictEqual(st.settings.accounts[0].password, "套娃密码", "不能把内层密文当成密码用");
   await st.persist();
-  assert.ok(String(saved.settings.password).startsWith("enc:v3:"), "应重存为新格式");
-  assert.strictEqual(await secret.decryptSecret(saved.settings.password), "套娃密码");
+  assert.ok(String(saved.settings.accounts[0].password).startsWith("enc:v3:"), "应重存为新格式");
+  assert.strictEqual(await secret.decryptSecret(saved.settings.accounts[0].password), "套娃密码");
 });
 
 await t("兼容：v2 密文在 load() 阶段就自动升级为 v3，不必等用户手动保存", async () => {
@@ -258,7 +266,7 @@ await t("兼容：v2 密文在 load() 阶段就自动升级为 v3，不必等用
   await st.load();
   await new Promise((r) => setTimeout(r, 30)); // 等 load() 里那次异步回写落地
   assert.ok(saved, "本机解得开就应该主动收口回写一次");
-  assert.ok(String(saved.settings.password).startsWith("enc:v3:"), "自动升级为 v3");
+  assert.ok(String(saved.settings.accounts[0].password).startsWith("enc:v3:"), "自动升级为 v3");
   assert.ok(saved.keyring, "同时落盘 v3 主密钥，别的设备才解得开");
 });
 

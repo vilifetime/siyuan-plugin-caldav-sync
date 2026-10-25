@@ -1,11 +1,24 @@
 /**
- * 设置面板：服务器参数 / 测试连接 / 发现日历 / 同步策略
+ * 设置面板：多日历账户（2026-10-25 重构）。
+ *
+ * 结构：顶部「账户」段（卡片列表 + 手风琴展开「服务器 / 日历 / 同步」三段，
+ * 这三段已从全局下沉到账户）+ 全局段（同步间隔 / 附件上限 / 提醒 / 日记 /
+ * 本地数据）。老单账户数据由 core/types.ts 的 migrateToAccounts() 迁进
+ * accounts[0]，本页读写都走账户。
  */
 import { Dialog, showMessage } from "siyuan";
 import { newDialog } from "@/ui/dialog";
 import { isMobile } from "./device";
-import type { CalCalendar } from "../core/types";
-import { calEventColor, calTodoColor, normalizeCalendarColors } from "../core/types";
+import type { CalAccount, CalCalendar, CalSettings } from "../core/types";
+import {
+  calEventColor,
+  calTodoColor,
+  enabledCalendars,
+  migrateToAccounts,
+  newAccountId,
+  normalizeCalendarColors,
+  resolveDefaultCalendar
+} from "../core/types";
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
 import { clearAuthCache } from "../core/http";
 import type { PanelCtx } from "./panel";
@@ -24,6 +37,25 @@ import { adoptMobileLayer, isDialogAlive } from "./mobile-layers";
  */
 let activeSettings: Dialog | null = null;
 
+/** 新建一个空白账户（「添加账户」用；默认值对齐原单账户 DEFAULT_SETTINGS） */
+function blankAccount(seq: number): CalAccount {
+  return {
+    id: newAccountId(),
+    name: `新账户 ${seq}`,
+    enabled: true,
+    serverUrl: "",
+    username: "",
+    password: "",
+    calendarPath: "",
+    serverType: "caldav",
+    channel: "auto",
+    conflict: "server",
+    pastDays: 90,
+    futureDays: 370,
+    calendars: []
+  };
+}
+
 export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
   return new Promise((resolve) => {
     if (activeSettings && isDialogAlive(activeSettings)) {
@@ -36,7 +68,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     const mobile = isMobile();
     const dialog = newDialog({
       title: "CalDAV 同步设置",
-      content: `<div class="caldav-settings">${settingsHtml(s, mobile)}</div>`,
+      content: `<div class="caldav-settings"></div>`,
       width: mobile ? "100vw" : "640px",
       height: mobile ? "100vh" : "86vh",
       containerClassName: mobile ? "caldav-mobile-dialog" : undefined,
@@ -54,282 +86,401 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     adoptMobileLayer(dialog, "sheet");
     const el = dialog.element.querySelector(".caldav-settings") as HTMLElement;
     enableDialogResize(dialog);
-    const $ = (sel: string) => el.querySelector(sel) as HTMLInputElement;
-    const msgEl = el.querySelector("[data-msg]") as HTMLElement;
-    renderCalChecks(el, s.calendars);
+    const $ = (sel: string) => el.querySelector(sel) as HTMLInputElement | null;
 
-    // 提醒自检：测试按钮 + 排程状态（「带提醒时间的条目」为 0 说明是数据侧没设提醒）
-    const remindBtn = el.querySelector("[data-action='test-remind']") as HTMLButtonElement | null;
-    const remindMsg = el.querySelector("[data-remind-status]") as HTMLElement | null;
-    const refreshRemindStatus = () => {
-      if (remindMsg) remindMsg.textContent = ctx.reminderStatus?.() || "";
+    /** 当前展开（手风琴）的账户 id；null = 全都收起 */
+    let activeAccId: string | null = s.accounts.length === 1 ? s.accounts[0].id : null;
+    /** 「删除账户」二次点击确认的 armed id（项目约定：删除类禁用 confirm()） */
+    let delArmed: string | null = null;
+    let delArmTimer: ReturnType<typeof setTimeout> | null = null;
+    /** 「立即清理」二次点击确认 */
+    let purgeArmed = false;
+    let purgeArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const activeAcc = (): CalAccount | undefined =>
+      s.accounts.find((a) => a.id === activeAccId);
+
+    // ── 渲染 ────────────────────────────────────────────────
+    const rerender = (): void => {
+      el.innerHTML = settingsHtml(s, mobile, activeAccId);
+      bindAll();
     };
-    refreshRemindStatus();
-    remindBtn?.addEventListener("click", async () => {
-      if (!ctx.testReminder) {
-        if (remindMsg) remindMsg.textContent = "当前环境不支持测试提醒";
-        return;
-      }
-      remindBtn.disabled = true;
-      if (remindMsg) remindMsg.textContent = "正在发送测试提醒…";
-      try {
-        const r = await ctx.testReminder();
-        if (remindMsg) remindMsg.textContent = r;
-      } catch (e: any) {
-        if (remindMsg) remindMsg.textContent = "测试失败：" + (e?.message || e);
-      } finally {
-        remindBtn.disabled = false;
-        // 稍后回到排程状态，让「已排程 N 条」能被看到
-        setTimeout(refreshRemindStatus, 4000);
-      }
-    });
+
+    // ── 账户段交互 ──────────────────────────────────────────
+    function bindAccounts(): void {
+      // 展开 / 收起（点卡片头，避开开关与按钮）
+      el.querySelectorAll<HTMLElement>(".caldav-acc-head").forEach((head) => {
+        head.addEventListener("click", (ev) => {
+          const t = ev.target as HTMLElement;
+          if (t.closest("input,button")) return; // 开关/删除按钮不触发展开
+          const id = head.parentElement!.dataset.acc!;
+          activeAccId = activeAccId === id ? null : id;
+          rerender();
+        });
+      });
+      // 启用开关：即时生效（不用等保存——停用后视图立刻不显示，用户要能马上看到）
+      el.querySelectorAll<HTMLInputElement>("input[data-acc-toggle]").forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const acc = s.accounts.find((a) => a.id === cb.dataset.accToggle);
+          if (!acc) return;
+          acc.enabled = cb.checked;
+          void ctx.store.persist();
+          ctx.refreshPanels?.();
+          rerender();
+        });
+      });
+      // 添加账户
+      el.querySelector("[data-action='acc-add']")?.addEventListener("click", () => {
+        const acc = blankAccount(s.accounts.length + 1);
+        s.accounts.push(acc);
+        activeAccId = acc.id; // 新账户直接展开，顺手就能填
+        rerender();
+      });
+      // 删除账户：第一次点只展开确认条（含「是否清理本地条目」选项），确认才真删
+      el.querySelectorAll<HTMLButtonElement>("button[data-action='acc-del']").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.accDel!;
+          const card = el.querySelector<HTMLElement>(`.caldav-acc[data-acc="${CSS.escape(id)}"]`);
+          const conf = card?.querySelector<HTMLElement>("[data-acc-delconf]");
+          if (!conf) return;
+          const acc = s.accounts.find((a) => a.id === id);
+          if (!acc) return;
+          const showing = !conf.hidden;
+          // 再点一次头像区域的删除 = 收起确认条
+          el.querySelectorAll<HTMLElement>("[data-acc-delconf]").forEach((c) => (c.hidden = true));
+          if (showing) return;
+          const n = ctx.store
+            .getAll()
+            .filter((it) => (acc.calendars || []).some((c) => c.url === it.calendarUrl)).length;
+          const label = conf.querySelector<HTMLElement>("[data-acc-deln]");
+          if (label) label.textContent = String(n);
+          const purgeCb = conf.querySelector<HTMLInputElement>("input[type='checkbox']");
+          if (purgeCb) purgeCb.checked = false; // 默认不勾选：删除类操作保守起步
+          conf.hidden = false;
+          // 确认删除
+          conf.querySelector("[data-action='acc-del-ok']")?.addEventListener("click", async () => {
+            const idx = s.accounts.findIndex((a) => a.id === id);
+            if (idx < 0) return;
+            const alsoPurge = !!purgeCb?.checked;
+            const purged = alsoPurge ? await ctx.store.purgeAccountItems(id) : 0;
+            s.accounts.splice(idx, 1);
+            if (activeAccId === id) activeAccId = null;
+            await ctx.store.persist();
+            clearAuthCache();
+            ctx.sync.startAutoSync();
+            rerender();
+            ctx.refreshPanels?.();
+            showMessage(
+              purged
+                ? `已删除账户「${acc.name}」，并清理其 ${purged} 条本地条目（已备份，可恢复）`
+                : `已删除账户「${acc.name}」（本地条目保留，可重新添加账户后恢复显示）`,
+              6000,
+              "info"
+            );
+          });
+          // 取消
+          conf.querySelector("[data-action='acc-del-cancel]")?.addEventListener("click", () => {
+            conf.hidden = true;
+          });
+        });
+      });
+    }
+
+    // ── 服务器 / 测试 / 发现 ────────────────────────────────
+    function bindServer(): void {
+      // 服务器类型切换：选 iCloud 且地址为空时自动填 https://caldav.icloud.com
+      el.querySelector("select[data-s='serverType']")?.addEventListener("change", (e) => {
+        const sel = (e.target as HTMLSelectElement).value;
+        if (sel === "icloud") {
+          const serverInput = $("input[data-s='server']");
+          if (serverInput && !serverInput.value.trim()) serverInput.value = "https://caldav.icloud.com";
+        }
+      });
+
+      el.querySelector("[data-action='test']")?.addEventListener("click", () => {
+        const acc = activeAcc();
+        const server = $("input[data-s='server']")?.value.trim() || "";
+        const username = $("input[data-s='username']")?.value.trim() || "";
+        const password = $("input[data-s='password']")?.value || "";
+        const channel = ($("select[data-s='channel']")?.value || "auto") as any;
+        const msgEl = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+        if (!server) {
+          if (msgEl) {
+            msgEl.textContent = "服务器地址不能为空";
+            msgEl.classList.remove("is-ok");
+            msgEl.classList.add("is-err");
+          }
+          return;
+        }
+        if (msgEl) {
+          msgEl.textContent = "正在测试连接…";
+          msgEl.classList.remove("is-ok", "is-err");
+        }
+        void testConnection(server, channel, { username, password: password || acc?.password || "" }).then((r) => {
+          if (!msgEl) return;
+          msgEl.textContent = r.message;
+          msgEl.classList.toggle("is-ok", r.ok);
+          msgEl.classList.toggle("is-err", !r.ok);
+        });
+      });
+
+      el.querySelector("[data-action='discover']")?.addEventListener("click", async () => {
+        const acc = activeAcc();
+        if (!acc) return;
+        const server = $("input[data-s='server']")?.value.trim() || "";
+        const username = $("input[data-s='username']")?.value.trim() || "";
+        const password = $("input[data-s='password']")?.value || "";
+        const channel = ($("select[data-s='channel']")?.value || "auto") as any;
+        const path = $("input[data-s='path']")?.value.trim() || "";
+        const msgEl = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+        if (msgEl) {
+          msgEl.textContent = "正在发现日历…";
+          msgEl.classList.remove("is-ok", "is-err");
+        }
+        try {
+          const r = await discoverCalendars(server, channel, { username, password: password || acc.password }, path);
+          // 已存在的日历保留原配置（启用状态/颜色/sync-token），只补新发现的
+          const existing = new Map((acc.calendars || []).map((c) => [c.url, c]));
+          acc.calendars = r.calendars.map((c) => existing.get(c.url) || { ...c, enabled: true });
+          normalizeCalendarColors(acc.calendars);
+          rerender();
+          const msg2 = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+          if (msg2) {
+            msg2.textContent = `发现 ${r.calendars.length} 个日历，请勾选后保存`;
+            msg2.classList.add("is-ok");
+          }
+        } catch (e: any) {
+          if (msgEl) {
+            msgEl.textContent = "发现失败: " + describeNetworkError(e, channel);
+            msgEl.classList.add("is-err");
+          }
+        }
+      });
+    }
+
+    // ── 提醒自检 ────────────────────────────────────────────
+    function bindRemind(): void {
+      const remindBtn = el.querySelector("[data-action='test-remind']") as HTMLButtonElement | null;
+      const remindMsg = el.querySelector("[data-remind-status]") as HTMLElement | null;
+      const refreshRemindStatus = () => {
+        if (remindMsg) remindMsg.textContent = ctx.reminderStatus?.() || "";
+      };
+      refreshRemindStatus();
+      remindBtn?.addEventListener("click", async () => {
+        if (!ctx.testReminder) {
+          if (remindMsg) remindMsg.textContent = "当前环境不支持测试提醒";
+          return;
+        }
+        remindBtn.disabled = true;
+        if (remindMsg) remindMsg.textContent = "正在发送测试提醒…";
+        try {
+          const r = await ctx.testReminder();
+          if (remindMsg) remindMsg.textContent = r;
+        } catch (e: any) {
+          if (remindMsg) remindMsg.textContent = "测试失败：" + (e?.message || e);
+        } finally {
+          remindBtn.disabled = false;
+          // 稍后回到排程状态，让「已排程 N 条」能被看到
+          setTimeout(refreshRemindStatus, 4000);
+        }
+      });
+    }
+
+    // ── 「本地数据」区块：手动清理 + 恢复 ────────────────────
+    function bindPurge(): void {
+      const purgeMsg = el.querySelector("[data-purge-msg]") as HTMLElement | null;
+      const purgeInfo = el.querySelector("[data-purge-info]") as HTMLElement | null;
+      const purgeRestoreBtn = el.querySelector("[data-action='purge-restore']") as HTMLButtonElement | null;
+      const purgeNowBtn = el.querySelector("[data-action='purge-now']") as HTMLButtonElement | null;
+      // 按钮文案单独放 span 里：图标是 SVG 源码串，**不能用 textContent 写**——
+      // textContent 不解析 HTML，会把 <svg ...> 当纯文本显示出来（2026-10-24 实测）。
+      const purgeNowLabel = el.querySelector("[data-purge-now-label]") as HTMLElement | null;
+      const purgeRestoreLabel = el.querySelector("[data-purge-restore-label]") as HTMLElement | null;
+
+      const refreshPurgeUi = (): void => {
+        const orphans = ctx.store.orphanItems();
+        const bk = ctx.store.purgeBackup;
+        if (purgeInfo) {
+          const parts: string[] = [];
+          parts.push(
+            orphans.length
+              ? `当前有 ${orphans.length} 条不属于任何已配置账户的本地条目`
+              : ctx.store.activeServerOrigins().size
+                ? "当前没有其他服务器的本地条目"
+                : "尚未启用任何日历（无法判定哪些条目属于其他服务器）"
+          );
+          if (bk) {
+            parts.push(`上次清理于 ${formatTimeText(bk.at)}，共 ${bk.count} 条${bk.removedServers ? `（来自 ${bk.removedServers}）` : ""}`);
+          }
+          purgeInfo.textContent = parts.join("；");
+        }
+        if (purgeRestoreBtn) {
+          // 没有备份就禁用并隐藏（点下去无事可做只会让人困惑）
+          purgeRestoreBtn.hidden = !bk || !bk.items.length;
+          purgeRestoreBtn.disabled = !bk || !bk.items.length;
+          if (purgeRestoreLabel) {
+            purgeRestoreLabel.textContent = bk && bk.items.length
+              ? `恢复上次清理的 ${bk.count} 条`
+              : "恢复上次清理的条目";
+          }
+        }
+        if (purgeNowBtn) {
+          purgeNowBtn.disabled = !orphans.length;
+          // 只改文字节点，图标（SVG）原样保留
+          if (purgeNowLabel) {
+            purgeNowLabel.textContent = orphans.length ? `清理 ${orphans.length} 条其他服务器的本地条目` : "立即清理其他服务器的本地条目";
+          }
+        }
+      };
+      refreshPurgeUi();
+
+      // 「立即清理」：**二次点击确认**（不用 confirm()，见项目约定）。
+      // 第一次点只把按钮文案改成「再点一次确认清理」，第二次才真删。
+      purgeNowBtn?.addEventListener("click", async () => {
+        const orphans = ctx.store.orphanItems();
+        if (!orphans.length) {
+          if (purgeMsg) {
+            purgeMsg.textContent = "没有需要清理的其他服务器条目";
+            purgeMsg.classList.remove("is-ok");
+            purgeMsg.classList.add("is-err");
+          }
+          return;
+        }
+        if (!purgeArmed) {
+          purgeArmed = true;
+          if (purgeNowLabel) purgeNowLabel.textContent = `再点一次确认清理 ${orphans.length} 条`;
+          if (purgeArmTimer) clearTimeout(purgeArmTimer);
+          purgeArmTimer = setTimeout(() => {
+            purgeArmed = false;
+            refreshPurgeUi();
+          }, 5000);
+          return;
+        }
+        purgeArmed = false;
+        if (purgeArmTimer) clearTimeout(purgeArmTimer);
+        // 手动清理**即时生效** —— 用户点了就是明确意图
+        const n = await ctx.store.purgeOrphanItems();
+        if (purgeMsg) {
+          purgeMsg.textContent = n ? `已清理 ${n} 条其他服务器的本地条目（已备份，可恢复）` : "没有需要清理的条目";
+          purgeMsg.classList.toggle("is-ok", n > 0);
+          purgeMsg.classList.remove("is-err");
+        }
+        refreshPurgeUi();
+        ctx.refreshPanels?.();
+      });
+
+      purgeRestoreBtn?.addEventListener("click", async () => {
+        const n = await ctx.store.restorePurgedItems();
+        if (purgeMsg) {
+          purgeMsg.textContent = n ? `已恢复 ${n} 条条目` : "没有可恢复的条目";
+          purgeMsg.classList.toggle("is-ok", n > 0);
+          purgeMsg.classList.remove("is-err");
+        }
+        refreshPurgeUi();
+        ctx.refreshPanels?.();
+      });
+    }
+
+    // ── 保存 ────────────────────────────────────────────────
+    function bindSave(): void {
+      el.querySelector("[data-action='save']")?.addEventListener("click", async () => {
+        const msgEl = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+        // 展开中的账户：把「服务器 / 同步」输入写回该账户（未展开的账户输入框
+        // 根本不在 DOM 里，它们的值原样保留在 settings.accounts 中，不受影响）
+        const acc = activeAcc();
+        if (acc) {
+          acc.name = $("input[data-s='accName']")?.value.trim() || acc.name;
+          acc.serverUrl = $("input[data-s='server']")?.value.trim() || "";
+          acc.username = $("input[data-s='username']")?.value.trim() || "";
+          // 密码框留空 = 保持原样。解密失败时输入框本就是空的，用户只想改别的字段
+          // 却点保存 —— 若无条件用空值覆盖，密码就被抹掉了（这正是丢密码的直接原因之一）。
+          const pwInput = $("input[data-s='password']")?.value || "";
+          if (pwInput) {
+            acc.password = pwInput;
+            ctx.store.secretBroken = false;
+            ctx.store.pendingUnlock = false;
+          }
+          acc.calendarPath = $("input[data-s='path']")?.value.trim() || "";
+          acc.serverType = ($("select[data-s='serverType']")?.value || "caldav") as any;
+          acc.channel = ($("select[data-s='channel']")?.value || "auto") as any;
+          acc.conflict = ($("select[data-s='conflict']")?.value || "server") as any;
+          acc.pastDays = Math.max(7, +($("input[data-s='past']")?.value || "0") || 90);
+          acc.futureDays = Math.max(30, +($("input[data-s='future']")?.value || "0") || 370);
+          // 勾选的日历
+          el.querySelectorAll<HTMLElement>(".caldav-acc-cal").forEach((row) => {
+            const c = acc.calendars[+row.dataset.idx!];
+            if (!c) return;
+            c.enabled = (row.querySelector("input[type='checkbox']") as HTMLInputElement).checked;
+            const nameInput = row.querySelector("input[data-role='name']") as HTMLInputElement;
+            if (nameInput.value.trim()) c.displayName = nameInput.value.trim();
+            // 日程 / 待办各自的默认色（药丸即取色器）。没出药丸的一侧保持原值不动
+            const evInput = row.querySelector("input[data-role='eventColor']") as HTMLInputElement | null;
+            if (evInput?.value) c.eventColor = evInput.value;
+            const tdInput = row.querySelector("input[data-role='todoColor']") as HTMLInputElement | null;
+            if (tdInput?.value) c.todoColor = tdInput.value;
+          });
+          // 补齐缺的一侧 + 把旧 color 镜像成 eventColor（旧版本端读同一份数据不会变灰）
+          normalizeCalendarColors(acc.calendars);
+        }
+        // ── 全局字段 ──
+        s.syncIntervalMin = Math.max(0, +($("input[data-s='interval']")?.value || "0") || 0);
+        // 附件/ICS 体积上限（MB）。留空或非法 → 回退默认值（与 ics.ts 的 *_MB 常量一致）
+        s.attachSizeMaxMB = Math.max(1, +($("input[data-s='attachMax']")?.value || "0") || 5);
+        s.icsSizeMaxMB = Math.max(1, +($("input[data-s='icsMax']")?.value || "0") || 10);
+        const wasRemindOn = s.enableReminders;
+        s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement | null)?.checked;
+        s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement | null)?.checked;
+        // 默认日历：显式选择（「自动」= 空串）。选中的日历被停用/删掉时
+        // resolveDefaultCalendar() 会回退第一个启用账户的第一个启用日历
+        const dcSel = $("select[data-s='defaultCal']")?.value || "";
+        s.defaultCalendarUrl = dcSel || undefined;
+        await ctx.store.persist();
+        // 凭据或服务器地址可能刚被改过：丢掉 Digest 协商缓存，
+        // 否则下次请求会拿着旧 nonce/旧密码重发，白挨一次 401
+        clearAuthCache();
+        ctx.sync.startAutoSync();
+        dialog.destroy();
+        resolve();
+        // persist() 只落盘、不 emit，所以保存后已打开的面板不会自己重渲染 ——
+        // 这里统一刷一次。日历勾选 / 颜色 / 同步窗口这些改了都得立刻看得见。
+        ctx.refreshPanels?.();
+        // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
+        // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
+        if (s.enableReminders) {
+          if (!wasRemindOn) {
+            void ctx.testReminder?.();
+            showMessage("提醒已开启，并已发送一条测试提醒", 6000, "info");
+          } else {
+            showMessage("提醒设置已保存", 4000, "info");
+          }
+        }
+        if (msgEl) msgEl.textContent = "";
+      });
+      el.querySelector("[data-action='cancel']")?.addEventListener("click", () => {
+        dialog.destroy();
+        resolve();
+      });
+    }
+
+    function bindAll(): void {
+      bindAccounts();
+      bindServer();
+      bindRemind();
+      bindPurge();
+      bindSave();
+      // 每个账户 body 里的取色药丸各自绑定（事件委托在 innerHTML 重渲后会丢）
+      el.querySelectorAll<HTMLElement>("[data-cals]").forEach(bindColorPills);
+    }
 
     if (ctx.store.secretBroken) {
       // 密码密文是「另一台设备用另一把密钥」写的 —— 多端共用同一份数据，密钥却各不同。
       // 说清楚原因，用户才知道为什么要重输，而不是以为密码被吞了。
-      msgEl.textContent = "密码解不开：这段密文由另一台设备写入。请在本机重新输入一次密码并保存，之后各端都会一致";
-      msgEl.classList.add("is-err");
+      showMessage("密码解不开：这段密文由另一台设备写入。请在本机重新输入一次密码并保存，之后各端都会一致", 8000, "error");
     } else if (ctx.store.pendingUnlock) {
-      msgEl.textContent = "密码待解密（密钥尚未就绪），稍后自动重试；若长时间未恢复，请重新输入密码并保存";
-      msgEl.classList.add("is-err");
+      showMessage("密码待解密（密钥尚未就绪），稍后自动重试；若长时间未恢复，请重新输入密码并保存", 8000, "error");
     }
 
-    // 通道切换提示
-    $("select[data-s='channel']").addEventListener("change", () => {
-      /* 仅保存时生效 */
-    });
-
-    // ── 「本地数据」区块：切换服务器清理旧条目 ──────────────────────
-    //
-    // 两件事：
-    //   1. 「立即清理」按钮 —— 手动触发一次清理（二次点击确认）。
-    //   2. 保存时若检测到服务器地址变了且开关开着 —— 自动清理。
-    //
-    // ⚠️ 判定用的是「服务器身份」（协议+主机+端口），不是地址字符串：
-    //    同一台服务器的多个日历集合必须一起保留（见 core/server-id.ts）。
-    const purgeMsg = el.querySelector("[data-purge-msg]") as HTMLElement | null;
-    const purgeInfo = el.querySelector("[data-purge-info]") as HTMLElement | null;
-    const purgeRestoreBtn = el.querySelector("[data-action='purge-restore']") as HTMLButtonElement | null;
-    const purgeNowBtn = el.querySelector("[data-action='purge-now']") as HTMLButtonElement | null;
-    // 按钮文案单独放 span 里：图标是 SVG 源码串，**不能用 textContent 写**——
-    // textContent 不解析 HTML，会把 <svg ...> 当纯文本显示出来（2026-10-24 实测）。
-    const purgeNowLabel = el.querySelector("[data-purge-now-label]") as HTMLElement | null;
-    const purgeRestoreLabel = el.querySelector("[data-purge-restore-label]") as HTMLElement | null;
-
-    /** 刷新「本地数据」区块的说明文字与按钮可用状态 */
-    const refreshPurgeUi = (): void => {
-      const orphans = ctx.store.orphanItems();
-      const bk = ctx.store.purgeBackup;
-      if (purgeInfo) {
-        const parts: string[] = [];
-        parts.push(
-          orphans.length
-            ? `当前有 ${orphans.length} 条属于其他服务器的本地条目`
-            : ctx.store.activeServerOrigins().size
-              ? "当前没有属于其他服务器的本地条目"
-              : "尚未启用任何日历（无法判定哪些条目属于其他服务器）"
-        );
-        if (bk) {
-          parts.push(`上次清理于 ${formatTimeText(bk.at)}，共 ${bk.count} 条${bk.removedServers ? `（来自 ${bk.removedServers}）` : ""}`);
-        }
-        purgeInfo.textContent = parts.join("；");
-      }
-      if (purgeRestoreBtn) {
-        // 没有备份就禁用并隐藏（点下去无事可做只会让人困惑）
-        purgeRestoreBtn.hidden = !bk || !bk.items.length;
-        purgeRestoreBtn.disabled = !bk || !bk.items.length;
-        if (purgeRestoreLabel) {
-          purgeRestoreLabel.textContent = bk && bk.items.length
-            ? `恢复上次清理的 ${bk.count} 条`
-            : "恢复上次清理的条目";
-        }
-      }
-      if (purgeNowBtn) {
-        purgeNowBtn.disabled = !orphans.length;
-        // 只改文字节点，图标（SVG）原样保留
-        if (purgeNowLabel) {
-          purgeNowLabel.textContent = orphans.length ? `清理 ${orphans.length} 条旧服务器条目` : "立即清理旧服务器条目";
-        }
-      }
-    };
-    refreshPurgeUi();
-
-    // 「立即清理」：**二次点击确认**（不用 confirm()，见项目约定）。
-    // 第一次点只把按钮文案改成「再点一次确认清理」，第二次才真删。
-    let purgeArmed = false;
-    let purgeArmTimer: ReturnType<typeof setTimeout> | null = null;
-    purgeNowBtn?.addEventListener("click", async () => {
-      const orphans = ctx.store.orphanItems();
-      if (!orphans.length) {
-        if (purgeMsg) {
-          purgeMsg.textContent = "没有需要清理的旧服务器条目";
-          purgeMsg.classList.remove("is-ok");
-          purgeMsg.classList.add("is-err");
-        }
-        return;
-      }
-      if (!purgeArmed) {
-        purgeArmed = true;
-        if (purgeNowLabel) purgeNowLabel.textContent = `再点一次确认清理 ${orphans.length} 条`;
-        if (purgeArmTimer) clearTimeout(purgeArmTimer);
-        purgeArmTimer = setTimeout(() => {
-          purgeArmed = false;
-          refreshPurgeUi();
-        }, 5000);
-        return;
-      }
-      purgeArmed = false;
-      if (purgeArmTimer) clearTimeout(purgeArmTimer);
-      // 手动清理**不受开关限制** —— 用户点了就是明确意图
-      const n = await ctx.store.purgeOrphanItems();
-      if (purgeMsg) {
-        purgeMsg.textContent = n ? `已清理 ${n} 条旧服务器条目（已备份，可恢复）` : "没有需要清理的条目";
-        purgeMsg.classList.toggle("is-ok", n > 0);
-        purgeMsg.classList.remove("is-err");
-      }
-      refreshPurgeUi();
-      ctx.refreshPanels?.();
-    });
-
-    purgeRestoreBtn?.addEventListener("click", async () => {
-      const n = await ctx.store.restorePurgedItems();
-      if (purgeMsg) {
-        purgeMsg.textContent = n ? `已恢复 ${n} 条条目` : "没有可恢复的条目";
-        purgeMsg.classList.toggle("is-ok", n > 0);
-        purgeMsg.classList.remove("is-err");
-      }
-      refreshPurgeUi();
-      ctx.refreshPanels?.();
-    });
-
-    // 服务器类型切换：选 iCloud 且地址为空时自动填 https://caldav.icloud.com
-    $("select[data-s='serverType']").addEventListener("change", (e) => {
-      const sel = (e.target as HTMLSelectElement).value;
-      if (sel === "icloud") {
-        const serverInput = $("input[data-s='server']");
-        if (!serverInput.value.trim()) serverInput.value = "https://caldav.icloud.com";
-      }
-    });
-
-    el.querySelector("[data-action='test']")?.addEventListener("click", () => {
-      const server = $("input[data-s='server']").value.trim();
-      const username = $("input[data-s='username']").value.trim();
-      const password = $("input[data-s='password']").value;
-      const channel = $("select[data-s='channel']").value as any;
-      if (!server) {
-        msgEl.textContent = "服务器地址不能为空";
-        msgEl.classList.remove("is-ok");
-        msgEl.classList.add("is-err");
-        return;
-      }
-      msgEl.textContent = "正在测试连接…";
-      msgEl.classList.remove("is-ok", "is-err");
-      void testConnection(server, channel, { username, password }).then((r) => {
-        msgEl.textContent = r.message;
-        msgEl.classList.toggle("is-ok", r.ok);
-        msgEl.classList.toggle("is-err", !r.ok);
-      });
-    });
-
-    el.querySelector("[data-action='discover']")?.addEventListener("click", async () => {
-      const server = $("input[data-s='server']").value.trim();
-      const username = $("input[data-s='username']").value.trim();
-      const password = $("input[data-s='password']").value;
-      const channel = $("select[data-s='channel']").value as any;
-      const path = $("input[data-s='path']").value.trim();
-      msgEl.textContent = "正在发现日历…";
-      msgEl.classList.remove("is-ok", "is-err");
-      try {
-        const r = await discoverCalendars(server, channel, { username, password }, path);
-        const existing = new Map(s.calendars.map((c) => [c.url, c]));
-        s.calendars = r.calendars.map(
-          (c) =>
-            existing.get(c.url) || { ...c, enabled: true }
-        );
-        renderCalChecks(el, s.calendars);
-        msgEl.textContent = `发现 ${r.calendars.length} 个日历，请勾选后保存`;
-        msgEl.classList.add("is-ok");
-      } catch (e: any) {
-        msgEl.textContent = "发现失败: " + describeNetworkError(e, channel);
-        msgEl.classList.add("is-err");
-      }
-    });
-
-    el.querySelector("[data-action='save']")?.addEventListener("click", async () => {
-      s.serverUrl = $("input[data-s='server']").value.trim();
-      s.username = $("input[data-s='username']").value.trim();
-      // 密码框留空 = 保持原样。解密失败时输入框本就是空的，用户只想改别的字段
-      // 却点保存 —— 若无条件用空值覆盖，密码就被抹掉了（这正是丢密码的直接原因之一）。
-      const pwInput = $("input[data-s='password']").value;
-      if (pwInput) {
-        s.password = pwInput;
-        ctx.store.secretBroken = false;
-        ctx.store.pendingUnlock = false;
-      }
-      s.calendarPath = $("input[data-s='path']").value.trim();
-      s.serverType = $("select[data-s='serverType']").value as any;
-      s.channel = $("select[data-s='channel']").value as any;
-      s.syncIntervalMin = Math.max(0, +$("input[data-s='interval']").value || 0);
-      s.conflict = $("select[data-s='conflict']").value as any;
-      s.pastDays = Math.max(7, +$("input[data-s='past']").value || 90);
-      s.futureDays = Math.max(30, +$("input[data-s='future']").value || 370);
-      // 附件/ICS 体积上限（MB）。留空或非法 → 回退默认值（与 ics.ts 的 *_MB 常量一致）
-      s.attachSizeMaxMB = Math.max(1, +$("input[data-s='attachMax']").value || 5);
-      s.icsSizeMaxMB = Math.max(1, +$("input[data-s='icsMax']").value || 10);
-      const wasRemindOn = s.enableReminders;
-      s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement).checked;
-      s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement).checked;
-      s.purgeOtherServerOnSwitch = ($("input[data-s='purgeOnSwitch']") as HTMLInputElement).checked;
-      // 勾选的日历
-      el.querySelectorAll<HTMLElement>(".caldav-set-cal").forEach((row) => {
-        const c = s.calendars[+row.dataset.idx!];
-        c.enabled = (row.querySelector("input[type='checkbox']") as HTMLInputElement).checked;
-        const nameInput = row.querySelector("input[data-role='name']") as HTMLInputElement;
-        if (nameInput.value.trim()) c.displayName = nameInput.value.trim();
-        // 日程 / 待办各自的默认色（药丸即取色器）。没出药丸的一侧保持原值不动
-        const evInput = row.querySelector("input[data-role='eventColor']") as HTMLInputElement | null;
-        if (evInput?.value) c.eventColor = evInput.value;
-        const tdInput = row.querySelector("input[data-role='todoColor']") as HTMLInputElement | null;
-        if (tdInput?.value) c.todoColor = tdInput.value;
-      });
-      // 补齐缺的一侧 + 把旧 color 镜像成 eventColor（旧版本端读同一份数据不会变灰）
-      normalizeCalendarColors(s.calendars);
-      s.defaultCalendarUrl = s.calendars.find((c) => c.enabled)?.url;
-      await ctx.store.persist();
-      // 「切换服务器时清理旧条目」开关开着 → 清掉不属于当前启用日历服务器的本地条目。
-      //
-      // ⚠️ 判据是「启用日历所属的服务器」，**不是** settings.serverUrl：
-      //    用户改了地址但还没重新「发现日历」时，启用日历仍指向旧服务器 ——
-      //    那时若按新地址判定，会把**旧服务器正在用的条目**当成孤儿清掉，那是真丢数据。
-      //    按启用日历判定则安全：换了服务器并重新发现日历后，旧服务器的条目自然成为孤儿。
-      const purged = await ctx.store.purgeOrphansIfEnabled();
-      // 凭据或服务器地址可能刚被改过：丢掉 Digest 协商缓存，
-      // 否则下次请求会拿着旧 nonce/旧密码重发，白挨一次 401
-      clearAuthCache();
-      ctx.sync.startAutoSync();
-      dialog.destroy();
-      resolve();
-      // persist() 只落盘、不 emit，所以保存后已打开的面板不会自己重渲染 ——
-      // 这里统一刷一次。日历勾选 / 颜色 / 同步窗口这些改了都得立刻看得见。
-      ctx.refreshPanels?.();
-      if (purged) {
-        showMessage(`已清理 ${purged} 条旧服务器的本地条目（可在设置里恢复）`, 6000, "info");
-      }
-      // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
-      // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
-      if (s.enableReminders) {
-        if (!wasRemindOn) {
-          void ctx.testReminder?.();
-          showMessage("提醒已开启，并已发送一条测试提醒", 6000, "info");
-        } else {
-          showMessage("提醒设置已保存", 4000, "info");
-        }
-      }
-    });
-    el.querySelector("[data-action='cancel']")?.addEventListener("click", () => {
-      dialog.destroy();
-      resolve();
-    });
+    rerender();
   });
 }
 
@@ -347,97 +498,44 @@ function formatTimeText(iso: string): string {
 }
 
 /** 设置页 HTML。**导出供回归测试渲染校验**（按钮图标是否被当纯文本显示等）。 */
-export function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean): string {
+export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: string | null): string {
+  // 兼容老结构入参（测试与历史数据）：平铺字段迁进 accounts 后再渲染
+  migrateToAccounts(s as any);
+  const accounts = s.accounts;
+  const accList = accounts.length
+    ? accounts.map((a) => accountCardHtml(a, mobile, expandedId)).join("")
+    : `<div class="caldav-set-hint">还没有添加任何日历账户。点击下方「添加账户」接入 iCloud、Baïkal、Radicale 等 CalDAV 服务器，可同时添加多个。</div>`;
   return `
 <div class="caldav-settings-form">
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.server}</span>服务器</div>
-    <div class="caldav-field">
-      <label class="caldav-field-label">服务器类型</label>
-      <div class="caldav-input-wrap">
-        <select class="caldav-input" data-s="serverType">
-          <option value="caldav" ${s.serverType !== "icloud" ? "selected" : ""}>CalDAV（标准服务器）</option>
-          <option value="icloud" ${s.serverType === "icloud" ? "selected" : ""}>iCloud</option>
-        </select>
-        <span class="caldav-input-suffix">${icons.chevron}</span>
-      </div>
-    </div>
-    <p class="caldav-set-hint">选「iCloud」时地址会自动填为 https://caldav.icloud.com，留空「日历路径」即可自动发现日历（iCloud 地址会跳转到节点主机，已做适配）；选「CalDAV」可连接任意标准服务器。</p>
-    <div class="caldav-field">
-      <label class="caldav-field-label">服务器地址</label>
-      <input class="caldav-input" data-s="server" placeholder="http://192.168.1.10:5232/ 或 https://dav.example.com/" value="${escape(s.serverUrl)}"/>
-    </div>
-    <div class="caldav-field-row">
-      <div class="caldav-field">
-        <label class="caldav-field-label">用户名</label>
-        <input class="caldav-input" data-s="username" value="${escape(s.username)}"/>
-      </div>
-      <div class="caldav-field">
-        <label class="caldav-field-label">密码</label>
-        <input class="caldav-input" type="password" data-s="password" value="${escape(s.password)}" placeholder="留空则保持不变" autocomplete="new-password"/>
-      </div>
-    </div>
-    <div class="caldav-field-row">
-      <div class="caldav-field">
-        <label class="caldav-field-label">日历路径（可选，留空自动发现）</label>
-        <input class="caldav-input" data-s="path" placeholder="如 http://host:5232/user/personal/" value="${escape(s.calendarPath)}"/>
-      </div>
-      <div class="caldav-field">
-        <label class="caldav-field-label">请求通道</label>
-        <div class="caldav-input-wrap">
-          <select class="caldav-input" data-s="channel">
-            <option value="auto" ${s.channel === "auto" ? "selected" : ""}>自动（内核代理优先）</option>
-            <option value="proxy" ${s.channel === "proxy" ? "selected" : ""}>仅思源内核代理</option>
-            <option value="direct" ${s.channel === "direct" ? "selected" : ""}>仅浏览器直连</option>
-          </select>
-          <span class="caldav-input-suffix">${icons.chevron}</span>
-        </div>
-      </div>
-    </div>
-    ${
-      mobile
-        ? `<p class="caldav-set-hint caldav-net-note">移动端请保持「自动」：手机 WebView 会拦截明文 HTTP 的浏览器直连（报 Failed to fetch），
-      直连失败时插件会自动改走内核代理。</p>`
-        : ""
-    }
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.server}</span>日历账户</div>
+    <div class="caldav-acc-list">${accList}</div>
     <div class="caldav-actions-row">
-      <button class="caldav-foot-btn caldav-foot-btn--ghost" data-action="test">${icons.check} 测试连接</button>
-      <button class="caldav-foot-btn caldav-foot-btn--primary" data-action="discover">${icons.calendar} 发现日历</button>
-      <span class="caldav-set-msg" data-msg></span>
+      <button class="caldav-btn caldav-btn--sm" type="button" data-action="acc-add">${icons.plus} 添加账户</button>
     </div>
-  </div>
-
-  <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.calendar}</span>日历</div>
-    <div class="caldav-set-cals" data-cals></div>
   </div>
 
   <div class="caldav-section caldav-section--card">
     <div class="caldav-section-title"><span class="caldav-section-icon">${icons.sync}</span>同步</div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">自动同步间隔（分钟，0 关闭）</label>
+        <label class="caldav-field-label">自动同步间隔（分钟，0 关闭；全局一个周期，会同步所有启用账户）</label>
         <input class="caldav-input" type="number" min="0" data-s="interval" value="${s.syncIntervalMin}"/>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">冲突策略</label>
+        <label class="caldav-field-label">新建条目的默认日历</label>
         <div class="caldav-input-wrap">
-          <select class="caldav-input" data-s="conflict">
-            <option value="server" ${s.conflict === "server" ? "selected" : ""}>服务端优先</option>
-            <option value="local" ${s.conflict === "local" ? "selected" : ""}>本地优先</option>
+          <select class="caldav-input" data-s="defaultCal">
+            <option value="" ${!s.defaultCalendarUrl ? "selected" : ""}>自动（第一个启用账户的第一个启用日历）</option>
+            ${enabledCalendars(s)
+              .map(
+                (c) =>
+                  `<option value="${escape(c.url)}" ${s.defaultCalendarUrl === c.url ? "selected" : ""}>${escape(c.displayName)}</option>`
+              )
+              .join("")}
           </select>
           <span class="caldav-input-suffix">${icons.chevron}</span>
         </div>
-      </div>
-    </div>
-    <div class="caldav-field-row">
-      <div class="caldav-field">
-        <label class="caldav-field-label">同步过去（天）</label>
-        <input class="caldav-input" type="number" min="7" data-s="past" value="${s.pastDays}"/>
-      </div>
-      <div class="caldav-field">
-        <label class="caldav-field-label">同步未来（天）</label>
-        <input class="caldav-input" type="number" min="30" data-s="future" value="${s.futureDays}"/>
       </div>
     </div>
     <div class="caldav-field-row">
@@ -484,17 +582,13 @@ export function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean):
 
   <div class="caldav-section caldav-section--card">
     <div class="caldav-section-title"><span class="caldav-section-icon">${icons.layers}</span>本地数据</div>
-    <label class="caldav-check-row">
-      <input type="checkbox" data-s="purgeOnSwitch" ${s.purgeOtherServerOnSwitch ? "checked" : ""}/>
-      <span>切换服务器时清理旧服务器的本地条目（只清本地缓存，服务端不动；清理前自动备份，可随时恢复）</span>
-    </label>
     <p class="caldav-set-hint">
-      换服务器后，旧服务器的条目会一直留在本地：既不显示也不同步，却占着存储，
-      换回去时还会「诈尸」冒出来。打开上面的开关，检测到服务器地址变更时会自动清掉它们。
-      判定按「服务器地址」（协议 + 主机 + 端口），同一台服务器上的多个日历都会保留。
+      删除账户时可选「同时清理该账户的本地条目」（清理前自动备份，可随时恢复）；
+      下面这两个按钮用于手动清理**不属于任何已配置账户**的本地条目 ——
+      比如曾经连过、现已不在设置里的旧服务器数据。只清本地缓存，服务端不动。
     </p>
     <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash}<span data-purge-now-label>立即清理旧服务器条目</span></button>
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash}<span data-purge-now-label>立即清理其他服务器的本地条目</span></button>
       <button class="caldav-btn caldav-btn--sm" data-action="purge-restore">${icons.reset}<span data-purge-restore-label>恢复上次清理的条目</span></button>
       <span class="caldav-set-msg" data-purge-msg></span>
     </div>
@@ -509,6 +603,148 @@ export function settingsHtml(s: PanelCtx["store"]["settings"], mobile: boolean):
   <button class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} 取消</button>
   <button class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} 保存</button>
 </div>`;
+}
+
+/** 一张账户卡片（手风琴：点头部展开「服务器 / 日历 / 同步」三段） */
+function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | null): string {
+  const enabledCals = (a.calendars || []).filter((c) => c.enabled).length;
+  const summary = a.serverUrl
+    ? `${a.serverUrl} · ${enabledCals}/${(a.calendars || []).length} 日历启用`
+    : "尚未填写服务器地址";
+  return `
+<div class="caldav-acc ${a.enabled ? "" : "is-off"} ${expandedId === a.id ? "is-open" : ""}" data-acc="${escape(a.id)}">
+  <div class="caldav-acc-head">
+    <span class="caldav-acc-dot" style="background:${calEventColor(a.calendars?.[0])}"></span>
+    <span class="caldav-acc-name">${escape(a.name)}</span>
+    <span class="caldav-acc-sum" title="${escape(a.serverUrl)}">${escape(summary)}</span>
+    <label class="caldav-acc-switch" title="${a.enabled ? "停用该账户（其日历不再显示、不参与同步）" : "启用该账户"}">
+      <input type="checkbox" data-acc-toggle="${escape(a.id)}" ${a.enabled ? "checked" : ""}/>
+    </label>
+    <button class="caldav-icon-btn" type="button" data-action="acc-del" data-acc-del="${escape(a.id)}" title="删除该账户">${icons.trash}</button>
+  </div>
+  <div class="caldav-acc-delconf" data-acc-delconf hidden>
+    <div class="caldav-set-hint">
+      删除账户「${escape(a.name)}」？该账户在本地共有 <b data-acc-deln>0</b> 条条目。
+      服务端数据不受影响，重新添加同名账户即可再次同步。
+    </div>
+    <label class="caldav-check-row">
+      <input type="checkbox"/>
+      <span>同时清理该账户的本地条目（只清本地，清理前自动备份，可一键恢复）</span>
+    </label>
+    <div class="caldav-actions-row">
+      <button class="caldav-btn caldav-btn--sm" type="button" data-action="acc-del-ok">${icons.trash} 确认删除</button>
+      <button class="caldav-btn caldav-btn--sm caldav-btn--ghost" type="button" data-action="acc-del-cancel">取消</button>
+    </div>
+  </div>
+  <div class="caldav-acc-body" ${expandedId === a.id ? "" : "hidden"}>
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.server}</span>服务器</div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">账户名称</label>
+      <input class="caldav-input" data-s="accName" value="${escape(a.name)}"/>
+    </div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">服务器类型</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="serverType">
+          <option value="caldav" ${a.serverType !== "icloud" ? "selected" : ""}>CalDAV（标准服务器）</option>
+          <option value="icloud" ${a.serverType === "icloud" ? "selected" : ""}>iCloud</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+    <p class="caldav-set-hint">选「iCloud」时地址会自动填为 https://caldav.icloud.com，留空「日历路径」即可自动发现日历（iCloud 地址会跳转到节点主机，已做适配）；选「CalDAV」可连接任意标准服务器。</p>
+    <div class="caldav-field">
+      <label class="caldav-field-label">服务器地址</label>
+      <input class="caldav-input" data-s="server" placeholder="http://192.168.1.10:5232/ 或 https://dav.example.com/" value="${escape(a.serverUrl)}"/>
+    </div>
+    <div class="caldav-field-row">
+      <div class="caldav-field">
+        <label class="caldav-field-label">用户名</label>
+        <input class="caldav-input" data-s="username" value="${escape(a.username)}"/>
+      </div>
+      <div class="caldav-field">
+        <label class="caldav-field-label">密码</label>
+        <input class="caldav-input" type="password" data-s="password" value="${escape(a.password)}" placeholder="留空则保持不变" autocomplete="new-password"/>
+      </div>
+    </div>
+    <div class="caldav-field-row">
+      <div class="caldav-field">
+        <label class="caldav-field-label">日历路径（可选，留空自动发现）</label>
+        <input class="caldav-input" data-s="path" placeholder="如 http://host:5232/user/personal/" value="${escape(a.calendarPath)}"/>
+      </div>
+      <div class="caldav-field">
+        <label class="caldav-field-label">请求通道</label>
+        <div class="caldav-input-wrap">
+          <select class="caldav-input" data-s="channel">
+            <option value="auto" ${a.channel === "auto" ? "selected" : ""}>自动（内核代理优先）</option>
+            <option value="proxy" ${a.channel === "proxy" ? "selected" : ""}>仅思源内核代理</option>
+            <option value="direct" ${a.channel === "direct" ? "selected" : ""}>仅浏览器直连</option>
+          </select>
+          <span class="caldav-input-suffix">${icons.chevron}</span>
+        </div>
+      </div>
+    </div>
+    ${
+      mobile
+        ? `<p class="caldav-set-hint caldav-net-note">移动端请保持「自动」：手机 WebView 会拦截明文 HTTP 的浏览器直连（报 Failed to fetch），
+      直连失败时插件会自动改走内核代理。</p>`
+        : ""
+    }
+    <div class="caldav-actions-row">
+      <button class="caldav-foot-btn caldav-foot-btn--ghost" type="button" data-action="test">${icons.check} 测试连接</button>
+      <button class="caldav-foot-btn caldav-foot-btn--primary" type="button" data-action="discover">${icons.calendar} 发现日历</button>
+      <span class="caldav-set-msg" data-acc-msg></span>
+    </div>
+
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.calendar}</span>日历</div>
+    <div class="caldav-acc-cals" data-cals>${calChecksHtml(a.calendars || [])}</div>
+
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.sync}</span>同步</div>
+    <div class="caldav-field-row">
+      <div class="caldav-field">
+        <label class="caldav-field-label">冲突策略</label>
+        <div class="caldav-input-wrap">
+          <select class="caldav-input" data-s="conflict">
+            <option value="server" ${a.conflict === "server" ? "selected" : ""}>服务端优先</option>
+            <option value="local" ${a.conflict === "local" ? "selected" : ""}>本地优先</option>
+          </select>
+          <span class="caldav-input-suffix">${icons.chevron}</span>
+        </div>
+      </div>
+      <div class="caldav-field">
+        <label class="caldav-field-label">同步过去（天）</label>
+        <input class="caldav-input" type="number" min="7" data-s="past" value="${a.pastDays}"/>
+      </div>
+      <div class="caldav-field">
+        <label class="caldav-field-label">同步未来（天）</label>
+        <input class="caldav-input" type="number" min="30" data-s="future" value="${a.futureDays}"/>
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
+/** 账户内的日历勾选列表（含名称与「日程 / 任务」取色药丸） */
+function calChecksHtml(cals: CalCalendar[]): string {
+  // 老数据（只有单个 color）在这里就地升级：eventColor/todoColor 都继承原色，观感不变
+  normalizeCalendarColors(cals);
+  if (!cals.length) {
+    return `<div class="caldav-set-hint">尚未发现日历，请先填写服务器信息并点击「发现日历」</div>`;
+  }
+  return cals
+    .map(
+      (c, i) => `
+    <div class="caldav-acc-cal" data-idx="${i}">
+      <input type="checkbox" ${c.enabled ? "checked" : ""}/>
+      <input class="caldav-input" data-role="name" value="${escape(c.displayName)}" title="${escape(c.url)}"/>
+      <span class="caldav-set-cal-tags">${
+        // 顺序固定为「日程」在前、「任务」在后；只给该日历支持的组件出药丸（不支持就没有对应色可配）
+        (c.supportsEvent ? colorPillHtml("eventColor", "日程", calEventColor(c)) : "") +
+        (c.supportsTodo ? colorPillHtml("todoColor", "任务", calTodoColor(c)) : "")
+      }</span>
+    </div>`
+    )
+    .join("");
 }
 
 /**
@@ -555,29 +791,4 @@ function bindColorPills(box: HTMLElement): void {
     input.addEventListener("input", sync);
     input.addEventListener("change", sync);
   });
-}
-
-function renderCalChecks(el: HTMLElement, cals: CalCalendar[]): void {
-  // 老数据（只有单个 color）在这里就地升级：eventColor/todoColor 都继承原色，观感不变
-  normalizeCalendarColors(cals);
-  const box = el.querySelector("[data-cals]") as HTMLElement;
-  if (!cals.length) {
-    box.innerHTML = `<div class="caldav-set-hint">尚未发现日历，请先填写服务器信息并点击「发现日历」</div>`;
-    return;
-  }
-  box.innerHTML = cals
-    .map(
-      (c, i) => `
-    <div class="caldav-set-cal" data-idx="${i}">
-      <input type="checkbox" ${c.enabled ? "checked" : ""}/>
-      <input class="caldav-input" data-role="name" value="${escape(c.displayName)}" title="${escape(c.url)}"/>
-      <span class="caldav-set-cal-tags">${
-        // 顺序固定为「日程」在前、「任务」在后；只给该日历支持的组件出药丸（不支持就没有对应色可配）
-        (c.supportsEvent ? colorPillHtml("eventColor", "日程", calEventColor(c)) : "") +
-        (c.supportsTodo ? colorPillHtml("todoColor", "任务", calTodoColor(c)) : "")
-      }</span>
-    </div>`
-    )
-    .join("");
-  bindColorPills(box);
 }

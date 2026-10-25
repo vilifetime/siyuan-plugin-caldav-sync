@@ -1,6 +1,6 @@
 /** 视图渲染公共类型 */
 import type { CalItem, SortMode } from "../core/types";
-import { DEFAULT_CATEGORIES, calEventColor, calTodoColor } from "../core/types";
+import { DEFAULT_CATEGORIES, calEventColor, calTodoColor, findCalendarByUrl } from "../core/types";
 import type { PanelCtx } from "./panel";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs } from "../core/date";
@@ -99,7 +99,7 @@ export function calColorOf(ctx: PanelCtx, it: CalItem): string {
       if (def?.color) return def.color;
     }
   }
-  const cal = ctx.store.settings.calendars.find((c) => c.url === it.calendarUrl);
+  const cal = findCalendarByUrl(ctx.store.settings, it.calendarUrl);
   return it.kind === "todo" ? calTodoColor(cal) : calEventColor(cal);
 }
 

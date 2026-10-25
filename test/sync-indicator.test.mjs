@@ -36,6 +36,7 @@ execSync(
 const require = createRequire(import.meta.url);
 const storeMod = require(path.join(outDir, "store.js"));
 const syncMod = require(path.join(outDir, "sync.js"));
+const migrateToAccounts = require(path.join(outDir, "types.js")).migrateToAccounts;
 
 let passed = 0;
 const t = async (name, fn) => {
@@ -68,8 +69,23 @@ function withFetch(router) {
   return { calls, restore: () => { globalThis.fetch = orig; } };
 }
 
-/** 让出事件循环：确保已启动的推送真的把请求发出去了 */
-const tick = () => new Promise((r) => setTimeout(r, 0));
+/**
+ * 等到 store.syncing 变成 want（默认 true）。
+ *
+ * ⚠️ 为什么不能只让出一个事件循环轮次：保存即推的路径是
+ * `updateItem → await store.persist() → enqueuePush → beginSyncing()`，
+ * 而 persist() 里有 WebCrypto 加密（Node 侧走线程池），完成时机**不保证
+ * 在同一个事件循环轮次内** —— 只让出一个 tick 时 beginSyncing 可能还没跑，
+ * 用例会随机挂（2026-10-25 实测 6 次挂 2 次）。轮询到条件成立才断言，
+ * 断言的含义（「推送已启动 ⇒ 必须置位」）不变。
+ */
+const waitSyncing = async (st, want = true, budgetMs = 5000) => {
+  const t0 = Date.now();
+  while (st.syncing !== want && Date.now() - t0 < budgetMs) {
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  return st.syncing === want;
+};
 
 const CAL_URL = "http://dav.test/cal/";
 const cal = { url: CAL_URL, displayName: "工作", enabled: true, supportsEvent: true, supportsTodo: true };
@@ -77,16 +93,18 @@ const cal = { url: CAL_URL, displayName: "工作", enabled: true, supportsEvent:
 async function mkStore(items = [], settings = {}) {
   const st = new storeMod.CalStore({ loadData: async () => undefined, saveData: async () => {} });
   await st.load();
-  st.settings = {
+  // 多账户（2026-10-25）：平铺参数合并后迁进 accounts[0]
+  const merged = {
     ...st.settings,
     serverUrl: "http://dav.test/",
     username: "u",
     password: "p",
     calendars: [{ ...cal }],
     conflict: "server",
-    syncIntervalMin: 0,
     ...settings
   };
+  migrateToAccounts(merged);
+  st.settings = { ...merged, syncIntervalMin: 0 };
   items.forEach((it) => st.put(it));
   return st;
 }
@@ -235,8 +253,9 @@ await t("syncAll 与保存即推并存：先结束的那条不抹掉另一条的
 
     // 路径 ①：保存即推（PUT 会被闸门挂住）
     const p1 = eng.updateItem(it);
-    await tick();
-    assert.strictEqual(st.syncing, true, "保存即推已启动 ⇒ 应置位");
+    // 等到推送真的启动（persist 的加密可能跨轮次，见 waitSyncing 注释）。
+    // PUT 被闸门挂住 ⇒ p1 不会在此期间结束，syncing 一旦置位就稳定为 true。
+    assert.ok(await waitSyncing(st), "保存即推已启动 ⇒ 应置位");
 
     // 路径 ②：手动全量同步（第一步推送排在 ① 后面，但 beginSyncing 立即生效）
     const p2 = eng.syncAll();

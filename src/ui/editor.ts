@@ -6,7 +6,7 @@ import { newDialog } from "@/ui/dialog";
 import { isMobile } from "./device";
 import { adoptMobileLayer } from "./mobile-layers";
 import type { Alarm, CalAttachment, CalCalendar, CalItem, CalKind, CategoryDef, Recurrence } from "../core/types";
-import { DEFAULT_CATEGORIES, calEventColor } from "../core/types";
+import { DEFAULT_CATEGORIES, accountOfUrl, calEventColor, enabledCalendars, findCalendarByUrl, resolveDefaultCalendar } from "../core/types";
 import { addDays, defaultStartStamp, isDateOnly, parseLocalStamp, stampOfMs, todayStamp } from "../core/date";
 import { attachSizeMaxBytes, convertItemKind, icsSizeMaxBytes, itemToEditedICS } from "../core/ics";
 import type { PanelCtx } from "./panel";
@@ -23,19 +23,42 @@ export interface EditorPreset {
   kind?: CalKind; // 新建时的种类
   start?: string; // 新建时的开始
   end?: string;
+  /** 新建时预选的日历（多账户后必须能指定落到哪个账户的日历） */
+  calendarUrl?: string;
+}
+
+
+/**
+ * 编辑器日历下拉的数据源：**启用账户下的启用日历**。
+ *
+ * keepUrl：正在编辑的条目所属日历。它可能已被停用（或所属账户停用），
+ * 过滤掉会让下拉框显示不出原值、用户一保存就莫名其妙换了日历 ——
+ * 所以把它所属的日历补回来（仅作展示，不改变同步行为）。
+ */
+function editorCalendars(ctx: PanelCtx, keepUrl?: string): CalCalendar[] {
+  const out = enabledCalendars(ctx.store.settings);
+  if (keepUrl) {
+    const hit = findCalendarByUrl(ctx.store.settings, keepUrl);
+    if (hit && !out.some((c) => c.url === hit.url)) out.push(hit);
+  }
+  return out;
 }
 
 export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
   const editing = preset.item;
   const kind: CalKind = editing ? editing.kind : preset.kind || "event";
-  const cals = ctx.store.settings.calendars;
+  const cals = editorCalendars(ctx, editing?.calendarUrl || preset.calendarUrl);
   if (!cals.length) {
     alert("请先在设置中配置并发现 CalDAV 日历");
     return;
   }
+  // 附件行为按**所属账户**的服务器类型分叉（iCloud 托管 vs 内联 base64）
+  const isIcloud = accountOfUrl(ctx.store.settings, editing?.calendarUrl || preset.calendarUrl || "")?.serverType === "icloud";
+  // 默认日历：全局一个 defaultCalendarUrl；失效（被停用/删除）时由
+  // resolveDefaultCalendar 回退到第一个启用账户的第一个启用日历
   const defaultCal =
     cals.find((c) => c.url === ctx.store.settings.defaultCalendarUrl) ||
-    cals.find((c) => c.enabled) ||
+    resolveDefaultCalendar(ctx.store.settings) ||
     cals[0];
 
   const isNew = !editing;
@@ -74,7 +97,7 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
       !!ctx.store.settings.categoryMulti,
       isNew,
       attachSizeMaxBytes(ctx.store.settings),
-      ctx.store.settings.serverType === "icloud"
+      isIcloud
     )}</div>`,
     width: mobile ? "100vw" : isTodo ? "560px" : "520px",
     height: mobile ? "100vh" : "86vh",
@@ -749,7 +772,7 @@ function editorHtml(
 
 function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem, isNew: boolean): void {
   const isTodo = it.kind === "todo";
-  const cals = ctx.store.settings.calendars;
+  const cals = editorCalendars(ctx, it.calendarUrl);
   const f = (name: string) => el.querySelector(`[data-f="${name}"]`) as HTMLInputElement;
   const errEl = el.querySelector("[data-error]") as HTMLElement;
 
@@ -772,7 +795,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
   // 确认栏口径、保存时的体积预检都按它分叉（见 attachHintHtml /
   // confirmLargeFile / collectItem 的 isIcloud 分支）。放函数体作用域：
   // 附件区只在待办下渲染，但 collectItem 在块外也要用。
-  const isIcloud = ctx.store.settings.serverType === "icloud";
+  const isIcloud = accountOfUrl(ctx.store.settings, it.calendarUrl)?.serverType === "icloud";
   const attachRows = el.querySelector<HTMLElement>("[data-attach-rows]");
   if (attachRows) {
     const fileInput = el.querySelector<HTMLInputElement>("[data-attach-file]");
@@ -1286,7 +1309,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       const collected = collect(ctx, el, it, attachList); // 复用收集逻辑，未保存编辑不丢
       // 目标类型不被当前日历接受时必须换日历（iCloud 的「日历」只收 VEVENT、
       // 「提醒事项」只收 VTODO，硬转必 403）。UID/附件/重复规则全部保留，只是搬家。
-      const cals = ctx.store.settings.calendars.filter((c) => c.enabled);
+      const cals = enabledCalendars(ctx.store.settings);
       const cur = cals.find((c) => c.url === collected.calendarUrl);
       const accepted = (cal?: CalCalendar): boolean =>
         !cal || (target === "event" ? cal.supportsEvent !== false : cal.supportsTodo !== false);
@@ -1339,7 +1362,7 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
   it.summary = v("summary");
   if (!it.summary) throw new Error("标题不能为空");
   it.calendarUrl = v("calendar");
-  const cal = ctx.store.settings.calendars.find((c) => c.url === it.calendarUrl);
+  const cal = findCalendarByUrl(ctx.store.settings, it.calendarUrl);
   // 更换日历 = 移动资源
   if (cal && !it.href.startsWith(cal.url.replace(/\/+$/, ""))) {
     // 记下原地址：上传成功后要把旧日历里那份删掉，否则服务端留孤儿
@@ -1408,7 +1431,7 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
   //    托管后的 ICS 只记一行 ATTACH 链接，把 b64 换成占位 uri 再算，
   //    量的才是最终会上服务器的体积。
   const draftForSize: CalItem =
-    ctx.store.settings.serverType === "icloud" && it.attachments?.some((a) => (a.b64 || "").trim())
+    accountOfUrl(ctx.store.settings, it.calendarUrl)?.serverType === "icloud" && it.attachments?.some((a) => (a.b64 || "").trim())
       ? {
           ...it,
           attachments: it.attachments.map((a) =>

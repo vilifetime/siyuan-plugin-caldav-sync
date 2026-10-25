@@ -72,20 +72,30 @@ export function loadBuiltPlugin() {
 /** 组装测试数据 */
 export function seedStore(plugin) {
   const store = plugin.store;
+  // 2026-10-25 多账户重构：服务器/凭据/日历已下沉到 accounts[0]（曾平铺在 settings 上，
+  // 直接赋平铺字段会让 accounts 为 undefined，Dock 渲染时 credentialsIssue 一遍历就崩）。
+  // 日历只给 color 不给 eventColor/todoColor —— loader 有一条用例专门验「渲染时就地升级」。
   store.settings = {
-    serverUrl: "http://127.0.0.1:5232/",
-    username: "testuser",
-    password: "testpass",
-    calendarPath: "",
-    channel: "direct",
     syncIntervalMin: 0,
-    conflict: "server",
-    pastDays: 90,
-    futureDays: 370,
     defaultCalendarUrl: "http://127.0.0.1:5232/testuser/work/",
-    calendars: [
-      { url: "http://127.0.0.1:5232/testuser/work/", displayName: "工作", color: "#3b82f6", enabled: true, supportsEvent: true, supportsTodo: true },
-      { url: "http://127.0.0.1:5232/testuser/personal/", displayName: "个人", color: "#10b981", enabled: true, supportsEvent: true, supportsTodo: true }
+    accounts: [
+      {
+        id: "acc-seed",
+        name: "测试账户",
+        enabled: true,
+        serverUrl: "http://127.0.0.1:5232/",
+        username: "testuser",
+        password: "testpass",
+        calendarPath: "",
+        channel: "direct",
+        conflict: "server",
+        pastDays: 90,
+        futureDays: 370,
+        calendars: [
+          { url: "http://127.0.0.1:5232/testuser/work/", displayName: "工作", color: "#3b82f6", enabled: true, supportsEvent: true, supportsTodo: true },
+          { url: "http://127.0.0.1:5232/testuser/personal/", displayName: "个人", color: "#10b981", enabled: true, supportsEvent: true, supportsTodo: true }
+        ]
+      }
     ]
   };
   const today = new Date();

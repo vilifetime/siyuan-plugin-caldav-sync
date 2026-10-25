@@ -147,12 +147,13 @@ await t("旧文件存在时无损迁移到新文件，并清掉旧文件与空�
 // ---- 3. 迁移后的数据真的进了内存（不只是搬了文件） ----
 await t("迁移后的设置、条目、同步时间都正常载入", async () => {
   const plugin = await boot({ [LEGACY_FILE]: legacyFixture() });
+  // 2026-10-25 多账户重构后，平铺字段由 migrateToAccounts 迁进 accounts[0]
   assert.strictEqual(
-    plugin.store.settings.serverUrl,
+    plugin.store.settings.accounts[0].serverUrl,
     "http://nas.bonebear.cn:5232/bonebear",
-    "服务器地址应载入"
+    "服务器地址应载入（迁进 accounts[0]）"
   );
-  assert.strictEqual(plugin.store.settings.calendars.length, 1, "日历列表应载入");
+  assert.strictEqual(plugin.store.settings.accounts[0].calendars.length, 1, "日历列表应载入");
   assert.strictEqual(plugin.store.getAll().length, 1, "条目应载入");
   assert.strictEqual(plugin.store.lastSync, "2026-09-25T12:00:00", "上次同步时间应载入");
   assert.strictEqual(plugin.store.keyring, "POjsY05/Bgv+ngdCq2v7RSaiPr4aUaRRMfI6hBX7SD0=", "密钥应随数据载入");
@@ -172,7 +173,7 @@ await t("新文件已存在时优先新文件，且不动旧文件", async () =>
     items: []
   });
   const plugin = await boot({ [DATA_FILE]: fresh, [LEGACY_FILE]: legacyFixture() });
-  assert.strictEqual(plugin.store.settings.username, "新文件名里的用户", "应以新文件为准");
+  assert.strictEqual(plugin.store.settings.accounts[0].username, "新文件名里的用户", "应以新文件为准");
   assert.ok(plugin.__stores.has(LEGACY_FILE), "新文件已在时不该去动旧文件");
 });
 
@@ -185,7 +186,7 @@ await t("写新文件失败时保留旧文件并照常载入旧数据", async ()
     };
   });
   assert.strictEqual(
-    plugin.store.settings.serverUrl,
+    plugin.store.settings.accounts[0].serverUrl,
     legacy.settings.serverUrl,
     "写失败也要把旧数据交给内存，本次会话照常可用"
   );
@@ -216,7 +217,7 @@ await t("读新文件异常时抛出（绝不静默当成无数据去回退旧�
 // ---- 8. 全新安装：不凭空写文件，空壳也不残留 ----
 await t("全新安装不写出数据文件", async () => {
   const plugin = await boot({ [STALE_FILE]: EMPTY_SHELL });
-  assert.strictEqual(plugin.store.settings.serverUrl, "", "全新安装应是默认设置");
+  assert.strictEqual(plugin.store.settings.accounts.length, 0, "全新安装应是默认设置（没有任何账户）");
   assert.ok(!plugin.__stores.has(DATA_FILE), "没有数据就不该写文件");
   assert.ok(!plugin.__stores.has(LEGACY_FILE), "更不该写历史文件名");
   assert.ok(!plugin.__stores.has(STALE_FILE), "空壳文件应被清掉");
@@ -225,11 +226,11 @@ await t("全新安装不写出数据文件", async () => {
 // ---- 9. 保存走的是新文件名（否则迁移完又会在旧名上长出新数据） ----
 await t("后续保存写入新文件名，不再产生旧文件", async () => {
   const plugin = await boot({ [LEGACY_FILE]: legacyFixture() });
-  plugin.store.settings.username = "改过了";
+  plugin.store.settings.accounts[0].username = "改过了";
   await plugin.store.persist();
   assert.ok(plugin.__stores.has(DATA_FILE), "保存应写入新文件名");
   assert.strictEqual(
-    plugin.__stores.get(DATA_FILE).settings.username,
+    plugin.__stores.get(DATA_FILE).settings.accounts[0].username,
     "改过了",
     "新文件应包含最新改动"
   );

@@ -276,7 +276,11 @@ export function migrateToAccounts(s: any): void {
   const hasOldKeys = "serverUrl" in s || "username" in s || "password" in s || "calendarPath" in s || "calendars" in s;
   if (!hasOldKeys) return;
   const hasOld = !!(s.serverUrl || s.username || s.password || (Array.isArray(s.calendars) && s.calendars.length));
-  if (hasOld) {
+  if (!Array.isArray(s.accounts)) s.accounts = [];
+  // 只有 accounts 为空时才用平铺字段造第一个账户。两者**共存**时（云同步把旧副本与
+  // 新数据混在一起的极端情况）平铺字段只是残留，绝不能拿它覆盖现有账户数组 ——
+  // 那是一次性抹掉用户其余全部账户的静默数据丢失。
+  if (hasOld && !s.accounts.length) {
     s.accounts = [
       {
         id: newAccountId(),
@@ -294,8 +298,6 @@ export function migrateToAccounts(s: any): void {
         calendars: Array.isArray(s.calendars) ? s.calendars : []
       }
     ];
-  } else {
-    s.accounts = [];
   }
   // 老字段从 settings 上摘掉：留着就会被 persist 原样写回，变成第二处真相
   for (const k of ["serverUrl", "username", "password", "calendarPath", "serverType", "channel", "conflict", "pastDays", "futureDays", "calendars"]) {

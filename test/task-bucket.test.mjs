@@ -76,17 +76,25 @@ const HAS_THISWEEK = WEEK_END > TOMORROW;
 /* ---------- 造数据：每组至少一条，且能验组内排序 ---------- */
 const store = plugin.store;
 store.settings = {
-  serverUrl: "http://127.0.0.1:5232/",
-  username: "testuser",
-  password: "testpass",
-  calendarPath: "",
-  channel: "direct",
   syncIntervalMin: 0,
-  conflict: "server",
-  pastDays: 90,
-  futureDays: 370,
   defaultCalendarUrl: CAL,
-  calendars: [{ url: CAL, displayName: "工作", color: "#3b82f6", enabled: true, supportsEvent: true, supportsTodo: true }],
+  // 2026-10-25 多账户：服务器/日历字段下沉到账户级
+  accounts: [
+    {
+      id: "acc-test",
+      name: "测试账户",
+      enabled: true,
+      serverUrl: "http://127.0.0.1:5232/",
+      username: "testuser",
+      password: "testpass",
+      calendarPath: "",
+      channel: "direct",
+      conflict: "server",
+      pastDays: 90,
+      futureDays: 370,
+      calendars: [{ url: CAL, displayName: "工作", color: "#3b82f6", enabled: true, supportsEvent: true, supportsTodo: true }]
+    }
+  ],
   showEventsInTaskView: false,
   showExpiredEventsInTaskView: false
 };

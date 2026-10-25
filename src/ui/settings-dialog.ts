@@ -100,6 +100,70 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     const activeAcc = (): CalAccount | undefined =>
       s.accounts.find((a) => a.id === activeAccId);
 
+    /**
+     * 展开中账户的卡片元素。**账户字段的查找只允许在它里面做**（配合 accountCardHtml
+     * 「收起的卡不渲染 body」）：曾经用 el.querySelector 全局按 data-s 找输入框，收起卡的
+     * body 还在 DOM 里（哪怕 hidden），结果全落到第一张卡上 —— 保存第二个账户写进去的
+     * 是第一个账户的服务器/用户名/密码（2026-10-25 雄哥实测，见 accountCardHtml 注释）。
+     */
+    const activeCard = (): HTMLElement | null => {
+      if (!activeAccId) return null;
+      const cards = el.querySelectorAll<HTMLElement>(".caldav-acc");
+      for (const c of Array.from(cards)) if (c.dataset.acc === activeAccId) return c;
+      return null;
+    };
+    /** 展开中账户卡片内的输入框（没有展开的账户时为 null） */
+    const $acc = (sel: string): HTMLInputElement | null =>
+      activeCard()?.querySelector<HTMLInputElement>(sel) ?? null;
+
+    /**
+     * 把展开账户的输入写回账户对象（服务器 / 同步 / 日历勾选与颜色）。
+     *
+     * 两个调用方，缺任何一边都会丢用户刚填的东西：
+     *  1. 保存（bindSave）—— 原保存逻辑的主体，抽出来共用；
+     *  2. **任何会 rerender 的操作之前**（停用开关、添加账户、发现日历成功、删除确认）——
+     *     rerender 会用账户对象重建全部输入框，不先把输入落进对象，重渲一次就全白了
+     *     （2026-10-25：点「发现日历」成功后重渲，刚填的服务器地址/用户名被抹掉；
+     *     日历勾选与配色同理，且 discover 的「保留已存在日历配置」也要读它们）。
+     */
+    function flushAccountInputs(acc: CalAccount): void {
+      const card = activeCard();
+      if (!card) return;
+      const q = (sel: string) => card.querySelector<HTMLInputElement>(sel);
+      acc.name = q("input[data-s='accName']")?.value.trim() || acc.name;
+      acc.serverUrl = q("input[data-s='server']")?.value.trim() || "";
+      acc.username = q("input[data-s='username']")?.value.trim() || "";
+      // 密码框留空 = 保持原样。解密失败时输入框本就是空的，用户只想改别的字段
+      // 却点保存 —— 若无条件用空值覆盖，密码就被抹掉了（这正是丢密码的直接原因之一）。
+      const pwInput = q("input[data-s='password']")?.value || "";
+      if (pwInput) {
+        acc.password = pwInput;
+        ctx.store.secretBroken = false;
+        ctx.store.pendingUnlock = false;
+      }
+      acc.calendarPath = q("input[data-s='path']")?.value.trim() || "";
+      acc.serverType = (q("select[data-s='serverType']")?.value || "caldav") as CalAccount["serverType"];
+      acc.channel = (q("select[data-s='channel']")?.value || "auto") as CalAccount["channel"];
+      acc.conflict = (q("select[data-s='conflict']")?.value || "server") as CalAccount["conflict"];
+      acc.pastDays = Math.max(7, +(q("input[data-s='past']")?.value || "0") || 90);
+      acc.futureDays = Math.max(30, +(q("input[data-s='future']")?.value || "0") || 370);
+      // 勾选的日历
+      card.querySelectorAll<HTMLElement>(".caldav-acc-cal").forEach((row) => {
+        const c = acc.calendars[+row.dataset.idx!];
+        if (!c) return;
+        c.enabled = (row.querySelector("input[type='checkbox']") as HTMLInputElement).checked;
+        const nameInput = row.querySelector("input[data-role='name']") as HTMLInputElement;
+        if (nameInput.value.trim()) c.displayName = nameInput.value.trim();
+        // 日程 / 待办各自的默认色（药丸即取色器）。没出药丸的一侧保持原值不动
+        const evInput = row.querySelector("input[data-role='eventColor']") as HTMLInputElement | null;
+        if (evInput?.value) c.eventColor = evInput.value;
+        const tdInput = row.querySelector("input[data-role='todoColor']") as HTMLInputElement | null;
+        if (tdInput?.value) c.todoColor = tdInput.value;
+      });
+      // 补齐缺的一侧 + 把旧 color 镜像成 eventColor（旧版本端读同一份数据不会变灰）
+      normalizeCalendarColors(acc.calendars);
+    }
+
     // ── 渲染 ────────────────────────────────────────────────
     const rerender = (): void => {
       el.innerHTML = settingsHtml(s, mobile, activeAccId);
@@ -123,6 +187,10 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         cb.addEventListener("change", () => {
           const acc = s.accounts.find((a) => a.id === cb.dataset.accToggle);
           if (!acc) return;
+          // 先把展开账户里填了一半的值落回对象：下面这个 rerender 会用账户对象
+          // 重建全部输入框，不落盘就全白了（flushAccountInputs 的说明）
+          const cur = activeAcc();
+          if (cur) flushAccountInputs(cur);
           acc.enabled = cb.checked;
           void ctx.store.persist();
           ctx.refreshPanels?.();
@@ -131,6 +199,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       });
       // 添加账户
       el.querySelector("[data-action='acc-add']")?.addEventListener("click", () => {
+        const cur = activeAcc();
+        if (cur) flushAccountInputs(cur); // 同上：别让重渲抹掉上一个账户填了一半的值
         const acc = blankAccount(s.accounts.length + 1);
         s.accounts.push(acc);
         activeAccId = acc.id; // 新账户直接展开，顺手就能填
@@ -161,6 +231,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           conf.querySelector("[data-action='acc-del-ok']")?.addEventListener("click", async () => {
             const idx = s.accounts.findIndex((a) => a.id === id);
             if (idx < 0) return;
+            const cur = activeAcc();
+            if (cur) flushAccountInputs(cur); // 删完也要重渲，先落盘
             const alsoPurge = !!purgeCb?.checked;
             const purged = alsoPurge ? await ctx.store.purgeAccountItems(id) : 0;
             s.accounts.splice(idx, 1);
@@ -188,22 +260,27 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
 
     // ── 服务器 / 测试 / 发现 ────────────────────────────────
     function bindServer(): void {
+      // 账户字段一律在**展开卡的 body 里**找（$acc/activeCard），不能用 el.querySelector
+      // 全局找 —— 理由见 accountCardHtml 与 activeCard 的注释（2026-10-25 串账户事故）。
+      // 没有展开的账户时这些按钮本就不在 DOM 里，自然没人可点。
       // 服务器类型切换：选 iCloud 且地址为空时自动填 https://caldav.icloud.com
-      el.querySelector("select[data-s='serverType']")?.addEventListener("change", (e) => {
-        const sel = (e.target as HTMLSelectElement).value;
-        if (sel === "icloud") {
-          const serverInput = $("input[data-s='server']");
-          if (serverInput && !serverInput.value.trim()) serverInput.value = "https://caldav.icloud.com";
-        }
-      });
+      activeCard()
+        ?.querySelector<HTMLSelectElement>("select[data-s='serverType']")
+        ?.addEventListener("change", (e) => {
+          const sel = (e.target as HTMLSelectElement).value;
+          if (sel === "icloud") {
+            const serverInput = $acc("input[data-s='server']");
+            if (serverInput && !serverInput.value.trim()) serverInput.value = "https://caldav.icloud.com";
+          }
+        });
 
-      el.querySelector("[data-action='test']")?.addEventListener("click", () => {
+      activeCard()?.querySelector("[data-action='test']")?.addEventListener("click", () => {
         const acc = activeAcc();
-        const server = $("input[data-s='server']")?.value.trim() || "";
-        const username = $("input[data-s='username']")?.value.trim() || "";
-        const password = $("input[data-s='password']")?.value || "";
-        const channel = ($("select[data-s='channel']")?.value || "auto") as any;
-        const msgEl = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+        const server = $acc("input[data-s='server']")?.value.trim() || "";
+        const username = $acc("input[data-s='username']")?.value.trim() || "";
+        const password = $acc("input[data-s='password']")?.value || "";
+        const channel = ($acc("select[data-s='channel']")?.value || "auto") as CalAccount["channel"];
+        const msgEl = activeCard()?.querySelector<HTMLElement>("[data-acc-msg]") ?? null;
         if (!server) {
           if (msgEl) {
             msgEl.textContent = "服务器地址不能为空";
@@ -224,15 +301,18 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         });
       });
 
-      el.querySelector("[data-action='discover']")?.addEventListener("click", async () => {
+      activeCard()?.querySelector("[data-action='discover']")?.addEventListener("click", async () => {
         const acc = activeAcc();
         if (!acc) return;
-        const server = $("input[data-s='server']")?.value.trim() || "";
-        const username = $("input[data-s='username']")?.value.trim() || "";
-        const password = $("input[data-s='password']")?.value || "";
-        const channel = ($("select[data-s='channel']")?.value || "auto") as any;
-        const path = $("input[data-s='path']")?.value.trim() || "";
-        const msgEl = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+        // 先把已填的服务器/用户名/日历配置落回账户：下面 discover 成功后会 rerender
+        // 重建输入框，不落盘刚填的全被抹掉；existing 映射也要靠它们保留原配置
+        flushAccountInputs(acc);
+        const server = $acc("input[data-s='server']")?.value.trim() || "";
+        const username = $acc("input[data-s='username']")?.value.trim() || "";
+        const password = $acc("input[data-s='password']")?.value || "";
+        const channel = ($acc("select[data-s='channel']")?.value || "auto") as CalAccount["channel"];
+        const path = $acc("input[data-s='path']")?.value.trim() || "";
+        const msgEl = activeCard()?.querySelector<HTMLElement>("[data-acc-msg]") ?? null;
         if (msgEl) {
           msgEl.textContent = "正在发现日历…";
           msgEl.classList.remove("is-ok", "is-err");
@@ -244,7 +324,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           acc.calendars = r.calendars.map((c) => existing.get(c.url) || { ...c, enabled: true });
           normalizeCalendarColors(acc.calendars);
           rerender();
-          const msg2 = el.querySelector("[data-acc-msg]") as HTMLElement | null;
+          const msg2 = activeCard()?.querySelector<HTMLElement>("[data-acc-msg]") ?? null;
           if (msg2) {
             msg2.textContent = `发现 ${r.calendars.length} 个日历，请勾选后保存`;
             msg2.classList.add("is-ok");
@@ -389,38 +469,13 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         // 根本不在 DOM 里，它们的值原样保留在 settings.accounts 中，不受影响）
         const acc = activeAcc();
         if (acc) {
-          acc.name = $("input[data-s='accName']")?.value.trim() || acc.name;
-          acc.serverUrl = $("input[data-s='server']")?.value.trim() || "";
-          acc.username = $("input[data-s='username']")?.value.trim() || "";
-          // 密码框留空 = 保持原样。解密失败时输入框本就是空的，用户只想改别的字段
-          // 却点保存 —— 若无条件用空值覆盖，密码就被抹掉了（这正是丢密码的直接原因之一）。
-          const pwInput = $("input[data-s='password']")?.value || "";
-          if (pwInput) {
-            acc.password = pwInput;
-            ctx.store.secretBroken = false;
-            ctx.store.pendingUnlock = false;
-          }
-          acc.calendarPath = $("input[data-s='path']")?.value.trim() || "";
-          acc.serverType = ($("select[data-s='serverType']")?.value || "caldav") as any;
-          acc.channel = ($("select[data-s='channel']")?.value || "auto") as any;
-          acc.conflict = ($("select[data-s='conflict']")?.value || "server") as any;
-          acc.pastDays = Math.max(7, +($("input[data-s='past']")?.value || "0") || 90);
-          acc.futureDays = Math.max(30, +($("input[data-s='future']")?.value || "0") || 370);
-          // 勾选的日历
-          el.querySelectorAll<HTMLElement>(".caldav-acc-cal").forEach((row) => {
-            const c = acc.calendars[+row.dataset.idx!];
-            if (!c) return;
-            c.enabled = (row.querySelector("input[type='checkbox']") as HTMLInputElement).checked;
-            const nameInput = row.querySelector("input[data-role='name']") as HTMLInputElement;
-            if (nameInput.value.trim()) c.displayName = nameInput.value.trim();
-            // 日程 / 待办各自的默认色（药丸即取色器）。没出药丸的一侧保持原值不动
-            const evInput = row.querySelector("input[data-role='eventColor']") as HTMLInputElement | null;
-            if (evInput?.value) c.eventColor = evInput.value;
-            const tdInput = row.querySelector("input[data-role='todoColor']") as HTMLInputElement | null;
-            if (tdInput?.value) c.todoColor = tdInput.value;
-          });
-          // 补齐缺的一侧 + 把旧 color 镜像成 eventColor（旧版本端读同一份数据不会变灰）
-          normalizeCalendarColors(acc.calendars);
+          // 展开中的账户：把「服务器 / 同步 / 日历」输入写回该账户。未展开的账户
+          // 输入框根本不在 DOM 里（accountCardHtml 只给展开卡渲染 body），它们的值
+          // 原样保留在 settings.accounts 中，不受影响。
+          // ⚠️ 查找一律走 flushAccountInputs 里的 activeCard() 收口：曾经这里是
+          // el.querySelector 全局找，收起卡的 body 还在 DOM 里，保存第二个账户
+          // 写进去的竟是第一个账户的值（2026-10-25 雄哥实测，见 activeCard 注释）。
+          flushAccountInputs(acc);
         }
         // ── 全局字段 ──
         s.syncIntervalMin = Math.max(0, +($("input[data-s='interval']")?.value || "0") || 0);
@@ -611,6 +666,12 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
   const summary = a.serverUrl
     ? `${a.serverUrl} · ${enabledCals}/${(a.calendars || []).length} 日历启用`
     : "尚未填写服务器地址";
+  // 收起的卡片**不渲染 body**。曾经是「渲染 + hidden」，2026-10-25 雄哥实测因此丢数据：
+  // 添加第二个账户填 iCloud，「测试连接」永远在读第一个账户、把结果写进它（隐藏着）的
+  // 消息位（看着就是没反应），强行保存后新账户的服务器/用户名/密码全变成第一个账户的值。
+  // 根因：body 里全是 data-s="…" 的账户输入框，而读取方是 el.querySelector 按 data-s
+  // 找控件 —— 收起卡的 body 只要还在 DOM 里，查找就只会命中**第一张卡**的输入框。
+  // 手风琴本来一次只展开一张卡，body 只给展开卡渲染，语义与实现终于一致。
   return `
 <div class="caldav-acc ${a.enabled ? "" : "is-off"} ${expandedId === a.id ? "is-open" : ""}" data-acc="${escape(a.id)}">
   <div class="caldav-acc-head">
@@ -636,7 +697,9 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
       <button class="caldav-btn caldav-btn--sm caldav-btn--ghost" type="button" data-action="acc-del-cancel">取消</button>
     </div>
   </div>
-  <div class="caldav-acc-body" ${expandedId === a.id ? "" : "hidden"}>
+  ${expandedId === a.id
+    ? `
+  <div class="caldav-acc-body">
     <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.server}</span>服务器</div>
     <div class="caldav-field">
       <label class="caldav-field-label">账户名称</label>
@@ -720,7 +783,8 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
         <input class="caldav-input" type="number" min="30" data-s="future" value="${a.futureDays}"/>
       </div>
     </div>
-  </div>
+  </div>`
+    : ""}
 </div>`;
 }
 

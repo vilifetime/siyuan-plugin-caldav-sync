@@ -214,7 +214,7 @@ assert.ok(catPop.hidden, "确定后分类弹窗应收起");
 // （用户实测反馈：地址填错保存后点刷新，Dock 仍显示同步成功）
 // 2026-10-10 起 Dock 工具行里的「刷新」按钮已移除，同步入口改为点击页脚状态条
 // （.caldav-dock-status，仍是 [data-action="sync"]）。
-plugin.store.settings.serverUrl = "http://changed-host:9999/";
+plugin.store.settings.accounts[0].serverUrl = "http://changed-host:9999/";
 click(dockEl.querySelector('.caldav-dock-status[data-action="sync"]'));
 // 同步是异步的，等状态栏从「同步中…」落定（轮询比固定 sleep 稳）
 const dockStatus = dockEl.querySelector(".caldav-dock-status");
@@ -251,7 +251,7 @@ assert.strictEqual(
   "页脚不再有第二行错误详情（详情已并进状态按钮这一行）"
 );
 // 还原，避免影响后续断言
-plugin.store.settings.serverUrl = "http://127.0.0.1:5232/";
+plugin.store.settings.accounts[0].serverUrl = "http://127.0.0.1:5232/";
 plugin.store.lastError = undefined;
 
 // ---- 新建默认开始时间：落在当前时间的「下一个整点」，不再是固定 9:00 ----
@@ -804,7 +804,8 @@ assert.strictEqual(showTodosBox().checked, true, "重渲染后开关应保持勾
 // 防回归：旧实现的通用 target 解析句子是 closest("[data-view],[data-action],[data-cal]")，
 // 而眼睛按钮自身不带 data-* 属性 → closest 直接跳过它命中父级 .caldav-cal-item，
 // 于是 target.classList.contains("caldav-cal-toggle") 恒为 false，点了完全静默无反应。
-const calRow0 = () => tabEl.querySelector('.caldav-cal-item[data-cal="0"]');
+// 2026-10-25 多账户重构：日历行的主键从序号 data-cal="0" 换成 data-cal-url（跨账户要按 url 定位）
+const calRow0 = () => tabEl.querySelector(".caldav-cal-item");
 const calEye0 = () => calRow0()?.querySelector(".caldav-cal-toggle");
 const seedVisible = () =>
   [...tabEl.querySelectorAll("[data-open]")].some((el) => (el.textContent || "").includes("测试条目"));
@@ -815,14 +816,14 @@ assert.strictEqual(calEye0()?.getAttribute("aria-label"), "隐藏此日历", "�
 
 // 点眼睛 → 关闭该日历
 click(calEye0());
-assert.strictEqual(plugin.store.settings.calendars[0].enabled, false, "点眼睛应把该日历置为关闭");
+assert.strictEqual(plugin.store.settings.accounts[0].calendars[0].enabled, false, "点眼睛应把该日历置为关闭");
 assert.ok(calRow0().classList.contains("is-off"), "关闭后该行应带 is-off");
 assert.strictEqual(calEye0()?.getAttribute("aria-label"), "显示此日历", "关闭态眼睛按钮文案应变为「显示此日历」");
 assert.ok(!seedVisible(), "关掉的日历，其条目应从视图中消失");
 
 // 点整行（名称）→ 恢复
 click(calRow0().querySelector(".caldav-cal-name"));
-assert.strictEqual(plugin.store.settings.calendars[0].enabled, true, "点整行应恢复该日历");
+assert.strictEqual(plugin.store.settings.accounts[0].calendars[0].enabled, true, "点整行应恢复该日历");
 assert.ok(!calRow0().classList.contains("is-off"), "恢复后 is-off 应移除");
 assert.ok(seedVisible(), "恢复后条目应重新出现");
 
@@ -838,14 +839,14 @@ assert.ok(settingsEl.querySelector('[data-action="cancel"].caldav-foot-btn--ghos
 const serverInput = settingsEl.querySelector("input[data-s='server']");
 if (serverInput) serverInput.value = "";
 click(settingsEl.querySelector("[data-action='test']"));
-const testMsg = settingsEl.querySelector("[data-msg]");
+const testMsg = settingsEl.querySelector("[data-acc-msg]");
 assert.ok(testMsg && testMsg.textContent.includes("服务器地址不能为空"), "空 URL 测试连接应提示服务器地址不能为空");
 
 // ---- 日历颜色：单一 color 迁移成 eventColor/todoColor；「任务」「日程」药丸即取色器 ----
-const calRows = Array.from(settingsEl.querySelectorAll(".caldav-set-cal"));
+const calRows = Array.from(settingsEl.querySelectorAll(".caldav-acc-cal"));
 assert.ok(calRows.length >= 1, "设置弹窗应列出已配置的日历");
 const row0 = calRows[0];
-const cal0 = plugin.store.settings.calendars[0];
+const cal0 = plugin.store.settings.accounts[0].calendars[0];
 // 老数据（seedStore 只给了 color）渲染时就地升级：两色都继承原色，存量条目观感不变
 assert.strictEqual(cal0.eventColor, "#3b82f6", "旧 color 应迁移为日程默认色 eventColor");
 assert.strictEqual(cal0.todoColor, "#3b82f6", "旧 color 应同时迁移为待办默认色 todoColor（不改变观感）");

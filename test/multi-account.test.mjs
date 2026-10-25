@@ -76,7 +76,10 @@ try {
 }
 
 const require = createRequire(import.meta.url);
-// "siyuan" 包只有 .d.ts 没有运行时入口，require 会抛 ERR_PACKAGE_PATH_NOT_EXPORTED —— 给空桩。
+// "siyuan" 包只有 .d.ts 没有运行时入口，require 会抛 ERR_PACKAGE_PATH_NOT_EXPORTED —— 给桩。
+// F2 的交互用例要**真点真存**，桩里的 Dialog 必须够真：构造时把 options.content
+// 装进 element（openSettingsDialog 靠 dialog.element.querySelector(".caldav-settings")
+// 拿内容根）、destroy() 摘元素并回调 destroyCallback（设置页的 Promise 靠它 resolve）。
 const Module = require("node:module");
 const origResolve = Module._resolveFilename;
 Module._resolveFilename = function (request, ...rest) {
@@ -86,7 +89,32 @@ Module._resolveFilename = function (request, ...rest) {
   }
   return origResolve.call(this, request, ...rest);
 };
-fs.writeFileSync(path.join(outDir, "siyuan-stub.js"), `"use strict";\nmodule.exports = {};\n`);
+fs.writeFileSync(
+  path.join(outDir, "siyuan-stub.js"),
+  `"use strict";
+class Dialog {
+  constructor(options) {
+    this.options = options || {};
+    this.destroying = false;
+    this.element = document.createElement("div");
+    this.element.className = "b3-dialog";
+    this.element.innerHTML = this.options.content || "";
+    if (document.body) document.body.appendChild(this.element);
+  }
+  destroy() {
+    this.destroying = true;
+    if (this.element && this.element.parentElement) this.element.parentElement.removeChild(this.element);
+    if (typeof this.options.destroyCallback === "function") this.options.destroyCallback();
+  }
+}
+module.exports = {
+  Dialog,
+  showMessage: (msg, timeout, type) => {
+    (globalThis.__siyuanMsgs = globalThis.__siyuanMsgs || []).push({ msg, timeout, type });
+  }
+};
+`
+);
 
 const typesMod = require(path.join(outDir, "types.js"));
 const storeMod = require(path.join(outDir, "store.js"));
@@ -537,11 +565,17 @@ await t("删除确认条默认隐藏（二次点击确认，不用 confirm()）"
   assert.ok(conf.querySelector('[data-action="acc-del-cancel"]'), "确认条里应有「取消」");
 });
 
-await t("手风琴：只展开 activeAccId 的账户，其余 body hidden", () => {
+await t("手风琴：只展开 activeAccId 的账户，**收起的卡根本不渲染 body**", () => {
+  // 为什么必须是「不渲染」而不能是「渲染 + hidden」：body 里全是 data-s="…" 的
+  // 账户输入框，而 bindServer/bindSave 是 el.querySelector 按 data-s 找控件的 ——
+  // 收起卡的 body 只要还在 DOM 里（哪怕 hidden），查找就只会命中**第一张卡**的
+  // 输入框。2026-10-25 雄哥实测：添加第二个账户填 iCloud，「测试连接」永远在读
+  // 第一个账户、保存后新账户的服务器/用户名/密码全变成第一个账户的值。
   const open = doc.querySelector('.caldav-acc[data-acc="acc-a"] .caldav-acc-body');
   const closed = doc.querySelector('.caldav-acc[data-acc="acc-b"] .caldav-acc-body');
-  assert.ok(!open.hasAttribute("hidden"), "acc-a 被展开");
-  assert.ok(closed.hasAttribute("hidden"), "acc-b 未展开");
+  assert.ok(open, "acc-a 被展开，body 应在 DOM 里");
+  assert.ok(!open.hasAttribute("hidden"), "展开的 body 不带 hidden");
+  assert.strictEqual(closed, null, "acc-b 未展开，body 不该渲染进 DOM（hidden 也不行）");
 });
 
 await t("展开的账户含「服务器 / 日历 / 同步」三段与全部控件", () => {
@@ -590,7 +624,8 @@ await t("老平铺入参兼容：settingsHtml 内部先迁移再渲染", () => {
     calendars: [{ url: "http://legacy.test/cal/", displayName: "老日历", enabled: true, supportsEvent: true, supportsTodo: true, eventColor: "#3b82f6", todoColor: "#f97316" }],
     syncIntervalMin: 5
   };
-  const d3 = new JSDOM(`<body>${settingsHtml(legacy, false)}</body>`).window.document;
+  settingsHtml(legacy, false); // 先渲染一次：迁移就地在 legacy 上发生，accounts 这才就位
+  const d3 = new JSDOM(`<body>${settingsHtml(legacy, false, legacy.accounts[0].id)}</body>`).window.document;
   const cards = d3.querySelectorAll(".caldav-acc");
   assert.strictEqual(cards.length, 1, "老数据应迁移出恰好一张卡");
   const server = cards[0].querySelector('[data-s="server"]');
@@ -601,6 +636,202 @@ await t("老平铺入参兼容：settingsHtml 内部先迁移再渲染", () => {
 await t("整页不把 SVG 源码当文字输出", () => {
   assert.ok(!doc.body.textContent.includes("<svg"), "页面文本里出现了 SVG 源码");
   assert.ok(!doc.body.textContent.includes("viewBox"), "页面文本里出现了 viewBox 字面量");
+});
+
+// ============================================================
+console.log("[multiacc] F2. 设置弹窗交互（真点击：添加账户 → 填写 → 测试/发现 → 保存）");
+// ============================================================
+
+// 2026-10-25 雄哥实测回归：设置里「添加账户」填 iCloud —— 测试连接没反应，
+// 强行保存后新账户的数据变成第一个账户（Baikal）的服务器/用户名/密码。
+// 根因：收起的账户卡片只是 body 带 hidden、仍在 DOM 里，而 bindServer/bindSave
+// 用 el.querySelector 按 data-s 找输入框，**只会命中第一张卡**。F 段只测了 HTML
+// 字符串，没测交互，所以这条路径裸奔了一整天。这里用真点击守死它。
+
+const { openSettingsDialog } = require(path.join(outDir, "ui", "settings-dialog.js"));
+const caldavMod = require(path.join(outDir, "core", "caldav.js"));
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+/** 只实现 openSettingsDialog 用到的成员的假 ctx */
+function mkCtx(settings) {
+  const persisted = [];
+  return {
+    persisted,
+    ctx: {
+      store: {
+        settings,
+        secretBroken: false,
+        pendingUnlock: false,
+        getAll: () => [],
+        orphanItems: () => [],
+        activeServerOrigins: () => new Set(),
+        purgeBackup: undefined,
+        persist: async () => {
+          persisted.push(JSON.parse(JSON.stringify({ accounts: settings.accounts })));
+        },
+        purgeAccountItems: async () => 0
+      },
+      sync: { startAutoSync: () => {} },
+      refreshPanels: () => {},
+      reminderStatus: () => ""
+    }
+  };
+}
+
+const baikalAcc = () =>
+  mkAccount({
+    id: "acc-a",
+    name: "Baikal",
+    serverUrl: "http://nas.bonebear.cn:5808/dav.php/",
+    username: "baikal-user",
+    password: "baikal-pw",
+    channel: "auto",
+    calendars: [mkCal({ url: "http://nas.bonebear.cn:5808/dav.php/work/", displayName: "工作" })]
+  });
+
+/**
+ * 复刻雄哥的操作路径：打开设置 → 点「添加账户」→ 只往展开卡的 body 里填 iCloud
+ * →（可选）点测试连接 / 发现日历。返回 settings / 桩收到的调用 / 弹窗 Promise。
+ */
+async function addIcloudAccount(opts = {}) {
+  // 兜底清场：上一个用例若断言失败就没点保存/取消，弹窗还开着 —— 设置弹窗是单例，
+  // 不先关掉，本次 openSettingsDialog 只会聚焦旧窗、拿到的是旧 settings。
+  const leftover = document.querySelector('[data-action="cancel"]');
+  if (leftover) leftover.click();
+  const settings = { ...typesMod.DEFAULT_SETTINGS, syncIntervalMin: 0, accounts: [baikalAcc()] };
+  const { ctx, persisted } = mkCtx(settings);
+  const calls = { test: [], discover: [] };
+  const origTest = caldavMod.testConnection;
+  const origDiscover = caldavMod.discoverCalendars;
+  caldavMod.testConnection = async (server, channel, creds) => {
+    calls.test.push({ server, channel, creds });
+    return { ok: true, message: "连接成功（桩）" };
+  };
+  caldavMod.discoverCalendars = async (server, channel, creds, p) => {
+    calls.discover.push({ server, creds, path: p });
+    return {
+      calendars: [
+        {
+          url: "https://caldav.icloud.com/12345/primary/",
+          displayName: "iCloud 主日历",
+          enabled: true,
+          supportsEvent: true,
+          supportsTodo: true
+        }
+      ]
+    };
+  };
+  try {
+    const opened = openSettingsDialog(ctx);
+    document.querySelector('[data-action="acc-add"]').click();
+    const cards = document.querySelectorAll(".caldav-acc");
+    assert.strictEqual(cards.length, 2, "添加后应有两张卡");
+    assert.ok(cards[1].querySelector(".caldav-acc-body"), "新账户应直接展开（body 在 DOM 里）");
+    const body = cards[1].querySelector(".caldav-acc-body");
+    (body.querySelector('[data-s="accName"]')).value = "iCloud";
+    const typeSel = body.querySelector('[data-s="serverType"]');
+    typeSel.value = "icloud";
+    typeSel.dispatchEvent(new Event("change")); // 触发「选 iCloud 自动填地址」
+    (body.querySelector('[data-s="username"]')).value = "xiongfei.xu@outlook.com";
+    (body.querySelector('[data-s="password"]')).value = "app-specific-pw";
+    if (opts.test) {
+      document.querySelector('[data-action="test"]').click();
+      await tick();
+    }
+    if (opts.discover) {
+      document.querySelector('[data-action="discover"]').click();
+      await tick();
+      await tick();
+    }
+    return { settings, ctx, persisted, calls, opened };
+  } finally {
+    caldavMod.testConnection = origTest;
+    caldavMod.discoverCalendars = origDiscover;
+  }
+}
+
+await t("【回归】选 iCloud 自动填的地址落进**展开卡**的输入框（不是第一张卡的隐藏输入框）", async () => {
+  const { opened } = await addIcloudAccount();
+  const server = document.querySelectorAll(".caldav-acc")[1].querySelector('[data-s="server"]');
+  assert.strictEqual(server.value, "https://caldav.icloud.com", "自动填充必须出现在用户正在填的卡里");
+  document.querySelector('[data-action="save"]').click();
+  await opened;
+});
+
+await t("【回归】保存第二个账户：写进去的是 iCloud 的值，第一个账户原样不动", async () => {
+  const { settings, persisted, opened } = await addIcloudAccount();
+  document.querySelector('[data-action="save"]').click();
+  await opened;
+  assert.strictEqual(settings.accounts.length, 2, "还是两个账户");
+  const b = settings.accounts[1];
+  assert.strictEqual(b.name, "iCloud", "新账户名称");
+  assert.strictEqual(b.serverUrl, "https://caldav.icloud.com", "新账户服务器地址");
+  assert.strictEqual(b.username, "xiongfei.xu@outlook.com", "新账户用户名");
+  assert.strictEqual(b.password, "app-specific-pw", "新账户密码");
+  assert.strictEqual(b.serverType, "icloud", "新账户类型");
+  const a = settings.accounts[0];
+  assert.strictEqual(a.name, "Baikal", "第一个账户名称不能被改");
+  assert.strictEqual(a.serverUrl, "http://nas.bonebear.cn:5808/dav.php/", "第一个账户地址不能被改");
+  assert.strictEqual(a.username, "baikal-user", "第一个账户用户名不能被改");
+  assert.strictEqual(a.password, "baikal-pw", "第一个账户密码不能被改");
+  assert.ok(persisted.length >= 1, "应触发过 persist");
+  const saved = persisted[persisted.length - 1].accounts;
+  assert.strictEqual(saved[1].serverUrl, "https://caldav.icloud.com", "落盘的也必须是 iCloud 地址");
+  assert.strictEqual(saved[0].serverUrl, "http://nas.bonebear.cn:5808/dav.php/", "落盘的第一个账户不能变");
+});
+
+await t("【回归】测试连接读展开账户的输入，结果写进展开账户的消息位", async () => {
+  const { calls, opened } = await addIcloudAccount({ test: true });
+  assert.strictEqual(calls.test.length, 1, "应真发过一次测试连接");
+  assert.strictEqual(calls.test[0].server, "https://caldav.icloud.com", "测试连接的服务器地址必须取展开账户的输入");
+  assert.strictEqual(calls.test[0].creds.username, "xiongfei.xu@outlook.com", "测试连接的用户名必须取展开账户的输入");
+  const msg = document.querySelectorAll(".caldav-acc")[1].querySelector("[data-acc-msg]");
+  assert.strictEqual(msg.textContent, "连接成功（桩）", "连接结果必须显示在展开账户（用户看得见）的消息位");
+  document.querySelector('[data-action="save"]').click();
+  await opened;
+});
+
+await t("【回归】发现日历读展开账户的输入，结果写进展开账户", async () => {
+  const { settings, calls, opened } = await addIcloudAccount({ discover: true });
+  assert.strictEqual(calls.discover.length, 1, "应真发过一次发现日历");
+  assert.strictEqual(calls.discover[0].server, "https://caldav.icloud.com", "发现日历的服务器地址必须取展开账户的输入");
+  assert.strictEqual(calls.discover[0].creds.username, "xiongfei.xu@outlook.com", "发现日历的用户名必须取展开账户的输入");
+  assert.strictEqual(settings.accounts[1].calendars.length, 1, "发现的日历应写进展开账户");
+  assert.strictEqual(settings.accounts[1].calendars[0].url, "https://caldav.icloud.com/12345/primary/");
+  assert.strictEqual(settings.accounts[0].calendars.length, 1, "第一个账户的日历列表不该被动");
+  assert.ok(settings.accounts[0].calendars[0].url.includes("nas.bonebear.cn"), "第一个账户还是原来那个日历");
+  document.querySelector('[data-action="save"]').click();
+  await opened;
+});
+
+await t("【回归】点停用开关触发重渲，不抹掉展开账户里已填的值", async () => {
+  const { settings, opened } = await addIcloudAccount();
+  // 点**第一个账户**的停用开关（会 rerender 整页）
+  (document.querySelector('[data-acc-toggle="acc-a"]')).click();
+  await tick();
+  assert.strictEqual(settings.accounts[0].enabled, false, "开关要生效");
+  const body = document.querySelectorAll(".caldav-acc")[1].querySelector(".caldav-acc-body");
+  assert.strictEqual((body.querySelector('[data-s="server"]')).value, "https://caldav.icloud.com", "重渲后地址还在");
+  assert.strictEqual((body.querySelector('[data-s="username"]')).value, "xiongfei.xu@outlook.com", "重渲后用户名还在");
+  assert.strictEqual((body.querySelector('[data-s="accName"]')).value, "iCloud", "重渲后账户名还在");
+  assert.strictEqual(settings.accounts[1].serverUrl, "https://caldav.icloud.com", "账户对象里也应已记下");
+  document.querySelector('[data-action="save"]').click();
+  await opened;
+});
+
+await t("migrateToAccounts：平铺老键与已有账户共存时只摘老键，绝不覆盖现有账户", () => {
+  const s = {
+    serverUrl: "http://old.test/",
+    username: "old",
+    password: "oldpw",
+    calendars: [{ url: "http://old.test/c/", displayName: "旧", enabled: true }],
+    accounts: [{ ...mkAccount({ id: "acc-keep", name: "保留我", serverUrl: "http://keep.test/" }) }]
+  };
+  migrateToAccounts(s);
+  assert.strictEqual(s.accounts.length, 1, "不能凭老键把现有账户数组换掉");
+  assert.strictEqual(s.accounts[0].id, "acc-keep", "现有账户必须原样保留");
+  assert.strictEqual(s.accounts[0].serverUrl, "http://keep.test/", "现有账户的地址不能被老键覆盖");
+  assert.ok(!("serverUrl" in s), "老键仍须摘掉");
 });
 
 // ============================================================
@@ -653,6 +884,25 @@ console.log("[multiacc] G. 源码级防漂移");
     assert.ok(/enabledCalendars\(/.test(panelSrc), "可见性判据走 enabledCalendars 唯一入口");
     assert.ok(/\.caldav-cal-group/.test(cssSrc), "index.css 应有分组样式");
     assert.ok(/\.caldav-cal-group\.is-off/.test(cssSrc), "停用账户分组应有置灰样式");
+  });
+
+  await t("设置弹窗：收起的账户卡**不渲染** body（退回「渲染+hidden」就是 2026-10-25 事故根因）", () => {
+    const sdSrc = fs.readFileSync(path.join(root, "src/ui/settings-dialog.ts"), "utf8");
+    assert.ok(/\$\{expandedId === a\.id\s*\n\s*\? `/.test(sdSrc), "acc-body 必须包在 expandedId === a.id 条件里");
+    assert.ok(
+      !/caldav-acc-body" \$\{expandedId === a\.id \? "" : "hidden"\}/.test(sdSrc),
+      "不许退回「渲染 + hidden」：隐藏 body 仍在 DOM 里，el.querySelector 按 data-s 查找只会命中第一张卡"
+    );
+  });
+
+  await t("设置弹窗：账户字段查找收口到展开卡，且重渲前先 flush", () => {
+    const sdSrc = fs.readFileSync(path.join(root, "src/ui/settings-dialog.ts"), "utf8");
+    assert.ok(/const activeCard = \(\): HTMLElement \| null =>/.test(sdSrc), "必须有 activeCard() 收口");
+    assert.ok(/const \$acc = \(sel: string\): HTMLInputElement \| null =>/.test(sdSrc), "账户输入查找必须走 $acc()");
+    assert.ok(/function flushAccountInputs\(acc: CalAccount\): void/.test(sdSrc), "必须有 flushAccountInputs()");
+    const flushes = sdSrc.match(/flushAccountInputs\(cur\)/g) || [];
+    assert.ok(flushes.length >= 3, "停用开关/添加账户/删除确认三处重渲前都要 flush，实际 " + flushes.length);
+    assert.ok(/flushAccountInputs\(acc\);[\s\S]*?discoverCalendars/.test(sdSrc), "发现日历前必须 flush（否则重渲抹掉已填值）");
   });
 }
 

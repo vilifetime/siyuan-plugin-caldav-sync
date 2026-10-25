@@ -201,7 +201,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   let ctxMenuKey: string | null = null;
 
   function renderCalList(): void {
-    const accounts = ctx.store.settings.accounts;
+    const accounts = ctx.store.settings.accounts || [];
     // 侧栏与「日历筛选」浮层各有一个容器，渲染同一份内容
     const boxes = root.querySelectorAll<HTMLElement>(".caldav-cal-list");
     if (!accounts.length) {
@@ -248,7 +248,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
    */
   function toggleCalendar(url: string): void {
     // 跨所有账户按 url 找（含停用账户——组内行在停用账户下是 disabled，理论上点不到）
-    for (const acc of ctx.store.settings.accounts) {
+    for (const acc of ctx.store.settings.accounts || []) {
       const cal = (acc.calendars || []).find((c) => c.url === url);
       if (cal) {
         cal.enabled = !cal.enabled;

@@ -22,6 +22,10 @@
 import type { CalItem } from "../core/types";
 import { addDays, isDateOnly, padDate, parseLocalStamp, startOfWeek } from "../core/date";
 import { calColorOf, escape, keyOfItem, occComparator, type ViewArgs } from "./view-common";
+// ⚠️ 与 Obsidian 端的有意差异：Obsidian 社区审核禁 innerHTML 赋值，那边改用
+// dom.ts 的 setHtml（DOMParser + replaceChildren）；思源没有这套审核、全仓沿用
+// innerHTML，故此处保持原样。从 Obsidian 端 cp 同步本文件时**不要**把 setHtml
+// 带过来（思源没有 dom.ts，会直接编译失败）。
 
 /** 星期中文名（周一起始，与周/月视图一致） */
 const WEEK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];

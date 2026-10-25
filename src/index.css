@@ -2440,6 +2440,13 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   min-width: 0;
   padding-left: 34px;
 }
+/* 与 Obsidian 端同构：日期框显式钉 9px 圆角（.caldav-input 基类同值，渲染不变）。
+   Obsidian 侧必须写成双类选择器 —— 单类特异性低于主题的 input[type="date"]，
+   胶囊主题下日期框会变「椭圆」、与旁边 9px 的时间框不一致（2026-10-25 修复）。
+   思源侧主题没有这类覆盖，用单类即可；此处保持结构对齐，防两端漂移。 */
+.caldav-input.caldav-date-input {
+  border-radius: 9px;
+}
 
 .caldav-time-input {
   flex: 0 0 118px;

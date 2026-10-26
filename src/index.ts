@@ -127,13 +127,19 @@ export default class CalDavPlugin extends Plugin {
 
     // 中国日历·节假日拉取改走 SiYuan 内核代理（服务端 fetch，绕开浏览器 CORS、
     // 走本机真实网络/代理，国内 GitHub/raw 即便浏览器直连被墙也能经此拿到）。
-    setHolidayTransport(async (url, ms) => {
+    setHolidayTransport(async (url, ms, headers) => {
       try {
-        const r = await httpRequest(url, { method: "GET", timeoutMs: ms }, "auto");
-        if (r.status < 200 || r.status >= 300) return null;
-        return { ok: true, data: JSON.parse(r.body) };
-      } catch {
-        return null;
+        const r = await httpRequest(url, { method: "GET", timeoutMs: ms, headers }, "auto");
+        if (r.status < 200 || r.status >= 300) return { ok: false, error: "HTTP " + r.status };
+        let data: unknown;
+        try {
+          data = JSON.parse(r.body);
+        } catch (e) {
+          return { ok: false, error: "JSON 解析失败：" + (e as Error).message };
+        }
+        return { ok: true, data };
+      } catch (e) {
+        return { ok: false, error: String(e instanceof Error ? e.message : e) };
       }
     });
 

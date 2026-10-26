@@ -24,7 +24,7 @@ import {
 } from "../core/types";
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
 import { clearAuthCache } from "../core/http";
-import { forceRefreshChinaCalendar } from "../core/holiday-cn";
+import { forceRefreshChinaCalendar, getLastHolidayError } from "../core/holiday-cn";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
 import { enableDialogResize } from "./dialog-resize";
@@ -567,7 +567,14 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         btn.setAttribute("disabled", "true");
         try {
           const ok = await forceRefreshChinaCalendar(tmp, [y, y + 1]);
-          if (msg) msg.textContent = ok ? "已更新（重新打开日历视图即可见）" : "暂无新数据 / 拉取失败";
+          if (msg) {
+            if (ok) { msg.textContent = "已更新（重新打开日历视图即可见）"; msg.style.color = ""; }
+            else {
+              const err = getLastHolidayError();
+              msg.textContent = "拉取失败：" + (err || "未知原因");
+              msg.style.color = "var(--caldav-danger, #d23f3f)";
+            }
+          }
           ctx.refreshPanels?.();
         } catch {
           if (msg) msg.textContent = "拉取失败（请检查网络或数据源 URL）";
@@ -720,7 +727,8 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       <label class="caldav-field-label">节假日数据源</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="holidayCnSource">
-          <option value="holiday-cn" ${(s.holidayCnSource || "holiday-cn") === "holiday-cn" ? "selected" : ""}>NateScarlet/holiday-cn（推荐，字段干净）</option>
+          <option value="timor" ${(s.holidayCnSource || "holiday-cn") === "timor" ? "selected" : ""}>timor.tech（国内部署，推荐）</option>
+          <option value="holiday-cn" ${(s.holidayCnSource || "holiday-cn") === "holiday-cn" ? "selected" : ""}>NateScarlet/holiday-cn（jsdelivr，国内常受限）</option>
           <option value="chinese-days" ${s.holidayCnSource === "chinese-days" ? "selected" : ""}>vsme/chinese-days</option>
           <option value="custom" ${s.holidayCnSource === "custom" ? "selected" : ""}>自定义 URL…</option>
         </select>
@@ -728,7 +736,7 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       </div>
     </div>
     <div class="caldav-field" id="caldav-cn-custom" style="${s.holidayCnSource === "custom" ? "" : "display:none"}">
-      <label class="caldav-field-label">自定义数据源 URL（支持 {year} 占位，返回 [{date,name,isOffDay}] 数组）</label>
+      <label class="caldav-field-label">自定义数据源 URL（支持 {year} 占位；返回 NateScarlet 的 [{date,name,isOffDay}] 或 timor 的 {holiday:{...}} 均可）</label>
       <input class="caldav-input" type="text" data-s="holidayCnCustomUrl" value="${escape(s.holidayCnCustomUrl || "")}" placeholder="https://your-mirror/{year}.json"/>
     </div>
     <div class="caldav-field">

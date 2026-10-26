@@ -165,13 +165,44 @@ async function run() {
   });
 
   // ---- HTTP 失败静默降级（所有源失败 → null）----
-  await ta("全部源失败 → 静默返回 null", async () => {
+  await ta("全部源失败 → 静默返回 null + 记录失败原因", async () => {
     globalThis.fetch = async () => {
       throw new Error("all down");
     };
     const map = await cn.loadHolidayYear({ holidayCnSource: "holiday-cn" }, 2096);
     assert.strictEqual(map, null);
     assert.strictEqual(cn.holidayFor("2096-01-01"), null, "未缓存时 holidayFor 返 null");
+    assert.ok(cn.getLastHolidayError(), "应记录失败原因（设置页回显用）");
+  });
+
+  // ---- timor.tech 源（国内部署，结构 {holiday:{date,name,holiday}}）----
+  await ta("timor.tech 源归一化：休息/补班 正确", async () => {
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        holiday: {
+          "10-01": { holiday: true, name: "国庆节", date: "2026-10-01" },
+          "10-02": { holiday: false, name: "国庆后补班", date: "2026-10-02" }
+        }
+      })
+    });
+    const map = await cn.loadHolidayYear({ holidayCnSource: "timor" }, 2026);
+    assert.strictEqual(map["2026-10-01"].name, "国庆节");
+    assert.strictEqual(map["2026-10-01"].off, true, "timor holiday:true → 休");
+    assert.strictEqual(map["2026-10-02"].off, false, "timor holiday:false → 班");
+  });
+
+  // ---- holiday-cn 源的 timor 兜底：jsdelivr 全挂、timor 成功 ----
+  await ta("holiday-cn 源：jsdelivr 全挂时自动用 timor.tech 兜底", async () => {
+    globalThis.fetch = async (url) => {
+      if (url.includes("timor.tech")) {
+        return { ok: true, json: async () => ({ code: 0, holiday: { "09-01": { holiday: true, name: "测试节", date: "2095-09-01" } } }) };
+      }
+      throw new Error("jsdelivr down");
+    };
+    const map = await cn.loadHolidayYear({ holidayCnSource: "holiday-cn" }, 2095);
+    assert.strictEqual(map["2095-09-01"].name, "测试节", "应经 timor.tech 兜底拿到数据");
   });
 
   globalThis.fetch = origFetch;

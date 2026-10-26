@@ -455,11 +455,11 @@ export interface CalSettings {
   /** 显示节气（内置算法，无需联网）。默认开 */
   showTermCN?: boolean;
   /**
-   * 节假日数据源：预设键 "holiday-cn" / "chinese-days"，或 "custom"（此时用 holidayCnCustomUrl）。
-   * 默认 "holiday-cn"（最流行、字段干净）。
+   * 节假日数据源：预设键 "timor"（国内部署，推荐）/ "holiday-cn"（jsdelivr）/ "chinese-days"，或 "custom"（用 holidayCnCustomUrl）。
+   * 默认 "holiday-cn"，但其候选含 timor.tech 兜底；新安装推荐选 "timor"。
    */
-  holidayCnSource?: "holiday-cn" | "chinese-days" | "custom";
-  /** 自定义数据源 URL（holidayCnSource==="custom" 时生效，支持 {year} 占位，返回 [{date,name,isOffDay}]） */
+  holidayCnSource?: "timor" | "holiday-cn" | "chinese-days" | "custom";
+  /** 自定义数据源 URL（holidayCnSource==="custom" 时生效，支持 {year} 占位；返回 NateScarlet 的 [{date,name,isOffDay}] 或 timor 的 {holiday:{...}} 均可） */
   holidayCnCustomUrl?: string;
   /** 节假日更新频率：weekly=每周静默复查 / daily=每天 / manual=仅手动。默认 weekly */
   holidayCnUpdateFreq?: "weekly" | "daily" | "manual";

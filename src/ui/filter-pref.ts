@@ -4,12 +4,16 @@
  * 2026-10-26 雄哥要求：Dock / 任务视图的筛选默认值「不希望固定不可更改」，
  * 设置里新增「上次使用项」（默认）+ 各自下拉的全部取值。
  *
- * ## 为什么存 localStorage 而不进设置
+ * ## 2026-10-27：存储从 localStorage 改到配置（`CalSettings`）
  *
- * 与 `view-pref.ts`（记住上次视图）同一套理由：这是**本机 UI 偏好**，不是业务数据 ——
- *   - 桌面端可能想看「本周任务」、手机端只想看「今日」，没必要跨设备同步
- *   - 不该混进 `CalSettings`（那是给用户看的配置，混进内部状态会污染设置页）
- *   - 切筛选是高频操作，走 data.json 意味着每次都落盘
+ * 原先按「本机 UI 偏好、不该跨设备同步」的理由存了 localStorage，结果**永远记不住**
+ * —— 思源每次启动的**内核端口是随机的**（实测 9905 / 11038 / 4008 / 8351 …），
+ * 而 localStorage 按 origin —— **含端口** —— 隔离：记录写进去了（Electron 的
+ * leveldb 里能看到一串不同端口下的记录），但下次启动是另一个 origin，一条也读不回来。
+ * IndexedDB / cookie 同样按 origin 隔离，一起失效，浏览器存储在思源里这条路是死的。
+ *
+ * 故按雄哥 2026-10-27 的要求改存配置：`settings.lastDockFilter` / `settings.lastTaskFilter`，
+ * 跟着 data.json 同步到其他设备。代价是多端互相覆盖，但只影响「上次哪个筛选」。
  *
  * ## 「上次使用项」不存在时的回落
  *
@@ -18,7 +22,6 @@
  *
  * ## 容错
  *
- * localStorage 可能因隐私模式 / 配额而抛异常，**读写全部包 try**；
  * 读到的值必须落在合法集合内，否则视为无记录 —— 不让脏数据把面板卡死。
  */
 import type { CalSettings, DockFilterKey, TaskFilterKey } from "../core/types";
@@ -70,11 +73,6 @@ export const TASK_FILTER_LABEL: Record<TaskFilterKey, string> = Object.fromEntri
   TASK_FILTER_OPTIONS.map((o) => [o.key, o.label])
 ) as Record<TaskFilterKey, string>;
 
-/** 上次使用的 Dock 筛选 */
-const KEY_DOCK = "caldav-dock-filter";
-/** 上次使用的任务视图筛选 */
-const KEY_TASK = "caldav-task-filter";
-
 /** 全部合法 Dock 筛选键（与 ui/panel.ts DOCK_FILTERS 一一对应） */
 export const VALID_DOCK: readonly DockFilterKey[] = [
   "today", "tomorrow", "next7", "thisweek", "future",
@@ -94,39 +92,32 @@ export const DEFAULT_DOCK_FILTER: DockFilterKey = "undone";
 /** 无记录时任务视图的初始筛选（与原本一致） */
 export const DEFAULT_TASK_FILTER: TaskFilterKey = "allincomplete";
 
-function read(key: string, valid: readonly string[]): string | null {
-  try {
-    const raw = globalThis.localStorage?.getItem(key);
-    if (!raw) return null;
-    return valid.includes(raw) ? raw : null; // 脏数据视为无记录
-  } catch {
-    // 隐私模式 / 配额受限：读不到就走默认值，不打扰用户
-    return null;
-  }
+/** 读出来的值必须落在合法集合内，否则视为无记录（脏数据不该把面板卡死） */
+function valid<T extends string>(raw: string | undefined, set: readonly string[]): T | null {
+  if (!raw) return null;
+  return set.includes(raw) ? (raw as T) : null;
 }
 
-function write(key: string, value: string): void {
-  try {
-    globalThis.localStorage?.setItem(key, value);
-  } catch {
-    /* 忽略：记不住只是下次回到默认筛选，不影响使用 */
-  }
+export function loadLastDockFilter(s: CalSettings): DockFilterKey | null {
+  return valid<DockFilterKey>(s.lastDockFilter, VALID_DOCK);
 }
 
-export function loadLastDockFilter(): DockFilterKey | null {
-  return read(KEY_DOCK, VALID_DOCK) as DockFilterKey | null;
+/**
+ * 记下本次选的（写进配置 `settings.lastDockFilter`）。
+ *
+ * ⚠️ 只改内存里的 settings，**调用方负责随后 `store.markSettingsDirty()` 落盘** ——
+ * 切筛选是高频操作，由调用方决定何时写，这里不越权触发持久化。
+ */
+export function saveLastDockFilter(s: CalSettings, k: DockFilterKey): void {
+  s.lastDockFilter = k;
 }
 
-export function saveLastDockFilter(k: DockFilterKey): void {
-  write(KEY_DOCK, k);
+export function loadLastTaskFilter(s: CalSettings): TaskFilterKey | null {
+  return valid<TaskFilterKey>(s.lastTaskFilter, VALID_TASK);
 }
 
-export function loadLastTaskFilter(): TaskFilterKey | null {
-  return read(KEY_TASK, VALID_TASK) as TaskFilterKey | null;
-}
-
-export function saveLastTaskFilter(k: TaskFilterKey): void {
-  write(KEY_TASK, k);
+export function saveLastTaskFilter(s: CalSettings, k: TaskFilterKey): void {
+  s.lastTaskFilter = k;
 }
 
 /**
@@ -136,13 +127,13 @@ export function saveLastTaskFilter(k: TaskFilterKey): void {
  */
 export function resolveDockFilter(s: CalSettings): DockFilterKey {
   const v = s.defaultDockFilter;
-  if (!v || v === "last") return loadLastDockFilter() ?? DEFAULT_DOCK_FILTER;
+  if (!v || v === "last") return loadLastDockFilter(s) ?? DEFAULT_DOCK_FILTER;
   return VALID_DOCK.includes(v) ? v : DEFAULT_DOCK_FILTER;
 }
 
 /** 解析「任务视图默认筛选」设置 → 实际该用的初始筛选（同上） */
 export function resolveTaskFilter(s: CalSettings): TaskFilterKey {
   const v = s.defaultTaskFilter;
-  if (!v || v === "last") return loadLastTaskFilter() ?? DEFAULT_TASK_FILTER;
+  if (!v || v === "last") return loadLastTaskFilter(s) ?? DEFAULT_TASK_FILTER;
   return VALID_TASK.includes(v) ? v : DEFAULT_TASK_FILTER;
 }

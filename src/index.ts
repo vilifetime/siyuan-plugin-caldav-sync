@@ -94,9 +94,14 @@ export default class CalDavPlugin extends Plugin {
    *
    * Dock 里原来有「日历视图 / 任务视图」两个按钮，现合并成一个（2026-10-10 雄哥要求）：
    * 点它就打开**这里记着的那个视图**，所以必须跨会话记住 —— 初始化时从
-   * localStorage 读，之后每次视图变化（见 viewChangeHandler）写回。
+   * 配置读（settings.lastView），之后每次视图变化（见 viewChangeHandler）写回。
    */
-  private lastViewMode: ViewMode = readLastView();  /** Dock 面板的挂载记录（思源可能重建侧栏容器，需按「当前活着的元素」重新挂载） */
+  /**
+   * ⚠️ 这里**不能**在字段初始化时就读 —— 那时 store 还没 load，settings 是空的。
+   * 真正在 `onload()` 里 store.load() 之后赋值（见下方 `this.lastViewMode = ...`）。
+   */
+  private lastViewMode: ViewMode = "month";
+  /** Dock 面板的挂载记录（思源可能重建侧栏容器，需按「当前活着的元素」重新挂载） */
   private dockMount: { el: HTMLElement; refresh: () => void; destroy: () => void } | null = null;
   /** 移动端侧栏 DOM 观察器：插件 Dock 容器空着被显示出来时补挂面板 */
   private dockObserver: MutationObserver | null = null;
@@ -153,6 +158,10 @@ export default class CalDavPlugin extends Plugin {
       saveData: (d) => this.saveData(DATA_FILE, d)
     });
     await this.store.load();
+    // 上次视图存在配置里（settings.lastView），必须在 load() 之后读。
+    // 早先是 localStorage —— 思源每次启动端口随机，localStorage 按 origin（含端口）
+    // 隔离，写进去的记录下次永远读不回来，等于「记住上次视图」一直是失效的。
+    this.lastViewMode = readLastView(this.store.settings);
     // 设备标识若迟到（getConf 失败/慢），v2 旧密文会停在「待解密」。稍后补一次；
     // 即便仍解不开，也绝不会把磁盘上的密文覆盖成空串（见 CalStore.unlockPassword）。
     if (this.store.pendingUnlock) {
@@ -233,10 +242,11 @@ export default class CalDavPlugin extends Plugin {
       if (header) header.textContent = title;
       // 记住这次视图：Dock 的合并按钮（打开上次视图）下次要用
       if (mode) self.lastViewMode = mode;
-      writeLastView(mode);
+      writeLastView(this.store.settings, mode);
       // 日历视图单独记一份（2026-10-20）：从任务视图返回时要回到进任务视图
       // 之前的那个日历视图，而不是统一落回月视图。task 不覆盖它。
-      saveCalendarView(mode);
+      saveCalendarView(this.store.settings, mode);
+      this.store.markSettingsDirty();
     };
     document.addEventListener(VIEW_CHANGE_EVENT, this.viewChangeHandler);
 

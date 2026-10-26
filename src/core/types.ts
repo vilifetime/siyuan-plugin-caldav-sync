@@ -467,7 +467,7 @@ export interface CalSettings {
   // ── 杂项（MISC）：两处筛选下拉的默认值（2026-10-26）──
   /**
    * 左侧 Dock 区打开时的默认筛选。
-   * `"last"` = 上次使用项（本机 localStorage 记住；无记录时回落「所有未完成」），
+   * `"last"` = 上次使用项（记在配置里、随数据同步；无记录时回落「所有未完成」），
    * 其余取值 = 固定为该筛选，每次打开都用它。
    */
   defaultDockFilter?: "last" | DockFilterKey;
@@ -475,6 +475,30 @@ export interface CalSettings {
    * 任务视图打开时的默认筛选，语义同 defaultDockFilter。
    */
   defaultTaskFilter?: "last" | TaskFilterKey;
+
+  // ── 「上次使用项」的记录值（2026-10-27 改存配置，随数据同步）──
+  //
+  // ⚠️ 为什么这些**不能**放 localStorage（血泪）：思源每次启动的内核端口是
+  // **随机**的（实测 9905 / 11038 / 4008 / 8351 …），而 localStorage 按 origin
+  // —— **含端口** —— 隔离。写入次次成功（Electron 的 leveldb 里能看到一串不同
+  // 端口下的记录），但下次启动是另一个 origin，一条也读不回来。
+  // 表现就是「上次使用项」永远回落到默认值。IndexedDB / cookie 同样按 origin
+  // 隔离，一起失效，所以浏览器存储在思源里这条路是死的。
+  //
+  // 故按雄哥 2026-10-27 的要求改存配置：跟着 data.json 一起同步到其他设备。
+  // 代价是多端会互相覆盖，但只影响「上次用的哪个视图/哪个筛选」，后果很小。
+  //
+  // 这几个字段**不渲染进设置页**（设置页只画它显式写出的控件），
+  // 所以不会污染用户界面 —— 它是配置里带的记录值，不是给用户调的选项。
+
+  /** 上次使用的 Dock 筛选（defaultDockFilter==="last" 时用它） */
+  lastDockFilter?: DockFilterKey;
+  /** 上次使用的任务视图筛选（defaultTaskFilter==="last" 时用它） */
+  lastTaskFilter?: TaskFilterKey;
+  /** 上次使用的视图（年/月/周/日/任务）。string 而非 ViewMode —— ViewMode 定义在 ui/panel.ts，core 不能反向依赖 ui */
+  lastView?: string;
+  /** 上次使用的**日历**视图（年/月/周/日，不含任务），供从任务视图切回时用 */
+  lastCalendarView?: string;
 }
 
 /**

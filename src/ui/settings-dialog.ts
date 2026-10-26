@@ -764,7 +764,9 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
     <div class="caldav-section-title"><span class="caldav-section-icon">${icons.filter}</span>杂项</div>
     <p class="caldav-set-hint">
       下面两个下拉的**默认值** —— 也就是刚打开时自动选中哪一项。
-      默认都是「上次使用项」：记住你上次选的，下次打开直接回到它（记在本机，不随数据同步）。
+      默认都是「上次使用项」：记住你上次选的，下次打开直接回到它。
+      记录存在配置里，会随数据同步到其他设备（思源的端口每次启动都变，
+      浏览器存储按端口隔离，存那儿等于每次都丢）。
       也可以固定成某一项，那样每次打开都用它。
     </p>
     <div class="caldav-field">

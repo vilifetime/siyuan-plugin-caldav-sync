@@ -455,8 +455,9 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   select?.addEventListener("change", () => {
     const val = select.value as FilterKey;
     viewEl.dataset.filter = val;
-    // 记下这次选的：设置里「上次使用项」下次打开就回到它（本机 localStorage）
-    saveLastTaskFilter(val);
+    // 记下这次选的：设置里「上次使用项」下次打开就回到它（写进配置，随数据同步）
+    saveLastTaskFilter(ctx.store.settings, val);
+    ctx.store.markSettingsDirty();
     const list = viewEl.querySelector<HTMLElement>(".cal-task-list");
     if (list) list.innerHTML = listHtml(val);
   });

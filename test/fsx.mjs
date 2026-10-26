@@ -12,7 +12,19 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const isGuard = (e) => typeof e?.code === "string" && e.code.startsWith("SAFE_DELETE");
+/**
+ * 判断是不是宿主的 safe-delete 守卫拦下来的。
+ *
+ * ⚠️ 守卫抛的是 `new Error(detail)` —— **没有 `code` 属性**，标记只在**消息**里：
+ *   `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {...}`
+ * 早先只判 `e.code.startsWith("SAFE_DELETE")`，于是永远匹配不到，兜底形同虚设 ——
+ * 跑一轮全量测试（删除数轻松过 50）后，后半程的测试会被同一个守卫拦下崩掉
+ * （2026-10-27 实测：today-view-pref.test.mjs 因此让整条 npm test 链 exit=1）。
+ * 两种判据都留着：万一以后宿主补上 code，也能兜住。
+ */
+const isGuard = (e) =>
+  (typeof e?.code === "string" && e.code.startsWith("SAFE_DELETE")) ||
+  (typeof e?.message === "string" && e.message.includes("[safe-delete][SAFE_DELETE"));
 
 // 单条删除也走 try：守卫是按**会话累计件数**判的（不只是批量），跑一轮全量
 // 测试删的临时产物轻松过 50 件，后半程的测试会被同一个守卫拦下。

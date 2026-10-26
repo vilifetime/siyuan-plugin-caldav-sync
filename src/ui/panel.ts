@@ -674,8 +674,8 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     if (action === "toggle-view") {
       // 日历视图（年/月/周/日）↔ 任务视图 互切；从任务视图返回时回到
       // 上次使用的日历视图（2026-10-20 雄哥要求，原来是硬编码落回月视图）。
-      // 读不到记录（含隐私模式 localStorage 不可用）才回落默认月视图。
-      ctx.viewMode = ctx.viewMode === "task" ? loadCalendarView() ?? DEFAULT_VIEW : "task";
+      // 读不到记录（配置里还没存过 / 值不合法）才回落默认月视图。
+      ctx.viewMode = ctx.viewMode === "task" ? loadCalendarView(ctx.store.settings) ?? DEFAULT_VIEW : "task";
       notifyViewChange(ctx.viewMode);
       renderAll();
       return;
@@ -1469,8 +1469,9 @@ export function renderDockPanel(
     const filterItem = t.closest("[data-dock-filter]") as HTMLElement | null;
     if (filterItem && root.contains(filterItem)) {
       dockFilter = filterItem.dataset.dockFilter as DockFilter;
-      // 记下这次选的：设置里「上次使用项」下次打开就回到它（本机 localStorage）
-      saveLastDockFilter(dockFilter);
+      // 记下这次选的：设置里「上次使用项」下次打开就回到它（写进配置，随数据同步）
+      saveLastDockFilter(opts.store.settings, dockFilter);
+      opts.store.markSettingsDirty();
       syncDockFilterLabel();
       renderDockList();
       closePops();

@@ -170,6 +170,15 @@ export class CalStore {
     this.saveTimer = setTimeout(() => void this.persist(), 400);
   }
 
+  /**
+   * settings 里的字段被直接改动后调用（UI 偏好记录就是这么写的）：排期落盘。
+   *
+   * 为什么不直接调 persist()：切筛选/切视图是高频操作，合并成一次写。
+   */
+  markSettingsDirty(): void {
+    this.persistSoon();
+  }
+
   async persist(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);

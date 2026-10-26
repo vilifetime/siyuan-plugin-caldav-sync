@@ -24,6 +24,7 @@ import { renderTaskView } from "./view-task";
 import { renderYearView } from "./view-year";
 import { renderListView } from "./view-list";
 import { todoDueOccurrences } from "./view-common";
+import { chinaCalendarEnabled, warmChinaCalendar } from "../core/holiday-cn";
 
 export type ViewMode = "year" | "month" | "week" | "day" | "task";
 
@@ -356,6 +357,15 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     else if (ctx.viewMode === "month") renderMonthView(args);
     else if (ctx.viewMode === "week") renderWeekView(args, 7);
     else renderWeekView(args, 1);
+    // 中国日历叠加层：渲染后异步预热当前年份（及相邻年）的节假日缓存；
+    // 首次拿到数据后触发一次重绘，让日期栏上的节假日徽标「补」出来。
+    // 缓存命中即不再重绘，不会形成循环。仅真实宿主内联网，单测不触发。
+    if (chinaCalendarEnabled(ctx.store.settings)) {
+      const y = +ctx.cursor.slice(0, 4);
+      void warmChinaCalendar(ctx.store.settings, [y - 1, y, y + 1])
+        .then((changed) => { if (changed) ctx.refreshPanels?.(); })
+        .catch(() => {});
+    }
   }
 
   function renderAll(): void {

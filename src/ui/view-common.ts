@@ -4,6 +4,7 @@ import { DEFAULT_CATEGORIES, calEventColor, calTodoColor, findCalendarByUrl } fr
 import type { PanelCtx } from "./panel";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs } from "../core/date";
+import { chinaCalendarEnabled, holidayFor, lunarFor } from "../core/holiday-cn";
 
 export interface ViewArgs {
   ctx: PanelCtx;
@@ -32,6 +33,30 @@ export function todoDueOccurrences(it: CalItem, startMs: number, endMs: number):
 export function keyOfItem(it: CalItem): string {
   // 与 core/store.ts 的 keyOf 保持同一口径（主键不含 kind，日程↔待办互转才能覆盖同一条目）
   return it.recurId ? `${it.uid}|${it.recurId}` : it.uid;
+}
+
+/**
+ * 生成「日期数字栏」右侧的中国日历叠加层 HTML（节假日名称 + 休/班 + 农历/节气）。
+ * 纯展示：节假日来自联网缓存（holidayFor），农历/节气来自内置算法（lunarFor），均不参与同步。
+ * 三个开关分别控制是否渲染对应层；全关时返回空串。
+ */
+export function chinaDayBarHTML(ctx: PanelCtx, dateStr: string): string {
+  const s = ctx.store.settings;
+  if (!chinaCalendarEnabled(s)) return "";
+  const parts: string[] = [];
+  if (s.showHolidaysCN) {
+    const h = holidayFor(dateStr);
+    if (h) {
+      parts.push(`<span class="cal-hl-name">${escape(h.name)}</span>`);
+      parts.push(`<span class="cal-hl-tag ${h.off ? "rest" : "work"}">${h.off ? "休" : "班"}</span>`);
+    }
+  }
+  if (s.showLunarCN || s.showTermCN) {
+    const { lunar, jieqi } = lunarFor(dateStr);
+    if (s.showTermCN && jieqi) parts.push(`<span class="cal-lunar">${escape(jieqi)}</span>`);
+    if (s.showLunarCN && lunar) parts.push(`<span class="cal-lunar">${escape(lunar)}</span>`);
+  }
+  return parts.length ? `<span class="cal-daybar">${parts.join("")}</span>` : "";
 }
 
 /**

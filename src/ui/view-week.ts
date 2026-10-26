@@ -2,7 +2,7 @@
  * 周 / 日视图：时间轴网格（周一起始，N 列），当前时间红线，全天条
  */
 import { addDays, dateStampOfMs, isDateOnly, parseLocalStamp, startOfWeek, todayStamp } from "../core/date";
-import { calColorOf, escape, keyOfItem, occComparator, repeatMark, type ViewArgs } from "./view-common";
+import { calColorOf, escape, keyOfItem, occComparator, repeatMark, chinaDayBarHTML, type ViewArgs } from "./view-common";
 import { openDateAddMenu } from "./date-add-menu";
 
 const HOUR_H = 44; // 每小时像素
@@ -83,7 +83,7 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
     .map((d) => {
       const wd = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][(parseLocalStamp(d).getDay() + 6) % 7];
       return `<div class="cal-wk-dayhead ${d === today ? "is-today" : ""}" data-day="${d}">
-        <span class="cal-wk-wd">${wd}</span><span class="cal-wk-num">${+d.slice(8, 10)}</span></div>`;
+        <span class="cal-wk-wd">${wd}</span><div class="cal-wk-numrow"><span class="cal-wk-num">${+d.slice(8, 10)}</span>${chinaDayBarHTML(ctx, d)}</div></div>`;
     })
     .join("");
 

@@ -3,7 +3,8 @@
  * 点击月标题跳转到该月；点击某天跳转到该天（日视图）。
  */
 import { addDays, dateStampOfMs, todayStamp } from "../core/date";
-import { calColorOf, type ViewArgs } from "./view-common";
+import { calColorOf, escape, type ViewArgs } from "./view-common";
+import { holidayFor } from "../core/holiday-cn";
 
 const WEEK_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
 
@@ -45,8 +46,11 @@ export function renderYearView({ ctx, viewEl, occurrences }: ViewArgs): void {
       const info = byDay.get(day);
       const dot = info ? `<span class="cal-year-dot" style="background:${[...info.colors][0]}"></span>` : "";
       const badge = info && info.count > 1 ? `<span class="cal-year-count">${info.count}</span>` : "";
+      // 中国日历：年视图迷你格只放一个节假日小圆点（休=绿 / 班=橙），不堆叠文字以免拥挤
+      const hl = ctx.store.settings.showHolidaysCN ? holidayFor(day) : null;
+      const hlMark = hl ? `<span class="cal-year-hl ${hl.off ? "rest" : "work"}" title="${escape(hl.name)}${hl.off ? "（休）" : "（班）"}"></span>` : "";
       cells.push(`<div class="cal-year-cell ${inMonth ? "" : "is-out"} ${isToday ? "is-today" : ""}" data-day="${day}">
-        <span class="cal-year-num">${+day.slice(8, 10)}</span>${dot}${badge}
+        <span class="cal-year-num">${+day.slice(8, 10)}</span>${hlMark}${dot}${badge}
       </div>`);
     }
     months.push(`<div class="cal-year-month">

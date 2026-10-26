@@ -444,6 +444,25 @@ export interface CalSettings {
    * 会在「日程与待办」小节最前面追加一个 `### 逾期待办` 子节。
    */
   includeOverdueTodos?: boolean;
+
+  // ── 中国日历叠加层（2026-10-26）──
+  // 纯展示：在月/周/日视图的日期数字栏上叠加节假日/农历/节气，**不进 CalDAV、不参与同步、不写服务器**。
+  // 节假日是外部政策数据（按年联网拉取+缓存）；农历/节气是内置算法（lunar-javascript），运行时不联网。
+  /** 显示节假日（国务院每年公布，联网拉取）。默认开 */
+  showHolidaysCN?: boolean;
+  /** 显示农历（内置算法，无需联网）。默认开 */
+  showLunarCN?: boolean;
+  /** 显示节气（内置算法，无需联网）。默认开 */
+  showTermCN?: boolean;
+  /**
+   * 节假日数据源：预设键 "holiday-cn" / "chinese-days"，或 "custom"（此时用 holidayCnCustomUrl）。
+   * 默认 "holiday-cn"（最流行、字段干净）。
+   */
+  holidayCnSource?: "holiday-cn" | "chinese-days" | "custom";
+  /** 自定义数据源 URL（holidayCnSource==="custom" 时生效，支持 {year} 占位，返回 [{date,name,isOffDay}]） */
+  holidayCnCustomUrl?: string;
+  /** 节假日更新频率：weekly=每周静默复查 / daily=每天 / manual=仅手动。默认 weekly */
+  holidayCnUpdateFreq?: "weekly" | "daily" | "manual";
 }
 
 /**
@@ -496,7 +515,13 @@ export const DEFAULT_SETTINGS: CalSettings = {
   showExpiredEventsInTaskView: false,
   categories: DEFAULT_CATEGORIES,
   categoryMulti: false,
-  includeOverdueTodos: false
+  includeOverdueTodos: false,
+  showHolidaysCN: true,
+  showLunarCN: true,
+  showTermCN: true,
+  holidayCnSource: "holiday-cn",
+  holidayCnCustomUrl: "",
+  holidayCnUpdateFreq: "weekly"
 };
 
 export interface SyncState {

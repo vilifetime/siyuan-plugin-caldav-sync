@@ -1,6 +1,6 @@
 /** 月视图：5 行 x 7 列（周一起始，以今天为锚的滑动窗口） */
 import { addDays, dateStampOfMs, todayStamp } from "../core/date";
-import { monthChipHtml, calColorOf, type ViewArgs } from "./view-common";
+import { monthChipHtml, calColorOf, chinaDayBarHTML, type ViewArgs } from "./view-common";
 import { openDateAddMenu } from "./date-add-menu";
 import { openMonthDayPopup, closeMonthDayPopup, schedulePopupClose, cancelPopupClose } from "./month-day-popup";
 
@@ -75,7 +75,7 @@ export function renderMonthView(args: ViewArgs): void {
     const more = fullList.length - shown.length;
     // 每天的完整条目挂 data-* 上：悬停/点击展开浮层时直接取，不必重新查一遍
     html.push(`<div class="cal-month-cell ${inMonth ? "" : "is-out"} ${isToday ? "is-today" : ""}" data-day="${day}" data-more="${more}">
-      <div class="cal-month-daynum">${isToday ? `<span class="cal-today-badge">${+day.slice(8, 10)}</span>` : +day.slice(8, 10)}</div>
+      <div class="cal-month-daynum">${isToday ? `<span class="cal-today-badge">${+day.slice(8, 10)}</span>` : +day.slice(8, 10)}${chinaDayBarHTML(ctx, day)}</div>
       <div class="cal-month-chips">${chips}${more > 0 ? `<div class="cal-chip-more" title="悬停或点击查看全部 ${fullList.length} 项">还有 ${more} 项…</div>` : ""}</div>
     </div>`);
     // 完整条目暂存到 map：浮层按需渲染全部（默认仍截断，保持月视图清爽）

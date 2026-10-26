@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite build --watch --mode dev",
     "build": "vite build && node scripts/make-package.mjs",
-    "test": "npm run test:secret && npm run test:core && npm run test:reconcile && npm run test:synctoken && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task && npm run test:tasksearch && npm run test:todoattach && npm run test:attachconfirm && npm run test:wktodo && npm run test:digest && npm run test:alldayoutlook && npm run test:todayviewpref && npm run test:icloudattach && npm run test:daventry && npm run test:purge && npm run test:purgeui && npm run test:listview && npm run test:syncindicator && npm run test:multiacc",
+    "test": "npm run test:secret && npm run test:core && npm run test:chinacal && npm run test:reconcile && npm run test:synctoken && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task && npm run test:tasksearch && npm run test:todoattach && npm run test:attachconfirm && npm run test:wktodo && npm run test:digest && npm run test:alldayoutlook && npm run test:todayviewpref && npm run test:icloudattach && npm run test:daventry && npm run test:purge && npm run test:purgeui && npm run test:listview && npm run test:syncindicator && npm run test:multiacc",
     "test:storage": "node test/storage.test.mjs",
     "test:loader": "node test/loader.test.mjs",
     "test:reminder": "node test/reminder.test.mjs",
@@ -19,6 +19,7 @@
     "test:tasksearch": "node test/task-search.test.mjs",
     "test:ui": "node test/ui.test.mjs",
     "test:core": "node test/core.test.mjs",
+    "test:chinacal": "node test/holiday-cn.test.mjs",
     "test:todoattach": "node test/todo-attach.cjs",
     "test:reconcile": "node test/reconcile.test.mjs",
     "test:synctoken": "node test/sync-token.test.mjs",
@@ -55,5 +56,8 @@
     "siyuan": "^1.2.7",
     "typescript": "^5.7.2",
     "vite": "^5.4.11"
+  },
+  "dependencies": {
+    "lunar-javascript": "^1.7.7"
   }
 }

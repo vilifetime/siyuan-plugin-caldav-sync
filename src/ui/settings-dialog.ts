@@ -24,6 +24,7 @@ import {
 } from "../core/types";
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
 import { clearAuthCache } from "../core/http";
+import { forceRefreshChinaCalendar } from "../core/holiday-cn";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
 import { enableDialogResize } from "./dialog-resize";
@@ -488,6 +489,13 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const wasRemindOn = s.enableReminders;
         s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement | null)?.checked;
         s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement | null)?.checked;
+        // 中国日历叠加层
+        s.showHolidaysCN = ($("input[data-s='showHolidaysCN']") as HTMLInputElement | null)?.checked;
+        s.showLunarCN = ($("input[data-s='showLunarCN']") as HTMLInputElement | null)?.checked;
+        s.showTermCN = ($("input[data-s='showTermCN']") as HTMLInputElement | null)?.checked;
+        s.holidayCnSource = (($("select[data-s='holidayCnSource']")?.value || "holiday-cn") as CalSettings["holidayCnSource"]);
+        s.holidayCnCustomUrl = ($("input[data-s='holidayCnCustomUrl']")?.value || "").trim();
+        s.holidayCnUpdateFreq = (($("select[data-s='holidayCnUpdateFreq']")?.value || "weekly") as CalSettings["holidayCnUpdateFreq"]);
         // 默认账户/日历：两级选择（「自动」= 空串）。选中的日历被停用/删掉时
         // resolveDefaultCalendar() 会回退默认账户 → 第一个启用账户的第一个启用日历
         const daSel = $("select[data-s='defaultAcc']")?.value || "";
@@ -527,10 +535,46 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       bindServer();
       bindRemind();
       bindPurge();
+      bindChinaCalendar();
       bindSave();
       bindDefaultPicker();
       // 每个账户 body 里的取色药丸各自绑定（事件委托在 innerHTML 重渲后会丢）
       el.querySelectorAll<HTMLElement>("[data-cals]").forEach(bindColorPills);
+    }
+
+    /** 中国日历分组：数据源切换显隐自定义 URL；「立即检查更新」强制拉取当年+次年 */
+    function bindChinaCalendar(): void {
+      const srcSel = el.querySelector<HTMLSelectElement>("select[data-s='holidayCnSource']");
+      const customWrap = el.querySelector<HTMLElement>("#caldav-cn-custom");
+      srcSel?.addEventListener("change", () => {
+        if (customWrap) customWrap.style.display = srcSel.value === "custom" ? "" : "none";
+      });
+      el.querySelector("[data-action='cn-refresh']")?.addEventListener("click", async (ev) => {
+        const btn = ev.currentTarget as HTMLElement;
+        const msg = el.querySelector("[data-cn-msg]") as HTMLElement | null;
+        const custom = srcSel?.value === "custom";
+        const tmp: CalSettings = {
+          ...s,
+          holidayCnSource: (srcSel?.value || "holiday-cn") as CalSettings["holidayCnSource"],
+          holidayCnCustomUrl: ($("input[data-s='holidayCnCustomUrl']")?.value || "").trim()
+        };
+        if (custom && !tmp.holidayCnCustomUrl) {
+          if (msg) msg.textContent = "请先填写自定义 URL";
+          return;
+        }
+        const y = new Date().getFullYear();
+        if (msg) msg.textContent = "检查中…";
+        btn.setAttribute("disabled", "true");
+        try {
+          const ok = await forceRefreshChinaCalendar(tmp, [y, y + 1]);
+          if (msg) msg.textContent = ok ? "已更新（重新打开日历视图即可见）" : "暂无新数据 / 拉取失败";
+          ctx.refreshPanels?.();
+        } catch {
+          if (msg) msg.textContent = "拉取失败（请检查网络或数据源 URL）";
+        } finally {
+          btn.removeAttribute("disabled");
+        }
+      });
     }
 
     /** 默认账户 → 默认日历两级联动：换账户后日历下拉重填为该账户的启用日历（只改 options，不重渲整页） */
@@ -655,6 +699,53 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       <input type="checkbox" data-s="includeOverdue" ${s.includeOverdueTodos ? "checked" : ""}/>
       <span>插入日记时包含逾期待办（默认只写当日 / 本周 / 本月范围内的条目，逾期任务不写）</span>
     </label>
+  </div>
+
+  <div class="caldav-section caldav-section--card">
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.flag}</span>中国日历</div>
+    <p class="caldav-set-hint">在月 / 周 / 日视图的日期数字栏上叠加显示节假日、农历与节气。纯展示，不写入 CalDAV、不参与同步。</p>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="showHolidaysCN" ${s.showHolidaysCN ? "checked" : ""}/>
+      <span>显示节假日（国务院每年公布，联网拉取；调休补班标「班」）</span>
+    </label>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="showLunarCN" ${s.showLunarCN ? "checked" : ""}/>
+      <span>显示农历（内置算法，无需联网）</span>
+    </label>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="showTermCN" ${s.showTermCN ? "checked" : ""}/>
+      <span>显示节气（内置算法，无需联网）</span>
+    </label>
+    <div class="caldav-field">
+      <label class="caldav-field-label">节假日数据源</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="holidayCnSource">
+          <option value="holiday-cn" ${(s.holidayCnSource || "holiday-cn") === "holiday-cn" ? "selected" : ""}>NateScarlet/holiday-cn（推荐，字段干净）</option>
+          <option value="chinese-days" ${s.holidayCnSource === "chinese-days" ? "selected" : ""}>vsme/chinese-days</option>
+          <option value="custom" ${s.holidayCnSource === "custom" ? "selected" : ""}>自定义 URL…</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+    <div class="caldav-field" id="caldav-cn-custom" style="${s.holidayCnSource === "custom" ? "" : "display:none"}">
+      <label class="caldav-field-label">自定义数据源 URL（支持 {year} 占位，返回 [{date,name,isOffDay}] 数组）</label>
+      <input class="caldav-input" type="text" data-s="holidayCnCustomUrl" value="${escape(s.holidayCnCustomUrl || "")}" placeholder="https://your-mirror/{year}.json"/>
+    </div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">更新频率</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="holidayCnUpdateFreq">
+          <option value="weekly" ${(s.holidayCnUpdateFreq || "weekly") === "weekly" ? "selected" : ""}>每周静默复查一次</option>
+          <option value="daily" ${s.holidayCnUpdateFreq === "daily" ? "selected" : ""}>每天静默复查一次</option>
+          <option value="manual" ${s.holidayCnUpdateFreq === "manual" ? "selected" : ""}>仅手动（不自动）</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+    <div class="caldav-actions-row">
+      <button class="caldav-btn caldav-btn--sm" type="button" data-action="cn-refresh">${icons.refreshThin} 立即检查更新</button>
+      <span class="caldav-set-msg" data-cn-msg></span>
+    </div>
   </div>
 
   <div class="caldav-section caldav-section--card">

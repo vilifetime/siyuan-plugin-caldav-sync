@@ -389,6 +389,10 @@
   font-size: 11.5px;
   color: var(--caldav-text-2);
   margin-bottom: 2px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .cal-today-badge {
@@ -696,6 +700,22 @@
 
 .cal-wk-wd { color: var(--caldav-text-2); font-size: 11px; line-height: 14px; }
 .cal-wk-num { font-weight: 600; font-size: 15px; line-height: 19px; padding: 1px 6px; }
+
+/* 周/日视图日期头部：日期数 + 中国日历叠加层放在同一行（不增加表头高度，维持 44px 约束） */
+.cal-wk-numrow { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: 100%; }
+
+/* ── 中国日历叠加层（节假日 / 农历 / 节气）── */
+.cal-daybar { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap; margin-left: 4px; }
+.cal-hl-name { font-size: 11px; color: var(--caldav-text); font-weight: 500; }
+.cal-hl-tag { font-size: 9px; line-height: 1; padding: 1px 4px; border-radius: 4px; font-weight: 700; transform: translateY(-1px); }
+.cal-hl-tag.rest { color: #1a9e5b; background: #e7f6ee; }
+.cal-hl-tag.work { color: #e8830c; background: #fdf0e0; }
+.cal-lunar { font-size: 10px; color: var(--caldav-text-2); }
+
+/* 年视图迷你格：节假日小圆点（休=绿 / 班=橙），不堆叠文字以免拥挤 */
+.cal-year-hl { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-left: 3px; vertical-align: middle; }
+.cal-year-hl.rest { background: #1a9e5b; }
+.cal-year-hl.work { background: #e8830c; }
 
 /* 主滚动区：只装时间网格（左 gutter + 右日期列），负责纵向滚动。
    表头 .cal-wk-header 与全天栏 .cal-wk-allday 都是它的兄弟节点、常驻顶部不随滚动移动，

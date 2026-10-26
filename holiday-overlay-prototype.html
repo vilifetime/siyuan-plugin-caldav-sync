@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>中国日历叠加层 · 原型 v3（设置界面 + 月/周/日视图）</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --line:#e3e6ea; --text:#1f2329; --text2:#646a73;
+    --accent:#3b6cff; --accent-soft:#eaf0ff;
+    --rest:#1a9e5b; --rest-bg:#e7f6ee;        /* 休 */
+    --work:#e8830c; --work-bg:#fdf0e0;        /* 班 */
+    --lunar:#8a9099;                          /* 农历/节气 灰 */
+    --today:#3b6cff;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--text);font-size:13px;line-height:1.5}
+  .wrap{display:flex;gap:18px;padding:18px;align-items:flex-start;max-width:1180px;margin:0 auto}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:0 1px 3px rgba(0,0,0,.04)}
+
+  /* ---------- 左：设置界面 ---------- */
+  .settings{width:340px;flex:0 0 340px;padding:0;overflow:hidden}
+  .settings h2{font-size:14px;margin:0;padding:14px 16px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:8px}
+  .settings h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  .grp{padding:14px 16px;border-bottom:1px solid var(--line)}
+  .grp:last-child{border-bottom:none}
+  .grp-title{font-weight:600;font-size:13px;margin-bottom:4px}
+  .grp-sub{color:var(--text2);font-size:12px;margin-bottom:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;padding:7px 0}
+  .row .lbl{display:flex;flex-direction:column}
+  .row .lbl small{color:var(--text2);font-size:11px;font-weight:400}
+  /* switch */
+  .sw{position:relative;width:38px;height:22px;flex:0 0 38px}
+  .sw input{opacity:0;width:0;height:0;position:absolute}
+  .sw .track{position:absolute;inset:0;background:#cfd4da;border-radius:11px;transition:.18s;cursor:pointer}
+  .sw .knob{position:absolute;top:2px;left:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:.18s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+  .sw input:checked + .track{background:var(--accent)}
+  .sw input:checked + .track + .knob{transform:translateX(16px)}
+  select,input[type=text]{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;
+    font-size:13px;font-family:inherit;color:var(--text);background:#fff;margin-top:6px}
+  .field{margin:10px 0}
+  .field > label{font-size:12px;color:var(--text2)}
+  .custom-url{display:none;margin-top:8px}
+  .btn{width:100%;margin-top:10px;padding:9px;border:none;border-radius:8px;background:var(--accent);
+    color:#fff;font-size:13px;font-weight:600;cursor:pointer}
+  .btn:active{transform:translateY(1px)}
+  .note{background:var(--accent-soft);border:1px solid #d4e1ff;border-radius:8px;padding:10px 12px;
+    font-size:11.5px;color:#33415c;margin-top:12px}
+  .note b{color:#1f3a8a}
+  .note ul{margin:6px 0 0;padding-left:16px}
+  .note li{margin:3px 0}
+
+  /* ---------- 右：日历界面 ---------- */
+  .preview{flex:1;min-width:0;padding:16px}
+  .tabs{display:flex;gap:6px;margin-bottom:14px}
+  .tab{padding:7px 16px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;font-size:13px}
+  .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+  /* 通用「日期数字栏」布局：参考截图版式
+     公历数字在左，名称+休/班胶囊在右同行，农历/节气接在右侧 */
+  .daybar{display:inline-flex;align-items:baseline;gap:5px;margin-left:6px;flex-wrap:wrap}
+  .hl-name{font-size:12px;color:var(--text);font-weight:500}
+  .hl-tag{font-size:10px;line-height:1;padding:2px 5px;border-radius:5px;font-weight:700;transform:translateY(-1px)}
+  .hl-tag.rest{color:var(--rest);background:var(--rest-bg)}
+  .hl-tag.work{color:var(--work);background:var(--work-bg)}
+  .lunar{font-size:11px;color:var(--lunar)}
+
+  /* 月视图 */
+  .month{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .wd-head{background:#f0f2f5;padding:6px 0;text-align:center;font-size:12px;color:var(--text2)}
+  .cell{background:#fff;min-height:74px;padding:5px 7px;display:flex;flex-direction:column;gap:3px}
+  .cell.out{background:#fafbfc;opacity:.55}
+  .cell .top{display:flex;align-items:baseline;flex-wrap:wrap}
+  .num{font-size:14px;font-weight:600}
+  .cell.today .num{color:var(--today);font-weight:800}
+  .cell .ev{font-size:11px;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* 周 / 日视图 日期头部 */
+  .wk{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .wk.is-day{grid-template-columns:1fr}
+  .dayhead{background:#f0f2f5;padding:6px 9px;display:flex;align-items:baseline;flex-wrap:wrap;gap:4px}
+  .dayhead.today{background:#eaf0ff}
+  .wk-wd{font-size:11px;color:var(--text2)}
+  .wk-num{font-size:15px;font-weight:600;padding:0 6px 0 0}
+  .dayhead.today .wk-num{color:var(--today)}
+  .body{background:#fff;min-height:220px;padding:8px}
+  .is-day .body{min-height:300px}
+  .slot{font-size:12px;color:var(--text2);padding:6px 0;border-bottom:1px dashed #eef0f2;display:flex;gap:8px}
+  .slot .t{color:var(--text);font-weight:600;width:46px;flex:0 0 46px}
+  .hint{color:var(--text2);font-size:11.5px;margin:10px 2px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ 左：设置界面 ============ -->
+  <div class="panel settings">
+    <h2><span class="dot"></span>插件设置 · 中国日历</h2>
+
+    <div class="grp">
+      <div class="grp-title">显示内容</div>
+      <div class="grp-sub">在月 / 周 / 日视图的日期数字栏上叠加显示</div>
+      <div class="row">
+        <div class="lbl">显示节假日<small>国务院每年公布，联网拉取</small></div>
+        <label class="sw"><input type="checkbox" id="sHoliday" checked><span class="track"></span><span class="knob"></span></label>
+      </div>
+      <div class="row">
+        <div class="lbl">显示农历<small>内置算法，无需联网</small></div>
+        <label class="sw"><input type="checkbox" id="sLunar" checked><span class="track"></span><span class="knob"></span></label>
+      </div>
+      <div class="row">
+        <div class="lbl">显示节气<small>内置算法，无需联网</small></div>
+        <label class="sw"><input type="checkbox" id="sTerm" checked><span class="track"></span><span class="knob"></span></label>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="grp-title">节假日数据源（可自定义）</div>
+      <div class="grp-sub">仅当开启「显示节假日」时生效</div>
+      <div class="field">
+        <label>数据源</label>
+        <select id="srcSel">
+          <option value="holiday-cn" selected>NateScarlet/holiday-cn（推荐，字段干净）</option>
+          <option value="chinese-days">vsme/chinese-days（含节气/农历）</option>
+          <option value="custom">自定义 URL…</option>
+        </select>
+        <div class="custom-url" id="customWrap">
+          <input type="text" id="customUrl" placeholder="https://your-mirror/2026.json">
+        </div>
+      </div>
+      <div class="field">
+        <label>更新频率</label>
+        <select id="freqSel">
+          <option value="weekly" selected>每周静默复查一次</option>
+          <option value="daily">每天静默复查一次</option>
+          <option value="manual">仅手动（不自动）</option>
+        </select>
+      </div>
+      <button class="btn" id="checkBtn">立即检查更新</button>
+    </div>
+
+    <div class="grp">
+      <div class="grp-title">这些信息如何更新？</div>
+      <div class="note">
+        <b>三类数据，更新机制完全不同：</b>
+        <ul>
+          <li><b>节假日</b>：外部政策数据。按<b>年</b>懒加载 + 缓存到插件本地存储；打开某年视图时若该年未缓存就去拉，之后按上面设定的频率静默复查（次年 10 月国务院公布后，下一周期自动生效）。自定义 URL 走你填的地址。</li>
+          <li><b>农历</b>：天文算法（lunar-javascript，覆盖 1900–2100），<b>打包进插件、运行时不联网</b>，更新仅随发版升级库。</li>
+          <li><b>节气</b>：同上，内置算法，无需联网。</li>
+        </ul>
+        <b>关键点</b>：本方案是「视图叠加层」，数据<b>不进 CalDAV、不参与同步、不写服务器</b>，更新是纯前端行为，与多账户同步逻辑互不干扰。
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 右：日历界面 ============ -->
+  <div class="preview">
+    <div class="tabs">
+      <div class="tab active" data-v="month">月视图</div>
+      <div class="tab" data-v="week">周视图</div>
+      <div class="tab" data-v="day">日视图</div>
+    </div>
+
+    <!-- 月视图 -->
+    <div id="v-month">
+      <div class="month" id="monthGrid"></div>
+      <div class="hint">月视图：日期数字在左上，节假日名称 + 「休/班」胶囊 + 农历/节气 在同行右侧（参考截图版式）。</div>
+    </div>
+
+    <!-- 周视图 -->
+    <div id="v-week" style="display:none">
+      <div class="wk" id="weekGrid"></div>
+      <div class="hint">周视图：每一列顶部的日期头部（周几 + 日期数）右侧，叠加节假日名称 + 休/班 + 农历/节气。</div>
+    </div>
+
+    <!-- 日视图 -->
+    <div id="v-day" style="display:none">
+      <div class="wk is-day" id="dayGrid"></div>
+      <div class="hint">日视图：单列，顶部日期头部右侧同样叠加显示。</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ====== 演示数据：2026 年 10 月（节假/农历/节气均为示例值，真实插件由 holiday-cn + lunar-javascript 计算） ====== */
+const HOLIDAY = {
+  "2026-10-01":{name:"国庆节",off:true}, "2026-10-02":{name:"国庆节",off:true},
+  "2026-10-03":{name:"国庆节",off:true}, "2026-10-04":{name:"国庆节",off:true},
+  "2026-10-05":{name:"国庆节",off:true}, "2026-10-06":{name:"国庆节",off:true},
+  "2026-10-07":{name:"国庆节",off:true},
+  "2026-10-10":{name:"国庆节补班",off:false}  /* 调休：周末变工作日 */
+};
+const LUNAR = {
+  "2026-10-01":"八月廿一","2026-10-02":"八月廿二","2026-10-03":"八月廿三","2026-10-04":"八月廿四",
+  "2026-10-05":"八月廿五","2026-10-06":"八月廿六","2026-10-07":"八月廿七","2026-10-08":"八月廿八",
+  "2026-10-09":"八月廿九","2026-10-10":"八月三十","2026-10-11":"九月初一","2026-10-12":"九月初二",
+};
+const TERM = { "2026-10-08":"寒露", "2026-10-23":"霜降" };
+
+const W = ["日","一","二","三","四","五","六"];
+const state = { holiday:true, lunar:true, term:true };
+
+/* 生成「日期数字栏」右侧内容（月/周/日共用） */
+function dayBar(dateStr){
+  const parts = [];
+  const h = HOLIDAY[dateStr];
+  if(state.holiday && h){
+    parts.push(`<span class="hl-name">${h.name}</span>`);
+    parts.push(`<span class="hl-tag ${h.off?'rest':'work'}">${h.off?'休':'班'}</span>`);
+  }
+  if(state.lunar && LUNAR[dateStr]) parts.push(`<span class="lunar">${LUNAR[dateStr]}</span>`);
+  if(state.term && TERM[dateStr])  parts.push(`<span class="lunar">${TERM[dateStr]}</span>`);
+  return parts.length ? `<span class="daybar">${parts.join("")}</span>` : "";
+}
+
+/* ---- 月视图 ---- */
+function renderMonth(){
+  const g = document.getElementById("monthGrid");
+  let html = W.map(w=>`<div class="wd-head">周${w}</div>`).join("");
+  // 2026-10 起止：10-1 周四 → 前补到周日；网格 6 行
+  const first = new Date(2026,9,1);
+  const lead = first.getDay(); // 0=周日
+  const start = new Date(2026,8,1 - lead + 1); // 周日为首列
+  const ev = { "2026-10-01":["团队国庆排期"], "2026-10-08":["寒露茶会"], "2026-10-10":["补班：发布评审"] };
+  for(let i=0;i<42;i++){
+    const d = new Date(start); d.setDate(start.getDate()+i);
+    const ds = d.toISOString().slice(0,10);
+    const inM = d.getMonth()===9;
+    const isToday = ds==="2026-10-08";
+    const bar = dayBar(ds);
+    const evs = (ev[ds]||[]).map(t=>`<div class="ev">${t}</div>`).join("");
+    html += `<div class="cell ${inM?'':'out'} ${isToday?'today':''}">
+      <div class="top"><span class="num">${d.getDate()}</span>${bar}</div>${evs}</div>`;
+  }
+  g.innerHTML = html;
+}
+
+/* ---- 周视图（含 10-5~10-11，覆盖 休/班/节气） ---- */
+function renderWeek(){
+  const g = document.getElementById("weekGrid");
+  let head = "", body = "";
+  for(let i=5;i<=11;i++){
+    const ds = `2026-10-${String(i).padStart(2,"0")}`;
+    const d = new Date(2026,9,i);
+    const wd = W[d.getDay()];
+    const isToday = ds==="2026-10-08";
+    head += `<div class="dayhead ${isToday?'today':''}"><span class="wk-wd">周${wd}</span><span class="wk-num">${i}</span>${dayBar(ds)}</div>`;
+    const evs = { "2026-10-08":["09:00 寒露茶会"], "2026-10-10":["14:00 发布评审（补班）"] }[ds]||[];
+    body += `<div class="body">${evs.map(e=>`<div class="slot"><span class="t">${e.slice(0,5)}</span><span>${e.slice(6)}</span></div>`).join("")||'<div class="slot" style="color:#bbb">— 无安排 —</div>'}</div>`;
+  }
+  g.innerHTML = head + body;
+}
+
+/* ---- 日视图（10-8 寒露 + 工作日） ---- */
+function renderDay(){
+  const g = document.getElementById("dayGrid");
+  const ds = "2026-10-08";
+  const d = new Date(2026,9,8);
+  const wd = W[d.getDay()];
+  const isToday = true;
+  const head = `<div class="dayhead today"><span class="wk-wd">周${wd}</span><span class="wk-num">8</span>${dayBar(ds)}</div>`;
+  const body = `<div class="body">
+    <div class="slot"><span class="t">09:00</span><span>寒露茶会</span></div>
+    <div class="slot"><span class="t">11:30</span><span>站立会</span></div>
+    <div class="slot"><span class="t">15:00</span><span>方案评审</span></div>
+  </div>`;
+  g.innerHTML = head + body;
+}
+
+function renderAll(){ renderMonth(); renderWeek(); renderDay(); }
+
+/* ---- 设置交互 ---- */
+function bind(id,key){ const el=document.getElementById(id); el.addEventListener("change",()=>{state[key]=el.checked; renderAll();}); }
+bind("sHoliday","holiday"); bind("sLunar","lunar"); bind("sTerm","term");
+
+document.getElementById("srcSel").addEventListener("change",e=>{
+  document.getElementById("customWrap").style.display = e.target.value==="custom" ? "block":"none";
+});
+document.getElementById("checkBtn").addEventListener("click",()=>{
+  const b=document.getElementById("checkBtn"); b.textContent="检查中…";
+  setTimeout(()=>{ b.textContent="✓ 已更新（演示）"; setTimeout(()=>b.textContent="立即检查更新",1500); },700);
+});
+
+/* ---- 视图切换 ---- */
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  const v=t.dataset.v;
+  document.getElementById("v-month").style.display = v==="month"?"block":"none";
+  document.getElementById("v-week").style.display  = v==="week" ?"block":"none";
+  document.getElementById("v-day").style.display   = v==="day"  ?"block":"none";
+}));
+
+renderAll();
+</script>
+</body>
+</html>

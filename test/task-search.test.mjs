@@ -15,6 +15,7 @@
  */
 import assert from "node:assert";
 import fs from "node:fs";
+import { rmrf } from "./fsx.mjs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -29,7 +30,7 @@ const stripComments = (s) =>
 // ①纯函数层：直接跑编译后的 matchesSearchQuery
 // ══════════════════════════════════════════════════════════════
 const OUT = path.join(ROOT, ".test-task-search");
-fs.rmSync(OUT, { recursive: true, force: true });
+rmrf(OUT);
 const req = createRequire(import.meta.url);
 // esbuild 是 CJS 包，用 createRequire 直接取。
 // ⚠️ 别写成 `await import(path.join(...))` —— Windows 上绝对路径是 "D:\..."，
@@ -207,5 +208,5 @@ console.log("  ✓ 放大镜 padding-left 走双类特异性（不再被 .caldav
 assert.ok(/placeholder="搜索\.\.\."/.test(viewTask), "中文占位应为「搜索...」（雄哥指定）");
 console.log("  ✓ 占位文案 =「搜索...」");
 
-fs.rmSync(OUT, { recursive: true, force: true });
+rmrf(OUT);
 console.log("[tasksearch] 任务视图搜索回归全部通过（Dock 搜索框已移除 / 匹配函数复用 / 2:1 三列 / 只重渲染列表 / 搜索词存 dataset / 搜索在筛选之后 / 空态区分）");

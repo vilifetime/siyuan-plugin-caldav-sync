@@ -21,6 +21,7 @@
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import { rmrf } from "./fsx.mjs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import assert from "node:assert";
@@ -28,7 +29,7 @@ import assert from "node:assert";
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 const outDir = path.join(root, ".test-allday");
 
-fs.rmSync(outDir, { recursive: true, force: true });
+rmrf(outDir);
 fs.mkdirSync(outDir, { recursive: true });
 execSync(
   `npx tsc src/core/types.ts src/core/date.ts src/core/ics.ts --outDir .test-allday ` +

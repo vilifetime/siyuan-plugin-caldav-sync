@@ -18,6 +18,7 @@
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import { rmrf } from "./fsx.mjs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import assert from "node:assert";
@@ -28,7 +29,7 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 const readLF = (rel) => read(rel).replace(/\r\n/g, "\n");
 
 const outDir = path.join(root, ".test-viewpref");
-fs.rmSync(outDir, { recursive: true, force: true });
+rmrf(outDir);
 fs.mkdirSync(outDir, { recursive: true });
 // view-pref.ts 的 import 用了 @/ 别名，命令行 tsc 不认 --paths → 落临时 tsconfig
 fs.writeFileSync(

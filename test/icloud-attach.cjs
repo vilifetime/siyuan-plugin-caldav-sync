@@ -30,6 +30,7 @@
 const assert = require("assert");
 const { execSync } = require("child_process");
 const fs = require("fs");
+const { rmrf } = require("./fsx.cjs");
 const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -53,7 +54,7 @@ const caldav = require(path.join(outDir, "caldav.js"));
 // 临时目录随进程退出清掉
 process.on("exit", () => {
   try {
-    fs.rmSync(outDir, { recursive: true, force: true });
+    rmrf(outDir);
   } catch {
     /* 清理失败不影响测试结论 */
   }

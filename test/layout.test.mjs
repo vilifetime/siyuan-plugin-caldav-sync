@@ -17,6 +17,7 @@
  */
 import assert from "node:assert";
 import fs from "node:fs";
+import { rmrf } from "./fsx.mjs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, execFileSync } from "node:child_process";
@@ -272,7 +273,7 @@ cleanup();
 try {
   execFileSync(process.env.ComSpec || "cmd", ["/c", "rd", "/s", "/q", outDir], { stdio: "ignore" });
 } catch {
-  try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* 临时目录，清理失败不影响结论 */ }
+  try { rmrf(outDir); } catch { /* 临时目录，清理失败不影响结论 */ }
 }
 
 for (const line of report) console.log("  ✓ " + line);

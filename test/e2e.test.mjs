@@ -5,6 +5,7 @@
  */
 import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import { rmrf } from "./fsx.mjs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -45,7 +46,7 @@ const t = async (name, fn) => {
 };
 
 // ---- 启动 Radicale（清空上次状态） ----
-fs.rmSync(path.join(root, ".e2e-radicale"), { recursive: true, force: true });
+rmrf(path.join(root, ".e2e-radicale"));
 const dir = path.join(root, ".e2e-radicale");
 fs.mkdirSync(path.join(dir, "collections"), { recursive: true });
 fs.writeFileSync(path.join(dir, "users"), "testuser:testpass\n");

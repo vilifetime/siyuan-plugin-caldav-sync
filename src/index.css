@@ -471,19 +471,22 @@
    于是「未完成」看起来和「已完成」完全一样，用户就会以为「点不动了」。
    hover 只给一层淡底提示可点，勾不显现。 */
 .cal-chip.is-done .cal-chip-check,
-.cal-wk-block.is-done .cal-chip-check {
+.cal-wk-block.is-done .cal-chip-check,
+.cal-list-row.is-done .cal-chip-check {
   background: var(--cal-color, #64748b);
   color: #fff;
   border-color: var(--cal-color, #64748b);
 }
 
 .cal-chip.is-done .cal-chip-check:hover,
-.cal-wk-block.is-done .cal-chip-check:hover {
+.cal-wk-block.is-done .cal-chip-check:hover,
+.cal-list-row.is-done .cal-chip-check:hover {
   filter: brightness(0.88);
 }
 
 .cal-chip:not(.is-done) .cal-chip-check:hover,
-.cal-wk-block:not(.is-done) .cal-chip-check:hover {
+.cal-wk-block:not(.is-done) .cal-chip-check:hover,
+.cal-list-row:not(.is-done) .cal-chip-check:hover {
   background: color-mix(in srgb, var(--cal-color, #64748b) 20%, transparent);
   color: color-mix(in srgb, var(--cal-color, #64748b) 45%, transparent);
   border-color: var(--cal-color, #64748b);

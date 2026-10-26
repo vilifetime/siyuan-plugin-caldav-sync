@@ -18,6 +18,7 @@
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import { rmrf, rmQuiet } from "./fsx.mjs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import assert from "node:assert";
@@ -50,7 +51,7 @@ fs.writeFileSync(
 try {
   execSync(`npx tsc -p tsconfig.purgeui.json`, { cwd: root, stdio: "pipe" });
 } finally {
-  fs.rmSync(tsCfg, { force: true });
+  rmQuiet(tsCfg);
 }
 
 const require = createRequire(import.meta.url);

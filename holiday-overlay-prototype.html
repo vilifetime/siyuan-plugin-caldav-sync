@@ -61,9 +61,9 @@
   .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 
   /* 通用「日期数字栏」布局：参考截图版式
-     公历数字在左，名称+休/班胶囊在右同行，农历/节气接在右侧 */
-  .daybar{display:inline-flex;align-items:baseline;gap:5px;margin-left:6px;flex-wrap:wrap}
-  .hl-name{font-size:12px;color:var(--text);font-weight:500}
+     公历数字在左，名称+休/班胶囊在右同行（不换行，空间不足先丢农历再丢节气） */
+  .daybar{display:inline-flex;align-items:baseline;gap:5px;margin-left:6px;flex-wrap:nowrap;white-space:nowrap;min-width:0;overflow:hidden}
+  .hl-name{font-size:12px;color:var(--text);font-weight:500;max-width:7em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .hl-tag{font-size:10px;line-height:1;padding:2px 5px;border-radius:5px;font-weight:700;transform:translateY(-1px)}
   .hl-tag.rest{color:var(--rest);background:var(--rest-bg)}
   .hl-tag.work{color:var(--work);background:var(--work-bg)}
@@ -75,7 +75,7 @@
   .wd-head{background:#f0f2f5;padding:6px 0;text-align:center;font-size:12px;color:var(--text2)}
   .cell{background:#fff;min-height:74px;padding:5px 7px;display:flex;flex-direction:column;gap:3px}
   .cell.out{background:#fafbfc;opacity:.55}
-  .cell .top{display:flex;align-items:baseline;flex-wrap:wrap}
+  .cell .top{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;gap:4px;min-width:0;overflow:hidden}
   .num{font-size:14px;font-weight:600}
   .cell.today .num{color:var(--today);font-weight:800}
   .cell .ev{font-size:11px;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -84,7 +84,7 @@
   .wk{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);
     border:1px solid var(--line);border-radius:8px;overflow:hidden}
   .wk.is-day{grid-template-columns:1fr}
-  .dayhead{background:#f0f2f5;padding:6px 9px;display:flex;align-items:baseline;flex-wrap:wrap;gap:4px}
+  .dayhead{background:#f0f2f5;padding:6px 9px;display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;gap:4px;min-width:0;overflow:hidden}
   .dayhead.today{background:#eaf0ff}
   .wk-wd{font-size:11px;color:var(--text2)}
   .wk-num{font-size:15px;font-weight:600;padding:0 6px 0 0}
@@ -170,13 +170,13 @@
     <!-- 月视图 -->
     <div id="v-month">
       <div class="month" id="monthGrid"></div>
-      <div class="hint">月视图：日期数字在左上，节假日名称 + 「休/班」胶囊 + 农历/节气 在同行右侧（参考截图版式）。</div>
+      <div class="hint">月视图：日期数字在左上，节假日名称 + 「休/班」胶囊在同行右侧（不换行）；节气优先于农历，空间不足时只显示一种。</div>
     </div>
 
     <!-- 周视图 -->
     <div id="v-week" style="display:none">
       <div class="wk" id="weekGrid"></div>
-      <div class="hint">周视图：每一列顶部的日期头部（周几 + 日期数）右侧，叠加节假日名称 + 休/班 + 农历/节气。</div>
+      <div class="hint">周视图：每一列顶部的日期头部（周几 + 日期数）右侧，叠加节假日名称 + 休/班 + 节气/农历（节气优先、至多一种）。</div>
     </div>
 
     <!-- 日视图 -->
@@ -206,7 +206,8 @@ const TERM = { "2026-10-08":"寒露", "2026-10-23":"霜降" };
 const W = ["日","一","二","三","四","五","六"];
 const state = { holiday:true, lunar:true, term:true };
 
-/* 生成「日期数字栏」右侧内容（月/周/日共用） */
+/* 生成「日期数字栏」右侧内容（月/周/日共用）
+   优先级：节假日+休/班 永远同行不换行；节气优先于农历，两者都在时只显示节气 */
 function dayBar(dateStr){
   const parts = [];
   const h = HOLIDAY[dateStr];
@@ -214,8 +215,11 @@ function dayBar(dateStr){
     parts.push(`<span class="hl-name">${h.name}</span>`);
     parts.push(`<span class="hl-tag ${h.off?'rest':'work'}">${h.off?'休':'班'}</span>`);
   }
-  if(state.lunar && LUNAR[dateStr]) parts.push(`<span class="lunar">${LUNAR[dateStr]}</span>`);
-  if(state.term && TERM[dateStr])  parts.push(`<span class="lunar">${TERM[dateStr]}</span>`);
+  if(state.term && TERM[dateStr]){
+    parts.push(`<span class="lunar">${TERM[dateStr]}</span>`);        /* 节气优先 */
+  } else if(state.lunar && LUNAR[dateStr]){
+    parts.push(`<span class="lunar">${LUNAR[dateStr]}</span>`);        /* 无节气才显示农历 */
+  }
   return parts.length ? `<span class="daybar">${parts.join("")}</span>` : "";
 }
 

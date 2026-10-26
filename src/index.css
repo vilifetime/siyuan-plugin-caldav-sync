@@ -391,8 +391,11 @@
   margin-bottom: 2px;
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;        /* 节假日+休/班 与日期数字永远同行，不换行 */
+  white-space: nowrap;
   gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .cal-today-badge {
@@ -702,11 +705,11 @@
 .cal-wk-num { font-weight: 600; font-size: 15px; line-height: 19px; padding: 1px 6px; }
 
 /* 周/日视图日期头部：日期数 + 中国日历叠加层放在同一行（不增加表头高度，维持 44px 约束） */
-.cal-wk-numrow { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: 100%; }
+.cal-wk-numrow { display: flex; align-items: baseline; gap: 4px; flex-wrap: nowrap; justify-content: center; white-space: nowrap; max-width: 100%; min-width: 0; overflow: hidden; }
 
 /* ── 中国日历叠加层（节假日 / 农历 / 节气）── */
-.cal-daybar { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap; margin-left: 4px; }
-.cal-hl-name { font-size: 11px; color: var(--caldav-text); font-weight: 500; }
+.cal-daybar { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: nowrap; white-space: nowrap; min-width: 0; overflow: hidden; margin-left: 0; }
+.cal-hl-name { font-size: 11px; color: var(--caldav-text); font-weight: 500; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-hl-tag { font-size: 9px; line-height: 1; padding: 1px 4px; border-radius: 4px; font-weight: 700; transform: translateY(-1px); }
 .cal-hl-tag.rest { color: #1a9e5b; background: #e7f6ee; }
 .cal-hl-tag.work { color: #e8830c; background: #fdf0e0; }

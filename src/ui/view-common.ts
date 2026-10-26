@@ -36,27 +36,39 @@ export function keyOfItem(it: CalItem): string {
 }
 
 /**
- * 生成「日期数字栏」右侧的中国日历叠加层 HTML（节假日名称 + 休/班 + 农历/节气）。
+ * 生成「日期数字栏」右侧的中国日历叠加层 HTML。
+ * 排版与优先级（雄哥 2026-10-26 调整）：
+ *  - 节假日名称 + 休/班：永远与日期数字同一行、不换行（最高优先级内容）。
+ *  - 节气 / 农历：至多显示一种，节气优先于农历；空间不够时先丢农历、再丢节气，绝不丢节假日。
+ *  - 休/班：体积小，只要有节假日（含调休）信息就显示，无则完全不显示。
  * 纯展示：节假日来自联网缓存（holidayFor），农历/节气来自内置算法（lunarFor），均不参与同步。
  * 三个开关分别控制是否渲染对应层；全关时返回空串。
  */
 export function chinaDayBarHTML(ctx: PanelCtx, dateStr: string): string {
   const s = ctx.store.settings;
   if (!chinaCalendarEnabled(s)) return "";
-  const parts: string[] = [];
+
+  // 1) 节假日名称 + 休/班（与日期数字同行、不换行）
+  let holidayHTML = "";
   if (s.showHolidaysCN) {
     const h = holidayFor(dateStr);
     if (h) {
-      parts.push(`<span class="cal-hl-name">${escape(h.name)}</span>`);
-      parts.push(`<span class="cal-hl-tag ${h.off ? "rest" : "work"}">${h.off ? "休" : "班"}</span>`);
+      holidayHTML =
+        `<span class="cal-hl-name">${escape(h.name)}</span>` +
+        `<span class="cal-hl-tag ${h.off ? "rest" : "work"}">${h.off ? "休" : "班"}</span>`;
     }
   }
-  if (s.showLunarCN || s.showTermCN) {
+
+  // 2) 节气 / 农历：至多显示一种，节气优先于农历（空间不足先丢农历）
+  let lunarHTML = "";
+  if (s.showTermCN || s.showLunarCN) {
     const { lunar, jieqi } = lunarFor(dateStr);
-    if (s.showTermCN && jieqi) parts.push(`<span class="cal-lunar">${escape(jieqi)}</span>`);
-    if (s.showLunarCN && lunar) parts.push(`<span class="cal-lunar">${escape(lunar)}</span>`);
+    if (s.showTermCN && jieqi) lunarHTML = `<span class="cal-lunar">${escape(jieqi)}</span>`;
+    else if (s.showLunarCN && lunar) lunarHTML = `<span class="cal-lunar">${escape(lunar)}</span>`;
   }
-  return parts.length ? `<span class="cal-daybar">${parts.join("")}</span>` : "";
+
+  if (!holidayHTML && !lunarHTML) return "";
+  return `<span class="cal-daybar">${holidayHTML}${lunarHTML}</span>`;
 }
 
 /**

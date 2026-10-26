@@ -136,7 +136,16 @@ assert.ok(dockEl.querySelector("[data-dock='filter']"), "Dock 应有筛选下拉
 // 反向断言防它被顺手加回来 —— 见 test/task-search.test.mjs 的完整契约。
 assert.ok(!dockEl.querySelector("[data-dock='search']"), "Dock 不该再有搜索框（已挪到任务视图）");
 assert.ok(dockEl.querySelector(".caldav-dock-items"), "Dock 应有任务列表容器");
-assert.ok(dockEl.querySelectorAll(".caldav-dock-item").length >= 1, "默认「未来七天」筛选下 Dock 应渲染任务卡片");
+// ⚠️ 2026-10-26：Dock 默认筛选不再写死「未来七天」—— 设置里可改，默认是
+// 「上次使用项」（本机无记录时回落「所有未完成」）。下面这组断言考的是
+// 「未来七天」这个筛选本身的口径，故**显式切过去**，不再依赖默认值。
+pickDockFilter("next7");
+assert.strictEqual(
+  dockEl.querySelector(".caldav-dock-select-text").textContent,
+  "未来七天",
+  "切换到「未来七天」后按钮文案应同步"
+);
+assert.ok(dockEl.querySelectorAll(".caldav-dock-item").length >= 1, "「未来七天」筛选下 Dock 应渲染任务卡片");
 assert.ok(dockEl.querySelector(".caldav-dock-tag"), "任务卡片应包含标签");
 
 // ---- 筛选口径：日程按当前时刻判断（已结束的不显示），待办未完成即使逾期也显示 ----
@@ -192,9 +201,9 @@ assert.ok(
   "「今日任务」不应显示已经结束的过去日程"
 );
 
-// 还原默认筛选，避免影响后续断言
+// 「未来七天」仍是本次「还原」用的筛选（不是为了回到默认值 —— 默认值现在可配置）
 pickDockFilter("next7");
-assert.ok(dockEl.querySelector(".caldav-dock-hint"), "切回默认筛选后应再次提示无日期待办");
+assert.ok(dockEl.querySelector(".caldav-dock-hint"), "切回「未来七天」筛选后应再次提示无日期待办");
 
 // Dock 分类筛选弹窗（弹层挂在 body 上，见文件上方的 catPopOf 说明）
 const catBtn = dockEl.querySelector("[data-dock='category']");

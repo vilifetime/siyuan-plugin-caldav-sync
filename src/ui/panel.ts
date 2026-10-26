@@ -7,7 +7,7 @@
 import type { CalStore } from "../core/store";
 import { keyOf } from "../core/store";
 import type { SyncEngine } from "../core/sync";
-import type { CalAttachment, CalItem, CalKind, SortMode } from "../core/types";
+import type { CalAttachment, CalItem, CalKind, DockFilterKey, SortMode } from "../core/types";
 import { DEFAULT_CATEGORIES, calEventColor, enabledCalendars, setTaskViewEventsShown } from "../core/types";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
@@ -19,6 +19,7 @@ import { askDiaryRange } from "./diary-range-dialog";
 import type { DiaryRange, DiaryTarget } from "./diary-range";
 import { renderMonthView } from "./view-month";
 import { loadCalendarView, DEFAULT_VIEW } from "./view-pref";
+import { resolveDockFilter, saveLastDockFilter, DOCK_FILTER_OPTIONS } from "./filter-pref";
 import { renderWeekView } from "./view-week";
 import { renderTaskView } from "./view-task";
 import { renderYearView } from "./view-year";
@@ -822,30 +823,19 @@ export function notifyViewChange(mode: ViewMode): void {
  * 新增 / 排序 为下拉菜单；日历视图 / 任务视图 打开主窗口页签；刷新 触发重新同步。
  * 设置入口从主面板「日历筛选」浮层迁到这里 —— 浮层只留过滤相关的动作，职责更单一。
  */
-type DockFilter =
-  | "today" | "tomorrow" | "next7" | "thisweek" | "future"
-  | "overdue" | "past7" | "undone" | "nodate"
-  | "doneToday" | "doneYesterday" | "done";
+/**
+ * 键集合统一放在 core/types.ts（设置项 defaultDockFilter 要引用它，core 不能反向依赖 ui），
+ * 这里保留 `DockFilter` 这个名字，全部既有用法不用改。
+ */
+type DockFilter = DockFilterKey;
 
 /**
- * Dock 筛选下拉的选项（数组顺序即下拉中的顺序）。
+ * 选项表（顺序即下拉中的顺序）统一取自 ui/filter-pref.ts，
+ * 与设置页「左侧 Dock 区默认筛选」共用一份，避免加项时两边漂移。
  * 下拉是**自定义**的而非原生 <select>：原生弹出列表由操作系统绘制，
  * 选中项永远是系统高亮色（蓝），CSS 无法让它跟随主题（option:hover / :checked 会被忽略）。
  */
-const DOCK_FILTERS: Array<{ key: DockFilter; label: string }> = [
-  { key: "next7", label: "未来七天" },
-  { key: "today", label: "今日任务" },
-  { key: "tomorrow", label: "明日任务" },
-  { key: "thisweek", label: "本周任务" },
-  { key: "future", label: "未来任务" },
-  { key: "overdue", label: "过期任务" },
-  { key: "past7", label: "过去七天" },
-  { key: "undone", label: "所有未完成" },
-  { key: "nodate", label: "无日期任务" },
-  { key: "doneToday", label: "今日已完成" },
-  { key: "doneYesterday", label: "昨日已完成" },
-  { key: "done", label: "已完成" }
-];
+const DOCK_FILTERS = DOCK_FILTER_OPTIONS;
 
 export interface DockPanelOpts {
   store: CalStore;
@@ -1056,7 +1046,9 @@ export function renderDockPanel(
     }
   }
 
-  let dockFilter: DockFilter = "next7";
+  // 初始筛选不再写死「未来七天」：按设置「上次使用项 / 固定某一项」解析
+  // （见 ui/filter-pref.ts；无记录时回落「所有未完成」）
+  let dockFilter: DockFilter = resolveDockFilter(opts.store.settings);
   let dockCategoryFilter: string[] = []; // 空 = 所有分类；"__none__" = 无分类
   /** 优先级筛选：空 = 不按优先级筛；否则是 1/3/5/9 四档的代表值（与 prioMeta 分档一致） */
   let dockPriorityFilter: number[] = [];
@@ -1477,6 +1469,8 @@ export function renderDockPanel(
     const filterItem = t.closest("[data-dock-filter]") as HTMLElement | null;
     if (filterItem && root.contains(filterItem)) {
       dockFilter = filterItem.dataset.dockFilter as DockFilter;
+      // 记下这次选的：设置里「上次使用项」下次打开就回到它（本机 localStorage）
+      saveLastDockFilter(dockFilter);
       syncDockFilterLabel();
       renderDockList();
       closePops();

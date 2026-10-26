@@ -25,6 +25,7 @@ import {
 import { testConnection, discoverCalendars, describeNetworkError } from "../core/caldav";
 import { clearAuthCache } from "../core/http";
 import { forceRefreshChinaCalendar, getLastHolidayError } from "../core/holiday-cn";
+import { DOCK_FILTER_OPTIONS, TASK_FILTER_OPTIONS } from "./filter-pref";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
 import { enableDialogResize } from "./dialog-resize";
@@ -496,6 +497,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         s.holidayCnSource = (($("select[data-s='holidayCnSource']")?.value || "holiday-cn") as CalSettings["holidayCnSource"]);
         s.holidayCnCustomUrl = ($("input[data-s='holidayCnCustomUrl']")?.value || "").trim();
         s.holidayCnUpdateFreq = (($("select[data-s='holidayCnUpdateFreq']")?.value || "weekly") as CalSettings["holidayCnUpdateFreq"]);
+        // 杂项：两处筛选下拉的默认值（"last" = 上次使用项）
+        s.defaultDockFilter = (($("select[data-s='defaultDockFilter']")?.value || "last") as CalSettings["defaultDockFilter"]);
+        s.defaultTaskFilter = (($("select[data-s='defaultTaskFilter']")?.value || "last") as CalSettings["defaultTaskFilter"]);
         // 默认账户/日历：两级选择（「自动」= 空串）。选中的日历被停用/删掉时
         // resolveDefaultCalendar() 会回退默认账户 → 第一个启用账户的第一个启用日历
         const daSel = $("select[data-s='defaultAcc']")?.value || "";
@@ -754,6 +758,40 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       <button class="caldav-btn caldav-btn--sm" type="button" data-action="cn-refresh">${icons.refreshThin} 立即检查更新</button>
       <span class="caldav-set-msg" data-cn-msg></span>
     </div>
+  </div>
+
+  <div class="caldav-section caldav-section--card">
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.filter}</span>杂项</div>
+    <p class="caldav-set-hint">
+      下面两个下拉的**默认值** —— 也就是刚打开时自动选中哪一项。
+      默认都是「上次使用项」：记住你上次选的，下次打开直接回到它（记在本机，不随数据同步）。
+      也可以固定成某一项，那样每次打开都用它。
+    </p>
+    <div class="caldav-field">
+      <label class="caldav-field-label">左侧 Dock 区默认筛选</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="defaultDockFilter">
+          <option value="last" ${(s.defaultDockFilter || "last") === "last" ? "selected" : ""}>上次使用项</option>
+          ${DOCK_FILTER_OPTIONS.map(
+            (o) => `<option value="${o.key}" ${s.defaultDockFilter === o.key ? "selected" : ""}>${o.label}</option>`
+          ).join("")}
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">任务视图默认筛选</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="defaultTaskFilter">
+          <option value="last" ${(s.defaultTaskFilter || "last") === "last" ? "selected" : ""}>上次使用项</option>
+          ${TASK_FILTER_OPTIONS.map(
+            (o) => `<option value="${o.key}" ${s.defaultTaskFilter === o.key ? "selected" : ""}>${o.label}</option>`
+          ).join("")}
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+    <p class="caldav-set-hint">「上次使用项」没有记录时，两处都回落到「所有未完成」。</p>
   </div>
 
   <div class="caldav-section caldav-section--card">

@@ -9,7 +9,8 @@ import "@/index.css";
 import { CalStore } from "@/core/store";
 import { SyncEngine } from "@/core/sync";
 import { setSecretSeed } from "@/core/secret";
-import { setDirectFallbackToProxy } from "@/core/http";
+import { setDirectFallbackToProxy, httpRequest } from "@/core/http";
+import { setHolidayTransport } from "@/core/holiday-cn";
 import { occurrencesInRange } from "@/core/ics";
 import { todayStamp, fmtDateCn, fmtTime, stampOfMs, parseLocalStamp, diffDays } from "@/core/date";
 import type { CalItem } from "@/core/types";
@@ -123,6 +124,18 @@ export default class CalDavPlugin extends Plugin {
     // 移动端 WebView 会拦掉明文 HTTP 的浏览器直连（报 Failed to fetch），
     // 直连在网络层失败时自动改走内核代理 —— 见 core/http.ts 的说明。
     setDirectFallbackToProxy(isMobile());
+
+    // 中国日历·节假日拉取改走 SiYuan 内核代理（服务端 fetch，绕开浏览器 CORS、
+    // 走本机真实网络/代理，国内 GitHub/raw 即便浏览器直连被墙也能经此拿到）。
+    setHolidayTransport(async (url, ms) => {
+      try {
+        const r = await httpRequest(url, { method: "GET", timeoutMs: ms }, "auto");
+        if (r.status < 200 || r.status >= 300) return null;
+        return { ok: true, data: JSON.parse(r.body) };
+      } catch {
+        return null;
+      }
+    });
 
     // 先拿到设备标识（思源 conf.system.id + 工作空间路径）作为凭据加密密钥来源，
     // 再加载 store —— 顺序不能反，否则密文解不开会被当成「密码丢失」。

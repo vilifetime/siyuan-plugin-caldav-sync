@@ -31,18 +31,21 @@ const inflight = new Map<number, Promise<Record<string, CnHoliday> | null>>();
 /** 真实 SiYuan 宿主内才联网；单测（jsdom 无 window.siyuan）不触发，避免挂起测试 */
 const IN_SIYUAN = typeof window !== "undefined" && !!(window as unknown as { siyuan?: unknown }).siyuan;
 
-// 多源回退：主源 + 镜像（仅预设源有镜像；自定义源不自动镜像）
+// 多源回退：主源 + 镜像（仅预设源有镜像；自定义源不自动镜像）。
+// ⚠️ 排序按「国内可达性」：fastly.jsdelivr.net 在国内最稳，cdn.jsdelivr 次之，
+// ghproxy.net 作 GitHub 加速兜底，raw.githubusercontent 最后（国内常被墙，仅用户有代理时生效）。
 const SOURCES = {
   "holiday-cn": {
-    primary: (y: number) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${y}.json`,
+    primary: (y: number) => `https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${y}.json`,
     mirrors: [
-      (y: number) => `https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${y}.json`,
+      (y: number) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${y}.json`,
+      (y: number) => `https://ghproxy.net/https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${y}.json`,
       (y: number) => `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${y}.json`
     ]
   },
   "chinese-days": {
-    primary: (y: number) => `https://cdn.jsdelivr.net/npm/chinese-days/dist/${y}.json`,
-    mirrors: [(y: number) => `https://fastly.jsdelivr.net/npm/chinese-days/dist/${y}.json`]
+    primary: (y: number) => `https://fastly.jsdelivr.net/npm/chinese-days/dist/${y}.json`,
+    mirrors: [(y: number) => `https://cdn.jsdelivr.net/npm/chinese-days/dist/${y}.json`]
   }
 } as const;
 
@@ -59,33 +62,51 @@ export function effectiveHolidaySource(s: CalSettings): string {
   return s.holidayCnSource || "holiday-cn";
 }
 
-async function fetchYearJson(urls: string[], timeoutMs = 8000): Promise<Record<string, CnHoliday> | null> {
-  let lastErr: unknown;
-  for (const url of urls) {
-    if (!url) continue;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) continue;
-      const data = (await res.json()) as unknown;
-      const map: Record<string, CnHoliday> = {};
-      // 兼容两种结构：数组 [{date,name,isOffDay}] 或 对象 {dateStr:{name,isOffDay}}
-      const arr: any[] = Array.isArray(data) ? data : Object.values(data as Record<string, any>);
-      for (const it of arr) {
-        if (it && it.date) {
-          map[String(it.date).slice(0, 10)] = { name: it.name || "节假日", off: it.isOffDay !== false };
-        }
-      }
-      return Object.keys(map).length ? map : null;
-    } catch (e) {
-      lastErr = e;
-      clearTimeout(timer);
+// ── 网络传输层（可注入）──────────────────────────────────────────────
+// 默认走浏览器原生 fetch（单测用 global.fetch mock 覆盖）。
+// 真实插件在 onload 时通过 setHolidayTransport 换成走 SiYuan 内核代理的 httpRequest：
+// 内核代理是**服务端** fetch，不受浏览器 CORS 限制、走本机真实网络/代理，
+// 国内 GitHub/raw 即便浏览器直连被墙也能经内核代理拿到（思源自身更新即此通道）。
+export type HolidayTransport = (url: string, timeoutMs: number) => Promise<{ ok: boolean; data: unknown } | null>;
+
+let holidayTransport: HolidayTransport = (url, timeoutMs) => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { signal: ctrl.signal })
+    .then(async (r) => (r.ok ? { ok: true, data: await r.json() } : null))
+    .catch(() => null)
+    .finally(() => clearTimeout(timer));
+};
+
+/** 真实插件初始化时调用：把节假日拉取切到内核代理通道（国内稳定） */
+export function setHolidayTransport(fn: HolidayTransport): void {
+  holidayTransport = fn;
+}
+
+function normalizeHolidays(data: unknown): Record<string, CnHoliday> | null {
+  const map: Record<string, CnHoliday> = {};
+  // 兼容两种结构：数组 [{date,name,isOffDay}] 或 对象 {dateStr:{name,isOffDay}}
+  const arr: any[] = Array.isArray(data) ? data : Object.values(data as Record<string, any>);
+  for (const it of arr) {
+    if (it && it.date) {
+      map[String(it.date).slice(0, 10)] = { name: it.name || "节假日", off: it.isOffDay !== false };
     }
   }
-  if (lastErr) console.warn("[caldav] 节假日数据拉取失败，已静默降级：", lastErr);
-  return null;
+  return Object.keys(map).length ? map : null;
+}
+
+/**
+ * 并行竞速所有候选源：谁先成功用谁（不再串行等慢源超时）。
+ * 各源经 holidayTransport 拉取，整体超时由 transport 各自控制。
+ */
+async function fetchYearJson(urls: string[], timeoutMs = 12000): Promise<Record<string, CnHoliday> | null> {
+  const results = await Promise.all(urls.filter(Boolean).map((u) => holidayTransport(u, timeoutMs)));
+  const hit = results.find((r) => r && r.ok);
+  if (!hit) {
+    console.warn("[caldav] 节假日数据拉取失败（所有候选源均不可用），已静默降级");
+    return null;
+  }
+  return normalizeHolidays(hit.data);
 }
 
 function isStale(s: CalSettings, updatedAt: number): boolean {
@@ -128,7 +149,8 @@ export function lunarFor(dateStr: string): { lunar: string; jieqi: string } {
   const [y, m, d] = dateStr.split("-").map(Number);
   try {
     const l = Solar.fromYmd(y, m, d).getLunar();
-    return { lunar: l.getMonthInChinese() + l.getDayInChinese(), jieqi: l.getJieQi() };
+    // 月、日间插入「月」字：八 → 八月廿九；闰六 → 闰六月初一；冬 → 冬月十一；正 → 正月初一
+    return { lunar: l.getMonthInChinese() + "月" + l.getDayInChinese(), jieqi: l.getJieQi() };
   } catch {
     return { lunar: "", jieqi: "" };
   }

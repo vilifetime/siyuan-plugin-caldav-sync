@@ -62,12 +62,15 @@
 
   /* 通用「日期数字栏」布局：参考截图版式
      公历数字在左，名称+休/班胶囊在右同行（不换行，空间不足先丢农历再丢节气） */
-  .daybar{display:inline-flex;align-items:baseline;gap:5px;margin-left:6px;flex-wrap:nowrap;white-space:nowrap;min-width:0;overflow:hidden}
+  .daybar{display:inline-flex;align-items:center;gap:5px;margin-left:6px;flex-wrap:nowrap;white-space:nowrap;min-width:0}
   .hl-name{font-size:12px;color:var(--text);font-weight:500;max-width:7em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hl-tag{font-size:10px;line-height:1;padding:2px 5px;border-radius:5px;font-weight:700;transform:translateY(-1px)}
+  .hl-tag{font-size:10px;line-height:1;padding:2px 5px;border-radius:5px;font-weight:700}
   .hl-tag.rest{color:var(--rest);background:var(--rest-bg)}
   .hl-tag.work{color:var(--work);background:var(--work-bg)}
   .lunar{font-size:11px;color:var(--lunar)}
+  .term-tag{font-size:11px;line-height:1.5;padding:0 5px;border-radius:5px;font-weight:500;
+    color:var(--accent);background:color-mix(in srgb, var(--accent) 16%, transparent);
+    border:1px solid color-mix(in srgb, var(--accent) 38%, transparent)}
 
   /* 月视图 */
   .month{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);
@@ -216,7 +219,7 @@ function dayBar(dateStr){
     parts.push(`<span class="hl-tag ${h.off?'rest':'work'}">${h.off?'休':'班'}</span>`);
   }
   if(state.term && TERM[dateStr]){
-    parts.push(`<span class="lunar">${TERM[dateStr]}</span>`);        /* 节气优先 */
+    parts.push(`<span class="term-tag">${TERM[dateStr]}</span>`);     /* 节气优先，带主题色背景框 */
   } else if(state.lunar && LUNAR[dateStr]){
     parts.push(`<span class="lunar">${LUNAR[dateStr]}</span>`);        /* 无节气才显示农历 */
   }

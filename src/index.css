@@ -390,12 +390,15 @@
   color: var(--caldav-text-2);
   margin-bottom: 2px;
   display: flex;
-  align-items: baseline;
+  align-items: center;      /* 居中：休/班胶囊与农历文字底部完整，不再被 baseline 顶出/裁切 */
   flex-wrap: nowrap;        /* 节假日+休/班 与日期数字永远同行，不换行 */
   white-space: nowrap;
   gap: 4px;
   min-width: 0;
-  overflow: hidden;
+  line-height: 1.5;         /* 给小标签留足纵向空间，避免 overflow 裁掉底部 */
+  padding-bottom: 1px;
+  /* 去掉 overflow:hidden：横向裁切交给 .cal-month-cell（本身 overflow:hidden），
+     纵向不再裁切，日期数字与农历/节气底部完整显示 */
 }
 
 .cal-today-badge {
@@ -705,15 +708,26 @@
 .cal-wk-num { font-weight: 600; font-size: 15px; line-height: 19px; padding: 1px 6px; }
 
 /* 周/日视图日期头部：日期数 + 中国日历叠加层放在同一行（不增加表头高度，维持 44px 约束） */
-.cal-wk-numrow { display: flex; align-items: baseline; gap: 4px; flex-wrap: nowrap; justify-content: center; white-space: nowrap; max-width: 100%; min-width: 0; overflow: hidden; }
+.cal-wk-numrow { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: center; white-space: nowrap; max-width: 100%; min-width: 0; overflow: hidden; line-height: 1.4; }
 
 /* ── 中国日历叠加层（节假日 / 农历 / 节气）── */
-.cal-daybar { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: nowrap; white-space: nowrap; min-width: 0; overflow: hidden; margin-left: 0; }
+.cal-daybar { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; white-space: nowrap; min-width: 0; overflow: hidden; margin-left: 0; }
 .cal-hl-name { font-size: 11px; color: var(--caldav-text); font-weight: 500; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cal-hl-tag { font-size: 9px; line-height: 1; padding: 1px 4px; border-radius: 4px; font-weight: 700; transform: translateY(-1px); }
+.cal-hl-tag { font-size: 9px; line-height: 1; padding: 1px 4px; border-radius: 4px; font-weight: 700; }
 .cal-hl-tag.rest { color: #1a9e5b; background: #e7f6ee; }
 .cal-hl-tag.work { color: #e8830c; background: #fdf0e0; }
 .cal-lunar { font-size: 10px; color: var(--caldav-text-2); }
+/* 节气：主题色背景框（取当前主题色 --caldav-accent，半透明底 + 描边，类似「日程」标签） */
+.cal-term-tag {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-weight: 500;
+  color: var(--caldav-accent);
+  background: color-mix(in srgb, var(--caldav-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--caldav-accent) 38%, transparent);
+}
 
 /* 年视图迷你格：节假日小圆点（休=绿 / 班=橙），不堆叠文字以免拥挤 */
 .cal-year-hl { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-left: 3px; vertical-align: middle; }

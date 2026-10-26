@@ -53,17 +53,17 @@ async function ta(name, fn) {
 // ---- 农历 / 节气（内置算法，无网络）----
 t("lunarFor 立春(2026-02-04)", () => {
   const r = cn.lunarFor("2026-02-04");
-  assert.strictEqual(r.lunar, "腊十七");
+  assert.strictEqual(r.lunar, "腊月十七");
   assert.strictEqual(r.jieqi, "立春");
 });
 t("lunarFor 冬至(2026-12-22)", () => {
   const r = cn.lunarFor("2026-12-22");
-  assert.strictEqual(r.lunar, "冬十四");
+  assert.strictEqual(r.lunar, "冬月十四");
   assert.strictEqual(r.jieqi, "冬至");
 });
 t("lunarFor 春节(2026-02-17)", () => {
   const r = cn.lunarFor("2026-02-17");
-  assert.strictEqual(r.lunar, "正初一");
+  assert.strictEqual(r.lunar, "正月初一");
   assert.strictEqual(r.jieqi, "");
 });
 t("lunarFor 非法日期安全降级", () => {
@@ -126,29 +126,30 @@ async function run() {
     assert.strictEqual(hw.off, false);
 
     // 二次调用命中缓存，不应再次 fetch
+    const before = calls;
     const map2 = await cn.loadHolidayYear({ holidayCnSource: "holiday-cn" }, 2099);
-    assert.strictEqual(calls, 1, "缓存命中不应再次拉取");
+    assert.strictEqual(calls, before, "缓存命中不应再次拉取");
     assert.strictEqual(map2["2099-10-01"].name, "国庆节");
   });
 
-  // ---- 多源回退：主源失败用镜像 ----
-  await ta("多源回退：主源(cdn)失败、镜像(fastly)成功", async () => {
+  // ---- 多源回退：主源(fastly)失败用镜像(cdn/ghproxy/raw) ----
+  await ta("多源回退：主源(fastly)失败、镜像(cdn)成功", async () => {
     let primaryCalled = false;
     let mirrorCalled = false;
     globalThis.fetch = async (url) => {
-      if (url.includes("cdn.jsdelivr.net")) {
+      if (url.includes("fastly.jsdelivr.net")) {
         primaryCalled = true;
         throw new Error("network down");
       }
-      if (url.includes("fastly.jsdelivr.net")) {
+      if (url.includes("cdn.jsdelivr.net")) {
         mirrorCalled = true;
         return { ok: true, json: async () => [{ date: "2098-01-01", name: "元旦", isOffDay: true }] };
       }
       throw new Error("unexpected url " + url);
     };
     const map = await cn.loadHolidayYear({ holidayCnSource: "holiday-cn" }, 2098);
-    assert.ok(primaryCalled, "应请求主源");
-    assert.ok(mirrorCalled, "主源失败后应使用镜像");
+    assert.ok(primaryCalled, "应请求主源 fastly");
+    assert.ok(mirrorCalled, "主源失败后应使用镜像 cdn");
     assert.ok(map, "镜像成功应返回 map");
     assert.strictEqual(map["2098-01-01"].name, "元旦");
   });

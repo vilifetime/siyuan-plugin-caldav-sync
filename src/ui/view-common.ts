@@ -63,7 +63,8 @@ export function chinaDayBarHTML(ctx: PanelCtx, dateStr: string): string {
   let lunarHTML = "";
   if (s.showTermCN || s.showLunarCN) {
     const { lunar, jieqi } = lunarFor(dateStr);
-    if (s.showTermCN && jieqi) lunarHTML = `<span class="cal-lunar">${escape(jieqi)}</span>`;
+    // 节气带主题色背景框（cal-term-tag）；农历为普通小字（cal-lunar）
+    if (s.showTermCN && jieqi) lunarHTML = `<span class="cal-term-tag">${escape(jieqi)}</span>`;
     else if (s.showLunarCN && lunar) lunarHTML = `<span class="cal-lunar">${escape(lunar)}</span>`;
   }
 

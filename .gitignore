@@ -29,3 +29,6 @@ tsconfig.purgeui.json
 
 # 人工审阅用的对照图（不入库）
 .review/
+
+# 块同步单测（issue #2）的 tsc 临时产物
+.test-blocksync/

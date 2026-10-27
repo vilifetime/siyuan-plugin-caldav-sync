@@ -13,6 +13,7 @@ import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
 import { icons } from "./icons";
 import { BRAND_ICON_HTML } from "./brand-icon";
+import { blockBadgeOn } from "../core/block-todo";
 import { isMobile } from "./device";
 import { openEditor } from "./editor";
 import { openSettingsDialog } from "./settings-dialog";
@@ -74,6 +75,12 @@ export interface PanelCtx {
   sortMode: SortMode;
   /** 视图内导航（年视图跳月/日用），由 renderPanel 注入 */
   navigate?: (mode: ViewMode, cursor?: string) => void;
+  /** 文档任务块（issue #2）：笔记本列表（设置里「指定笔记本」多选要列出来），由入口注入 */
+  listNotebooks?: () => Promise<Array<{ id: string; name: string }>>;
+  /** 文档任务块：立即扫描一遍（设置区按钮），由入口注入 */
+  scanBlocksNow?: () => Promise<string>;
+  /** 文档任务块：一键清理全部块来源 VTODO，由入口注入 */
+  clearBlockItems?: () => Promise<string>;
 }
 
 export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => void; refresh: () => void } {
@@ -1185,6 +1192,11 @@ export function renderDockPanel(
       tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary ${pm.cls}">${icons.flag}${pm.label}</span>`);
     } else {
       tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary">${icons.tasks}任务</span>`);
+    }
+
+    // 「文档」角标：这条待办来自思源文档里的任务块（issue #2）。设置里可关（纯 UI，不动数据）
+    if (it.blockId && blockBadgeOn(opts.store.settings)) {
+      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--ghost" title="来自思源文档任务块">${icons.doc}文档</span>`);
     }
 
     // 自定义分类

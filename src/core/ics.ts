@@ -437,6 +437,10 @@ function itemFromComponent(
   };
   const desc = firstProp(comp, "DESCRIPTION");
   if (desc?.value) item.description = unescapeText(desc.value);
+  // 来源思源文档任务块（issue #2）：X-SIYUAN-BLOCK-ID 是块与条目之间的身份锚点。
+  // 有它 → 这批条目属于「文档任务块同步」管辖，对账时按 Block ID 找块。
+  const blockProp = firstProp(comp, "X-SIYUAN-BLOCK-ID");
+  if (blockProp?.value.trim()) item.blockId = blockProp.value.trim();
   const loc = firstProp(comp, "LOCATION");
   if (loc?.value) item.location = unescapeText(loc.value);
   const cats = firstProp(comp, "CATEGORIES");
@@ -612,6 +616,9 @@ const MANAGED = new Set([
   "DTSTART", "DTEND", "DUE", "DURATION", "RRULE", "EXDATE", "RECURRENCE-ID",
   "STATUS", "PRIORITY", "PERCENT-COMPLETE", "COMPLETED",
   "DTSTAMP", "LAST-MODIFIED", "SEQUENCE", "TZID",
+  // 块↔VTODO 的身份锚点（思源文档任务块，issue #2）。必须进白名单：
+  // 否则它会作为「未管理属性」被 kept 原样带回，再被下面 push 一份 → 同一属性写两遍。
+  "X-SIYUAN-BLOCK-ID",
   // ATTACH 进白名单，界面上增删附件才能真正落到 ICS。
   // 二进制内联件也走这条：解析时收进 item.attachments，编辑时按列表重写。
   // 老数据（attachments 为 undefined）在 rebuildComponent 里原样带回，不会丢。
@@ -636,6 +643,9 @@ function rebuildComponent(comp: IcsComponent, item: CalItem): IcsComponent {
   for (const p of kept) props.push(p);
 
   push("SUMMARY", escapeText(item.summary || ""));
+  // 来源思源文档任务块的 Block ID：写进 VTODO 的自定义属性，是块与条目之间唯一的
+  // 身份锚点（配置丢了也能靠它重建映射，绝不重复建条目）。见 core/block-todo.ts。
+  if (item.blockId) push("X-SIYUAN-BLOCK-ID", item.blockId);
   if (item.description) push("DESCRIPTION", escapeText(item.description));
   if (item.location) push("LOCATION", escapeText(item.location));
   if (item.categories?.length) push("CATEGORIES", item.categories.map(escapeText).join(","));

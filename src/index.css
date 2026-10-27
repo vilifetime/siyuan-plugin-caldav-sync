@@ -1340,6 +1340,31 @@
 
 .cal-task.is-done .cal-task-kind { opacity: 0.5; }
 
+/* 「文档」角标：这条待办来自思源文档里的任务块（issue #2）。纯展示，不改数据 */
+.cal-task-doc {
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-right: 5px;
+  vertical-align: 1px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  border: 0.5px solid color-mix(in srgb, var(--caldav-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--caldav-accent) 10%, transparent);
+  color: var(--caldav-accent);
+  white-space: nowrap;
+}
+
+.cal-task.is-done .cal-task-doc { opacity: 0.5; }
+
+/* 设置区「文档任务块」：笔记本多选列表稍微缩进一点，与上面的下拉区分开 */
+.caldav-blocksync-nbs {
+  margin-top: 6px;
+  padding-left: 2px;
+}
+.caldav-blocksync-prefix { margin-top: 6px; }
+
 /* ===== 弹窗（编辑/设置）—— 跟随思源主题风格 ===== */
 .caldav-editor, .caldav-settings, .caldav-catmgr {
   /* 全部取自思源 b3 主题变量，深浅色主题自动适配 */

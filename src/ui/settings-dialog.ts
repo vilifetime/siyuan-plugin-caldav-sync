@@ -503,6 +503,19 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         s.defaultTaskFilter = (($("select[data-s='defaultTaskFilter']")?.value || "last") as CalSettings["defaultTaskFilter"]);
         // 新建待办的默认截止时间（2026-10-27）
         s.todoDefaultEnd = (($("select[data-s='todoDefaultEnd']")?.value || "plus8h") as CalSettings["todoDefaultEnd"]);
+        s.blockSyncEnabled = !!($("input[data-s='blockSyncEnabled']") as HTMLInputElement | null)?.checked;
+        const bsCal = $("select[data-s='blockSyncCal']")?.value || "";
+        s.blockSyncCalendarUrl = bsCal || undefined;
+        s.blockSyncDefaultEnd = (($("select[data-s='blockSyncEnd']")?.value || "sameAsTodo") as CalSettings["blockSyncDefaultEnd"]);
+        s.blockSyncScope = (($("select[data-s='blockSyncScope']")?.value || "all") as CalSettings["blockSyncScope"]);
+        s.blockSyncNotebooks = Array.from(el.querySelectorAll("input[data-blocksync-nb]"))
+          .filter((i) => (i as HTMLInputElement).checked)
+          .map((i) => (i as HTMLInputElement).value);
+        const marks: ("badge" | "prefix")[] = [];
+        if (($("input[data-s='blockSyncMarkBadge']") as HTMLInputElement | null)?.checked) marks.push("badge");
+        if (($("input[data-s='blockSyncMarkPrefix']") as HTMLInputElement | null)?.checked) marks.push("prefix");
+        s.blockSyncMarks = marks;
+        s.blockSyncPrefix = ($("input[data-s='blockSyncPrefix']")?.value || "").trim() || "[文档]";
         // 默认账户/日历：两级选择（「自动」= 空串）。选中的日历被停用/删掉时
         // resolveDefaultCalendar() 会回退默认账户 → 第一个启用账户的第一个启用日历
         const daSel = $("select[data-s='defaultAcc']")?.value || "";
@@ -547,6 +560,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       bindRemind();
       bindPurge();
       bindChinaCalendar();
+      bindBlockSync();
       bindSave();
       bindDefaultPicker();
       // 每个账户 body 里的取色药丸各自绑定（事件委托在 innerHTML 重渲后会丢）
@@ -591,6 +605,93 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           if (msg) msg.textContent = "拉取失败（请检查网络或数据源 URL）";
         } finally {
           btn.removeAttribute("disabled");
+        }
+      });
+    }
+
+    /**
+     * 文档任务块段（issue #2）：范围 → 笔记本多选的显隐、前缀勾选 → 输入框显隐、
+     * 「立即扫描」与「一键清理」两个按钮。
+     * 笔记本列表是**异步**拿的（内核接口），所以容器先空着，选中「笔记本」范围时再填。
+     */
+    function bindBlockSync(): void {
+      const scopeSel = el.querySelector<HTMLSelectElement>("select[data-s='blockSyncScope']");
+      const nbWrap = el.querySelector<HTMLElement>("[data-blocksync-nbs]");
+      const prefixCb = el.querySelector<HTMLInputElement>("input[data-s='blockSyncMarkPrefix']");
+      const prefixWrap = el.querySelector<HTMLElement>("[data-blocksync-prefix]");
+      const msg = el.querySelector<HTMLElement>("[data-blocksync-msg]");
+      const setMsg = (text: string, ok: boolean): void => {
+        if (!msg) return;
+        msg.textContent = text;
+        msg.classList.toggle("is-ok", ok);
+        msg.classList.remove("is-err");
+      };
+
+      const syncVisibility = (): void => {
+        if (prefixWrap) prefixWrap.hidden = !prefixCb?.checked;
+        if (!nbWrap) return;
+        const need = scopeSel?.value === "notebooks";
+        nbWrap.hidden = !need;
+        if (need && !nbWrap.dataset.loaded) void loadNotebooks();
+      };
+
+      const loadNotebooks = async (): Promise<void> => {
+        if (!nbWrap) return;
+        nbWrap.innerHTML = `<p class="caldav-set-hint">加载中…</p>`;
+        const list = (await ctx.listNotebooks?.()) || [];
+        nbWrap.dataset.loaded = "1";
+        if (!list.length) {
+          nbWrap.innerHTML = `<p class="caldav-set-hint">没读到笔记本（请确认思源已打开工作区）</p>`;
+          return;
+        }
+        const picked = new Set(s.blockSyncNotebooks || []);
+        nbWrap.innerHTML = list
+          .map(
+            (n) =>
+              `<label class="caldav-check-row"><input type="checkbox" data-blocksync-nb="${escape(n.id)}" ${picked.has(n.id) ? "checked" : ""}/><span>${escape(n.name)}</span></label>`
+          )
+          .join("");
+      };
+
+      scopeSel?.addEventListener("change", syncVisibility);
+      prefixCb?.addEventListener("change", syncVisibility);
+      syncVisibility();
+
+      // 立即扫描：功能没启用就明确告知（**绝不静默什么都不做**）
+      el.querySelector("[data-action='blocks-scan']")?.addEventListener("click", async () => {
+        const label = el.querySelector<HTMLElement>("[data-blocksync-scan-label]");
+        if (label) label.textContent = "扫描中…";
+        try {
+          const text = (await ctx.scanBlocksNow?.()) || "当前入口不可用";
+          setMsg(text, !/失败|未启用/.test(text));
+        } finally {
+          if (label) label.textContent = "立即扫描";
+        }
+      });
+
+      // 一键清理：**二次点击确认**（项目约定，不用 confirm()）
+      let armed = false;
+      let armTimer: ReturnType<typeof setTimeout> | null = null;
+      el.querySelector("[data-action='blocks-clear']")?.addEventListener("click", async () => {
+        const label = el.querySelector<HTMLElement>("[data-blocksync-clear-label]");
+        if (!armed) {
+          armed = true;
+          if (label) label.textContent = "再点一次确认清理";
+          if (armTimer) clearTimeout(armTimer);
+          armTimer = setTimeout(() => {
+            armed = false;
+            if (label) label.textContent = "一键清理";
+          }, 5000);
+          return;
+        }
+        armed = false;
+        if (armTimer) clearTimeout(armTimer);
+        if (label) label.textContent = "清理中…";
+        try {
+          const text = (await ctx.clearBlockItems?.()) || "当前入口不可用";
+          setMsg(text, !/失败/.test(text));
+        } finally {
+          if (label) label.textContent = "一键清理";
         }
       });
     }
@@ -830,6 +931,88 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
     <p class="caldav-set-hint" data-purge-info></p>
   </div>
 
+  <!--
+    思源任务块识别与映射（issue #2，2026-10-28）
+    文档里写的任务块（- [ ] 待办）⇄ CalDAV VTODO，身份锚点是 **Block ID**
+    （写进 VTODO 的 X-SIYUAN-BLOCK-ID），不是文本匹配 —— 改文字也不会对丢。
+    ⚠️ 总开关没打开就完全不启用：不自动扫描、块菜单不出现、不做状态同步，
+    「立即扫描」按钮点了也只提示功能未启用。
+  -->
+  <div class="caldav-section caldav-section--card">
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.tasks}</span>思源任务块识别与映射</div>
+    <p class="caldav-set-hint">
+      把文档里写的任务块（<code>- [ ] 待办</code>）同步成 CalDAV 待办，手机上完成，思源里的勾也跟着打上；
+      在思源里打勾，服务端的待办也标完成。块与待办用 Block ID 锚定，改文字也不会对丢。
+    </p>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="blockSyncEnabled" ${s.blockSyncEnabled ? "checked" : ""}/>
+      <span><b>启用文档任务块识别与映射</b>（关闭则完全停用：不扫描、无块菜单、不同步）</span>
+    </label>
+
+    <div class="caldav-field">
+      <label class="caldav-field-label">文档任务块转 VTODO 的默认日历</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="blockSyncCal">
+          <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>使用新建条目的默认日历</option>
+          ${blockCalOptions(s)}
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+
+    <div class="caldav-field">
+      <label class="caldav-field-label">文档任务块转 VTODO 的默认结束时间</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="blockSyncEnd">
+          <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>与新建待办任务一致</option>
+          <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>空（即无日期任务）</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+    </div>
+
+    <div class="caldav-field">
+      <label class="caldav-field-label">自动扫描文档任务块的范围</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="blockSyncScope">
+          <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>打开的文档</option>
+          <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>仅日记</option>
+          <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>笔记本</option>
+          <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>全部文档</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+      <div class="caldav-blocksync-nbs" data-blocksync-nbs hidden></div>
+      <p class="caldav-set-hint">范围只决定**哪些新块会被识别**；已建立的映射照常双向同步，不受范围限制。</p>
+    </div>
+
+    <div class="caldav-field">
+      <label class="caldav-field-label">文档任务块转 VTODO 的标记</label>
+      <label class="caldav-check-row">
+        <input type="checkbox" data-s="blockSyncMarkBadge" ${(s.blockSyncMarks || ["badge"]).includes("badge") ? "checked" : ""}/>
+        <span>加「文档」小角标（只在插件的任务视图 / 侧栏里显示，不动数据）</span>
+      </label>
+      <label class="caldav-check-row">
+        <input type="checkbox" data-s="blockSyncMarkPrefix" ${(s.blockSyncMarks || []).includes("prefix") ? "checked" : ""}/>
+        <span>自定义前缀（会写进待办标题，手机端 Tasks.org 里也能看出来）</span>
+      </label>
+      <div class="caldav-input-wrap caldav-blocksync-prefix" data-blocksync-prefix hidden>
+        <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || "[文档]")}" placeholder="[文档]"/>
+      </div>
+    </div>
+
+    <div class="caldav-actions-row">
+      <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>立即扫描</span></button>
+      <button class="caldav-btn caldav-btn--sm" data-action="blocks-clear">${icons.trash}<span data-blocksync-clear-label>一键清理</span></button>
+      <span class="caldav-set-msg" data-blocksync-msg></span>
+    </div>
+    <p class="caldav-set-hint">
+      「立即扫描」当场扫一遍（不等下个同步周期）；同步时也会自动扫。
+      「一键清理」删掉全部由文档任务块转来的待办（文档里的块不动）——
+      后悔了就用它；若开关还开着、范围还覆盖着，下一轮又会重新建回来。
+    </p>
+  </div>
+
 </div>
 
 <div class="caldav-editor-foot">
@@ -838,6 +1021,19 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
   <button class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} 取消</button>
   <button class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} 保存</button>
 </div>`;
+}
+
+/** 「文档任务块转 VTODO 的默认日历」下拉：全部启用日历（当前值不在列表里也补回） */
+function blockCalOptions(s: CalSettings): string {
+  const base = enabledCalendars(s);
+  const cur = s.blockSyncCalendarUrl ? findCalendarByUrl(s, s.blockSyncCalendarUrl) : undefined;
+  const list = cur && !base.some((c) => c.url === cur.url) ? [...base, cur] : base;
+  return list
+    .map(
+      (c) =>
+        `<option value="${escape(c.url)}" ${s.blockSyncCalendarUrl === c.url ? "selected" : ""}>${escape(c.displayName)}</option>`
+    )
+    .join("");
 }
 
 /**

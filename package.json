@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite build --watch --mode dev",
     "build": "vite build && node scripts/make-package.mjs",
-    "test": "npm run test:secret && npm run test:core && npm run test:chinacal && npm run test:reconcile && npm run test:synctoken && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task && npm run test:tasksearch && npm run test:todoattach && npm run test:attachconfirm && npm run test:wktodo && npm run test:digest && npm run test:alldayoutlook && npm run test:todayviewpref && npm run test:icloudattach && npm run test:daventry && npm run test:purge && npm run test:purgeui && npm run test:listview && npm run test:syncindicator && npm run test:multiacc && npm run test:deffilter && npm run test:remindtoast",
+    "test": "npm run test:secret && npm run test:core && npm run test:chinacal && npm run test:reconcile && npm run test:synctoken && npm run test:storage && npm run test:loader && npm run test:mobile && npm run test:layout && npm run test:reminder && npm run test:toggle && npm run test:diary && npm run test:task && npm run test:tasksearch && npm run test:todoattach && npm run test:attachconfirm && npm run test:wktodo && npm run test:digest && npm run test:alldayoutlook && npm run test:todayviewpref && npm run test:icloudattach && npm run test:daventry && npm run test:purge && npm run test:purgeui && npm run test:listview && npm run test:syncindicator && npm run test:multiacc && npm run test:deffilter && npm run test:remindtoast && npm run test:blocksync",
     "test:storage": "node test/storage.test.mjs",
     "test:loader": "node test/loader.test.mjs",
     "test:reminder": "node test/reminder.test.mjs",
@@ -39,7 +39,8 @@
     "test:syncindicator": "node test/sync-indicator.test.mjs",
     "test:multiacc": "node test/multi-account.test.mjs",
     "test:deffilter": "node test/default-filter.test.mjs",
-    "test:remindtoast": "node test/reminder-toast.test.mjs"
+    "test:remindtoast": "node test/reminder-toast.test.mjs",
+    "test:blocksync": "node test/blocksync.test.mjs"
   },
   "keywords": [
     "siyuan",

@@ -28,6 +28,9 @@ import { diarySpanOf, spanContains, diaryTargetStamp, targetOptionsOf, type Diar
 import { dailyNoteAttrName, diaryWhenLabel, renderDailyNotePath, sqlText, baseNameOf } from "@/ui/diary-note";
 import { showReminderToast, clearReminderToasts } from "@/ui/reminder-toast";
 import { newDialog } from "@/ui/dialog";
+import type { KernelCaller } from "@/core/block-api";
+import { getTaskBlockById, isBlockSkipped, setBlockSkip, listNotebooks } from "@/core/block-api";
+import { runBlockSync, convertBlock, unsyncBlock, clearBlockSync } from "@/core/block-sync";
 
 /**
  * Dock / 页签的类型标识。思源拿它记账（侧栏位置、已打开模型），**改了等于换一个插件**，
@@ -289,12 +292,88 @@ export default class CalDavPlugin extends Plugin {
       });
     }
 
+    // 文档任务块的块菜单入口（issue #2 的单笔转换）：
+    // 「同步此任务到 CalDAV」/「取消同步」/「重新同步到 CalDAV」三态。
+    // ⚠️ 总开关没打开就**一个菜单项都不挂** —— 功能没启用就不该在界面上出现。
+    this.eventBus.on("open-menu-content", (e: any) => void this.onBlockMenu(e));
+
     if (this.store.isConfigured()) {
       this.sync.startAutoSync(() => this.reminder?.reschedule());
       setTimeout(() => void this.runSync(false), 3000);
     }
     // 按当前设置决定是否启动提醒引擎（设置可能已开启）
     this.reconcileReminders();
+  }
+
+  /**
+   * 块菜单钩子：给**任务列表块**加同步入口。
+   *
+   * 三态（由块的状态决定，见 core/block-api.ts 的 skip 标记）：
+   *   未同步 → 「同步此任务到 CalDAV」  建 VTODO（X-SIYUAN-BLOCK-ID 锚住块 ID）
+   *   已同步 → 「取消同步」            删 VTODO + 打 skip 标记（不打标记下轮会被重建）
+   *   已忽略 → 「重新同步到 CalDAV」    清标记 → 立刻建回来
+   *
+   * 全程 try/catch：菜单是思源主流程上的钩子，插件抛错会污染用户的右键菜单体验。
+   */
+  private async onBlockMenu(e: any): Promise<void> {
+    try {
+      const s = this.store.settings;
+      if (!s.blockSyncEnabled) return;
+      const detail = e?.detail;
+      const el: HTMLElement | undefined = detail?.element || detail?.blockElements?.[0];
+      // 只认任务列表块（思源的任务块 subtype 是 t）
+      const nodeId = el?.getAttribute?.("data-node-id") || "";
+      if (!nodeId) return;
+      const subtype = el?.getAttribute?.("data-subtype") || "";
+      if (subtype !== "t") return;
+      const menu = detail?.menu;
+      if (!menu?.addItem) return;
+
+      const caller = this.kernelCaller();
+      const mapped = this.store.getAll().find((it) => it.kind === "todo" && it.blockId === nodeId);
+      if (mapped) {
+        menu.addItem({
+          icon: "iconCalDavSync",
+          label: "取消同步（删除对应的 CalDAV 待办）",
+          click: () => {
+            void unsyncBlock({ store: this.store, sync: this.sync, caller }, mapped).then(
+              () => {
+                this.refreshPanels();
+                showMessage("已取消同步，该块后续不会再被扫描", 4000);
+              },
+              (err) => showMessage(`取消同步失败：${String((err as Error)?.message || err)}`, 6000)
+            );
+          }
+        });
+        return;
+      }
+      const skipped = await isBlockSkipped(caller, nodeId);
+      menu.addItem({
+        icon: "iconCalDavSync",
+        label: skipped ? "重新同步到 CalDAV" : "同步此任务到 CalDAV",
+        click: () => {
+          void (async () => {
+            const block = await getTaskBlockById(caller, nodeId, s.blockSyncPrefix);
+            if (!block) {
+              showMessage("没读到这个任务块（可能已被删除）", 4000);
+              return;
+            }
+            if (skipped) {
+              await setBlockSkip(caller, nodeId, false);
+              await convertBlock({ store: this.store, sync: this.sync, caller }, block);
+            } else {
+              await convertBlock({ store: this.store, sync: this.sync, caller }, block);
+            }
+            this.refreshPanels();
+            showMessage("已同步到 CalDAV", 4000);
+          })().catch((err) =>
+            showMessage(`同步失败：${String((err as Error)?.message || err)}`, 6000)
+          );
+        }
+      });
+    } catch (err) {
+      console.warn("[caldav] 块菜单钩子失败（已忽略）", err);
+    }
   }
 
   /**
@@ -730,6 +809,10 @@ export default class CalDavPlugin extends Plugin {
       reminderStatus: () => this.reminderStatus(),
       // 工具栏同步按钮（2026-10-09）：走 runSync，提示/重绘/重排提醒统一在入口做
       syncNow: () => this.runSync(true),
+      // 文档任务块（issue #2）：设置页要用 —— 列笔记本、立即扫描、一键清理
+      listNotebooks: () => listNotebooks(this.kernelCaller()),
+      scanBlocksNow: () => this.scanBlocksNow(),
+      clearBlockItems: () => this.clearBlockItems()
     };
   }
 
@@ -761,6 +844,15 @@ export default class CalDavPlugin extends Plugin {
       const report = await this.sync.syncAll();
       this.refreshPanels();
       this.reminder?.reschedule();
+      // 文档任务块对账（issue #2）：拉取完成后跑，保证「服务端完成态」是最新的。
+      // 单独兜错：块同步出错不能把整轮同步的成果报成失败。
+      try {
+        const blk = await this.blockSyncPass();
+        if (blk?.text && manual) this.notify(blk.text, "info");
+        if (blk?.text) this.refreshPanels();
+      } catch (e) {
+        console.warn("[caldav] 文档任务块对账失败（已忽略）", e);
+      }
       if (manual) {
         // 冲突策略已下沉到账户；提示只做概括文案，取第一个启用账户的口径
         const strategyLabel = enabledAccounts(this.store.settings)[0]?.conflict === "local" ? "本地优先" : "服务端优先";
@@ -782,6 +874,80 @@ export default class CalDavPlugin extends Plugin {
       this.notify(`同步失败：${String((e as Error)?.message || e)}`, "error");
       return undefined;
     }
+  }
+
+  // ── 文档任务块 ⇄ VTODO（issue #2，2026-10-28）──
+  //
+  // 总开关 blockSyncEnabled 没打开就**完全不启用**：不自动扫描、块菜单不挂入口、
+  // 不做状态同步，「立即扫描」按钮也只提示「功能未启用」。
+
+  /** 内核调用器：core 层的块读写通过它打进来（本文件是唯一持内核入口的地方） */
+  private kernelCaller(): KernelCaller {
+    return (url, body) => this.kernelData(url, body);
+  }
+
+  /**
+   * 当前打开着的文档 ID（范围 =「打开的文档」时用）。
+   * 从 siyuan 布局树里收集 docId，桌面端与移动端两套布局都走一遍；
+   * 拿不到就返回空数组 —— 空数组的含义是「没有打开的文档」，扫描结果为空，
+   * **绝不退化成全库**（那是另一种语义，静默扩大范围会吓到人）。
+   */
+  private openDocIds(): string[] {
+    const ids = new Set<string>();
+    const walk = (n: any): void => {
+      if (!n || typeof n !== "object") return;
+      if (typeof n.docId === "string" && n.docId) ids.add(n.docId);
+      if (Array.isArray(n.children)) for (const c of n.children) walk(c);
+    };
+    try {
+      const g = globalThis as any;
+      walk(g?.siyuan?.layouts);
+      walk(g?.siyuan?.mobile?.layouts);
+    } catch {
+      /* 布局还没就绪：返回空数组即可 */
+    }
+    return Array.from(ids);
+  }
+
+  /** 跑一遍块对账（同步周期末尾 / 设置区「立即扫描」共用） */
+  private async blockSyncPass(): Promise<{ text: string } | undefined> {
+    if (!this.store.settings.blockSyncEnabled) return undefined;
+    const res = await runBlockSync({
+      store: this.store,
+      sync: this.sync,
+      caller: this.kernelCaller(),
+      openDocIds: () => this.openDocIds()
+    });
+    if (!res.scanned && !res.created && !res.updated && !res.written && !res.deleted) {
+      return res.errors.length ? { text: res.errors[0] } : undefined;
+    }
+    const parts = [`扫到 ${res.scanned} 个任务块`];
+    if (res.created) parts.push(`新建 ${res.created}`);
+    if (res.updated) parts.push(`更新 ${res.updated}`);
+    if (res.written) parts.push(`回写 ${res.written}`);
+    if (res.deleted) parts.push(`删除 ${res.deleted}`);
+    const text = `文档任务块同步：${parts.join("，")}` + (res.errors.length ? `（${res.errors.length} 处出错：${res.errors[0]}）` : "");
+    return { text };
+  }
+
+  /** 设置区「立即扫描」按钮 */
+  private async scanBlocksNow(): Promise<string> {
+    if (!this.store.settings.blockSyncEnabled) return "文档任务块识别与映射未启用（先在上方打开开关）";
+    const r = await this.blockSyncPass();
+    this.refreshPanels();
+    return r?.text || "扫描完成，没有需要同步的任务块";
+  }
+
+  /** 设置区「一键清理」：删掉全部块来源 VTODO（文档里的块不动） */
+  private async clearBlockItems(): Promise<string> {
+    const res = await clearBlockSync({
+      store: this.store,
+      sync: this.sync,
+      caller: this.kernelCaller()
+    });
+    this.refreshPanels();
+    if (res.errors.length) return `清理完成 ${res.deleted} 条，${res.errors.length} 处出错：${res.errors[0]}`;
+    return res.deleted ? `已清理 ${res.deleted} 条文档任务块转来的待办` : "没有可清理的条目";
   }
 
   /** 提醒状态摘要：让用户能区分「数据侧没设提醒」与「投递通道不通」 */

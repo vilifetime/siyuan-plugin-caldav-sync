@@ -91,6 +91,19 @@ export interface CalItem {
   priority?: number;
   /** 待办状态：needs-action / in-process / completed */
   status?: string;
+  /**
+   * 来源思源文档任务块的 Block ID（issue #2，2026-10-28）。
+   * 写入 VTODO 的自定义属性 `X-SIYUAN-BLOCK-ID`，是块与条目之间**唯一权威的身份锚点** ——
+   * 文本怎么改都能对上，配置丢了也能靠服务端这份属性重建映射。
+   */
+  blockId?: string;
+  /**
+   * 上次同步时该块的文字（对账缓存）。用于判断「块改了还是服务端改了」；
+   * 没有它就无法区分方向，只能拍脑袋。
+   */
+  blockText?: string;
+  /** 上次同步时该块的勾选状态（对账缓存），作用同 blockText */
+  blockChecked?: boolean;
   /** 待办完成度 0-100 */
   percent?: number;
   completedAt?: LocalStamp;
@@ -486,6 +499,51 @@ export interface CalSettings {
    */
   todoDefaultEnd?: "none" | "plus1h" | "plus8h";
 
+  // ── 思源任务块识别与映射（2026-10-28，issue #2）──
+  //
+  // 全部受 `blockSyncEnabled` 总开关控制：没打开就**压根不启用** —— 不自动扫描、
+  // 块菜单不挂入口、不做双向状态同步，「立即扫描」按钮也只提示「功能未启用」。
+  // ⚠️ 这些字段**不存在 localStorage 里**（思源端口随机、本地存储按 origin 隔离，
+  // 写进去下次永远读不回来），一律走配置，随 data.json 同步到其他设备。
+  /**
+   * 总开关。默认 false。
+   */
+  blockSyncEnabled?: boolean;
+  /**
+   * 文档任务块转 VTODO 的默认日历。
+   * 空串 / undefined = 「使用新建条目的默认日历」（复用 defaultCalendarUrl 及其回退链），
+   * 其余为具体日历 URL（当前所有启用日历里选一个）。
+   */
+  blockSyncCalendarUrl?: string;
+  /**
+   * 文档任务块转 VTODO 的默认结束时间：
+   * `"sameAsTodo"` = 与「新建待办任务时默认结束时间」一致（settings.todoDefaultEnd）；
+   * `"none"` = 空（无日期任务，不写 DUE）。默认 `"sameAsTodo"`。
+   */
+  blockSyncDefaultEnd?: "sameAsTodo" | "none";
+  /**
+   * 自动扫描文档任务块的范围：
+   * `"open"` = 打开的文档 / `"daily"` = 仅日记 / `"notebooks"` = 指定笔记本（多选）
+   * / `"all"` = 全部文档。默认 `"all"`。
+   *
+   * ⚠️ 范围**只 gate「识别新块」**这一步。已建立的映射，双向状态同步照常走 ——
+   * 块 ID 全库可定位，块也只有开着文档才能被改，所以不受范围限制。
+   * 边角：整篇文档（或整个笔记本）被删且当时没被范围覆盖到 → 里面块的 VTODO
+   * 检测不到「块已消失」，不会自动跟删（把范围临时调成「全部文档」扫一轮即可收尾）。
+   */
+  blockSyncScope?: "open" | "daily" | "notebooks" | "all";
+  /** 范围 = 笔记本时的笔记本 ID 列表（多选） */
+  blockSyncNotebooks?: string[];
+  /**
+   * 文档任务块转 VTODO 的标记方式（多选，可两者都要）：
+   * `"badge"` = 任务视图/Dock 上加「文档」小角标（纯 UI，不动数据）；
+   * `"prefix"` = VTODO 标题加自定义前缀（会写进 SUMMARY，手机端 Tasks.org 也能看到）。
+   * 默认 `["badge"]`。
+   */
+  blockSyncMarks?: ("badge" | "prefix")[];
+  /** 前缀文本（blockSyncMarks 含 "prefix" 时用）。写入时统一拼成 `${前缀}${文本}`，默认 "[文档]" */
+  blockSyncPrefix?: string;
+
   // ── 「上次使用项」的记录值（2026-10-27 改存配置，随数据同步）──
   //
   // ⚠️ 为什么这些**不能**放 localStorage（血泪）：思源每次启动的内核端口是
@@ -592,7 +650,15 @@ export const DEFAULT_SETTINGS: CalSettings = {
   defaultDockFilter: "last",
   defaultTaskFilter: "last",
   // 新建待办的默认截止：开始 + 8 小时（2026-10-21 既定行为，现开放可配）
-  todoDefaultEnd: "plus8h"
+  todoDefaultEnd: "plus8h",
+  // 思源任务块识别与映射：默认关闭（用户明确开启才启用），范围默认全部文档，标记默认小角标
+  blockSyncEnabled: false,
+  blockSyncCalendarUrl: "",
+  blockSyncDefaultEnd: "sameAsTodo",
+  blockSyncScope: "all",
+  blockSyncNotebooks: [],
+  blockSyncMarks: ["badge"],
+  blockSyncPrefix: "[文档]"
 };
 
 export interface SyncState {

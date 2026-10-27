@@ -24,6 +24,7 @@ import { occurrencesInRange } from "../core/ics";
 import type { CalItem, TaskFilterKey } from "../core/types";
 import { calEventColor, enabledCalendars, findCalendarByUrl, resolveDefaultCalendar } from "../core/types";
 import { calColorOf, escape, keyOfItem, matchesSearchQuery, todoDueOccurrences, type ViewArgs } from "./view-common";
+import { blockBadgeOn } from "../core/block-todo";
 import { resolveTaskFilter, saveLastTaskFilter, TASK_FILTER_LABEL } from "./filter-pref";
 import { icons } from "./icons";
 
@@ -316,6 +317,10 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
       ? `<span class="cal-task-check cal-task-check--event" title="${kindLabel}"></span>`
       : `<button class="cal-task-check" data-toggle="${k}" title="${finished ? "标记未完成" : "标记完成"}">${finished ? "✓" : ""}</button>`;
     const prio = !isEvent && pr.label ? `<span class="cal-task-priority ${pr.cls}">${pr.label}</span>` : "";
+    // 「文档」角标：这条待办来自思源文档里的任务块（issue #2）。设置里可关（纯 UI，不动数据）
+    const docBadge = it.blockId && blockBadgeOn(ctx.store.settings)
+      ? `<span class="cal-task-doc" title="来自思源文档任务块">文档</span>`
+      : "";
     // 附件：只在**待办**上显示，位置在备注之后、日历名之前（雄哥 2026-10-14 指定）。
     // 日程不显示 —— 附件对日程意义不大，且会把 meta 行撑得很长。
     // 只展示第一个，其余折叠成「+N」，避免一长串把行撑爆。
@@ -334,7 +339,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
 <div class="cal-task ${finished ? "is-done" : ""} ${overdue ? "is-overdue" : ""} ${isEvent ? "is-event" : "is-todo"}" data-open="${k}" style="--cal-color:${calColorOf(ctx, it)}">
   ${check}
   <div class="cal-task-body">
-    <div class="cal-task-title"><span class="cal-task-kind ${isEvent ? "is-event" : "is-todo"}">${kindLabel}</span>${it.rrule ? "↻ " : ""}${escape(it.summary || "(无标题)")}
+    <div class="cal-task-title"><span class="cal-task-kind ${isEvent ? "is-event" : "is-todo"}">${kindLabel}</span>${docBadge}${it.rrule ? "↻ " : ""}${escape(it.summary || "(无标题)")}
       ${prio}</div>
     <div class="cal-task-meta">
       <span class="${overdue ? "cal-task-overdue" : ""}">${dueText}</span>

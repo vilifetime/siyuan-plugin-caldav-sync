@@ -40,11 +40,15 @@ const I_CHEV = svg('<polyline points="9 18 15 12 9 6"/>');
 const I_CALCHECK = svg('<rect x="3.5" y="4.5" width="17" height="16" rx="3.5"/><line x1="3.5" y1="9.5" x2="20.5" y2="9.5"/><line x1="8.5" y1="3" x2="8.5" y2="6"/><line x1="15.5" y1="3" x2="15.5" y2="6"/><polyline points="8.8 15.1 10.9 17.2 15.2 12.6"/>', "1.5 1.5 21 21", 1.6);
 const I_FILTER = svg('<path d="M3.5 5.5h17l-6.6 7.6v5.2l-3.8 2.2v-7.4z"/>', "1.5 1.5 21 21", 1.6);
 
+// 品牌图标：与真实实现一致 —— 内嵌自研 PNG（icon-design/icon-warmA-cream-64.png）
+const BRAND_SRC = path.join(root, "icon-design", "icon-warmA-cream-64.png");
+const BRAND_IMG = `<img class="caldav-brand-icon-img" src="data:image/png;base64,${fs.readFileSync(BRAND_SRC).toString("base64")}" alt="" aria-hidden="true" />`;
+
 // 单个 Dock 面板（不含筛选弹层 —— 弹层是 body 级，单独挂）。
 const panel = (width) => `
   <div class="caldav-root caldav-dock" style="width:${width}px;height:440px;display:flex;flex-direction:column">
     <div class="caldav-dock-brand">
-      <span class="caldav-brand-icon">${ICON}</span>
+      <span class="caldav-brand-icon">${BRAND_IMG}</span>
       <span class="caldav-brand-title">日历任务管理</span>
       <button class="caldav-brand-set">${ICON}</button>
     </div>

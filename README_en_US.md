@@ -2,7 +2,7 @@ English | [简体中文](README.md)
 
 # CalDAV Calendar & Tasks
 
-Manage calendars and todos on your CalDAV server (Radicale / Nextcloud / Baikal / DAViCal / Synology / iCloud with app password) directly inside SiYuan: **two-way sync**, **year / month / week / day views**, **task view**, **full editing**, and one-click insertion of today's schedule into your daily note.
+Manage calendars and todos on your CalDAV server (Radicale / Baikal / Synology / iCloud with app password) directly inside SiYuan: **two-way sync**, **year / month / week / day views**, **task view**, **full editing**, and one-click insertion of today's schedule into your daily note.
 
 ## Features
 

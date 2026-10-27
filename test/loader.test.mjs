@@ -49,6 +49,20 @@ const catPopOf = () => document.querySelector("[data-pop='category']");
 
 assert.ok(dockEl.classList.contains("caldav-dock"), "Dock 应渲染精简面板");
 assert.match(dockEl.querySelector(".caldav-brand-title")?.textContent || "", /日历任务管理/, "Dock 标题应为「日历任务管理」");
+// 品牌图标：2026-10-27 起改为自研图标（icon-design/icon-warmA-cream-64.png，data URI 内嵌），
+// 不再是内联 SVG + 主题色方块底。
+const brandIconEl = dockEl.querySelector(".caldav-brand-icon");
+const brandImg = brandIconEl?.querySelector("img.caldav-brand-icon-img");
+assert.ok(brandImg, "Dock 标题左侧应为自研品牌图标 <img>");
+assert.match(
+  brandImg?.getAttribute("src") || "",
+  /^data:image\/png;base64,[A-Za-z0-9+/=]+$/,
+  "品牌图标应为内嵌 PNG data URI（免运行时请求，跨端一致）"
+);
+assert.ok(
+  !brandIconEl?.querySelector("svg"),
+  "品牌图标位不应再残留内联 SVG（旧图标）"
+);
 // 工具行里只剩 2 个图标按钮（打开视图 / 筛选）—— 日期范围下拉不是 .caldav-dock-act
 assert.strictEqual(dockEl.querySelectorAll(".caldav-dock-tools .caldav-dock-act").length, 2, "工具行应有 2 个图标按钮");
 assert.ok(
@@ -1332,6 +1346,15 @@ assert.ok(
 assert.ok(
   /\.caldav-brand-set\s*\{[^}]*width:\s*26px/.test(builtCss),
   "Dock 标题栏设置按钮应有稳定的点击区域"
+);
+// 品牌图标尺寸：26px → 22px（雄哥要求「稍微小一点」），且不再铺主题色底（图标自带奶油底）
+assert.ok(
+  /\.caldav-brand-icon\s*\{[^}]*width:\s*22px/.test(builtCss),
+  "Dock 品牌图标应为 22px（比原来的 26px 略小）"
+);
+assert.ok(
+  /\.caldav-brand-icon\s*\{[^}]*background:\s*var\(--caldav-accent\)/.test(builtCss) === false,
+  "Dock 品牌图标不应再铺主题色方块底（自研图标自带底色）"
 );
 // 手机/平板没有 :hover，眼睛按钮若只靠 hover 显形就永远看不见 —— 必须在无悬停设备上常驻
 assert.ok(

@@ -12,6 +12,7 @@ import { DEFAULT_CATEGORIES, calEventColor, enabledCalendars, setTaskViewEventsS
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
 import { icons } from "./icons";
+import { BRAND_ICON_HTML } from "./brand-icon";
 import { isMobile } from "./device";
 import { openEditor } from "./editor";
 import { openSettingsDialog } from "./settings-dialog";
@@ -858,7 +859,7 @@ export function renderDockPanel(
   root.classList.toggle("caldav-touch", isMobile());
   root.innerHTML = `
 <div class="caldav-dock-brand">
-  <span class="caldav-brand-icon">${icons.calendar}</span>
+  <span class="caldav-brand-icon">${BRAND_ICON_HTML}</span>
   <span class="caldav-brand-title">日历任务管理</span>
   <button class="caldav-brand-set" data-dock-action="settings" title="设置" aria-label="设置">${icons.gear}</button>
 </div>

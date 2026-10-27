@@ -80,9 +80,17 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
         percent: 0,
         createdAt: todayStamp() + "T" + new Date().toTimeString().slice(0, 8)
       };
-  // 待办新建时的默认截止：**开始时间 + 8 小时**（2026-10-21 雄哥要求，取代原先的「次日」；与 Obsidian 侧一致）。
-  // 定时待办：截止 = 开始 + 8h；全天待办（默认均为定时，极少走到）沿用次日，避免 end=start 的无效值。用户仍可清空或自行修改。
-  if (kind === "todo" && isNew) it.end = it.allDay ? addDays(it.start, 1) : addHoursStr(it.start, 8);
+  // 待办新建时的默认截止（2026-10-27 起可配 settings.todoDefaultEnd）：
+  //   plus8h（默认，2026-10-21 雄哥要求）= 开始 + 8 小时；plus1h = 开始 + 1 小时；none = 空（无截止）。
+  // 计算基准是**开始时间**（新建时开始默认=当前时刻的下一个整点，即「当前时间+N 小时」）；
+  // 全天待办不受此项影响，仍为次日，避免 end=start 的无效值。用户仍可清空或自行修改。
+  if (kind === "todo" && isNew) {
+    if (it.allDay) it.end = addDays(it.start, 1);
+    else {
+      const mode = ctx.store.settings.todoDefaultEnd || "plus8h";
+      it.end = mode === "none" ? undefined : addHoursStr(it.start, mode === "plus1h" ? 1 : 8);
+    }
+  }
 
   const isTodo = it.kind === "todo";
   // 移动端竖屏（375~430px）放不下 520/560px 定宽弹窗，改为占满视口

@@ -475,6 +475,16 @@ export interface CalSettings {
    * 任务视图打开时的默认筛选，语义同 defaultDockFilter。
    */
   defaultTaskFilter?: "last" | TaskFilterKey;
+  /**
+   * 新建待办任务时的默认结束（截止）时间（2026-10-27 雄哥要求可配）。
+   * `"none"` = 空（无截止，DUE 不写）；`"plus1h"` = 当前时间+1小时；
+   * `"plus8h"` = 当前时间+8小时。默认 `"plus8h"`（沿用 2026-10-21 的既定行为）。
+   *
+   * ⚠️ 计算基准实际是**开始时间**：新建时开始默认就是当前时刻的下一个整点，
+   * 与「当前时间+N 小时」等价；用户若改了开始时间，截止跟着开始走，
+   * 避免算出「截止早于开始」的无效区间。全天待办不受此项影响（仍为次日）。
+   */
+  todoDefaultEnd?: "none" | "plus1h" | "plus8h";
 
   // ── 「上次使用项」的记录值（2026-10-27 改存配置，随数据同步）──
   //
@@ -580,7 +590,9 @@ export const DEFAULT_SETTINGS: CalSettings = {
   holidayCnUpdateFreq: "weekly",
   // 两处筛选下拉的默认值：一律「上次使用项」（本机记住；无记录时回落「所有未完成」）
   defaultDockFilter: "last",
-  defaultTaskFilter: "last"
+  defaultTaskFilter: "last",
+  // 新建待办的默认截止：开始 + 8 小时（2026-10-21 既定行为，现开放可配）
+  todoDefaultEnd: "plus8h"
 };
 
 export interface SyncState {

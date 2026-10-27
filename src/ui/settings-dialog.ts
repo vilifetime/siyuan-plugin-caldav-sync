@@ -501,6 +501,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         // 杂项：两处筛选下拉的默认值（"last" = 上次使用项）
         s.defaultDockFilter = (($("select[data-s='defaultDockFilter']")?.value || "last") as CalSettings["defaultDockFilter"]);
         s.defaultTaskFilter = (($("select[data-s='defaultTaskFilter']")?.value || "last") as CalSettings["defaultTaskFilter"]);
+        // 新建待办的默认截止时间（2026-10-27）
+        s.todoDefaultEnd = (($("select[data-s='todoDefaultEnd']")?.value || "plus8h") as CalSettings["todoDefaultEnd"]);
         // 默认账户/日历：两级选择（「自动」= 空串）。选中的日历被停用/删掉时
         // resolveDefaultCalendar() 会回退默认账户 → 第一个启用账户的第一个启用日历
         const daSel = $("select[data-s='defaultAcc']")?.value || "";
@@ -765,8 +767,8 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
     </div>
   </div>
 
-  <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.filter}</span>杂项</div>
+    <div class="caldav-section caldav-section--card">
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.filter}</span>MISC</div>
     <p class="caldav-set-hint">
       下面两个下拉的**默认值** —— 也就是刚打开时自动选中哪一项。
       默认都是「上次使用项」：记住你上次选的，下次打开直接回到它。
@@ -799,6 +801,18 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       </div>
     </div>
     <p class="caldav-set-hint">「上次使用项」没有记录时，两处都回落到「所有未完成」。</p>
+    <div class="caldav-field">
+      <label class="caldav-field-label">新建待办任务时默认结束时间</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="todoDefaultEnd">
+          <option value="none" ${s.todoDefaultEnd === "none" ? "selected" : ""}>空（无截止时间）</option>
+          <option value="plus1h" ${s.todoDefaultEnd === "plus1h" ? "selected" : ""}>当前时间+1小时</option>
+          <option value="plus8h" ${(s.todoDefaultEnd || "plus8h") === "plus8h" ? "selected" : ""}>当前时间+8小时</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+      <p class="caldav-set-hint">只影响**新建**待办；基准是开始时间（新建时开始默认为当前时刻的下一个整点）。全天待办仍默认次日。</p>
+    </div>
   </div>
 
   <div class="caldav-section caldav-section--card">

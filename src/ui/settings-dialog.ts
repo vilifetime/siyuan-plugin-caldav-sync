@@ -487,7 +487,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         }
         // ── 全局字段 ──
         s.syncIntervalMin = Math.max(0, +($("input[data-s='interval']")?.value || "0") || 0);
-        const wasRemindOn = s.enableReminders;
+        // 提醒开关：保存前先记住旧值 —— 只有它**真的变了**才提示（见文件末尾 remindChanged 分支）
+        const wasRemindOn = !!s.enableReminders;
         s.enableReminders = ($("input[data-s='reminders']") as HTMLInputElement | null)?.checked;
         s.includeOverdueTodos = ($("input[data-s='includeOverdue']") as HTMLInputElement | null)?.checked;
         // 中国日历叠加层
@@ -516,14 +517,18 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         // persist() 只落盘、不 emit，所以保存后已打开的面板不会自己重渲染 ——
         // 这里统一刷一次。日历勾选 / 颜色 / 同步窗口这些改了都得立刻看得见。
         ctx.refreshPanels?.();
-        // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
-        // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
-        if (s.enableReminders) {
-          if (!wasRemindOn) {
+        // 提醒设置的提示**只在它真的变了时**才出现。
+        // 此前只要提醒是开着的，每点一次「保存」就弹「提醒设置已保存」——
+        // 哪怕这次保存压根没碰提醒（改的是同步间隔、日历颜色等），纯噪音
+        // （雄哥 2026-10-27 反馈截图）。现在：没动提醒 → 一声不吭；动了才说。
+        if (wasRemindOn !== !!s.enableReminders) {
+          if (s.enableReminders) {
+            // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
+            // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
             void ctx.testReminder?.();
             showMessage("提醒已开启，并已发送一条测试提醒", 6000, "info");
           } else {
-            showMessage("提醒设置已保存", 4000, "info");
+            showMessage("提醒已关闭", 4000, "info");
           }
         }
         if (msgEl) msgEl.textContent = "";

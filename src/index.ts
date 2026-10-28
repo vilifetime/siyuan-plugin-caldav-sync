@@ -356,7 +356,7 @@ export default class CalDavPlugin extends Plugin {
   }
 
   /** 临时诊断：块右键菜单钩子的命中情况，定位「菜单项不出现」用，DEBUG_BLOCK_MENU 关闭即失效 */
-  private diagnoseBlockMenu(detail: any): void {
+  private async diagnoseBlockMenu(detail: any): Promise<void> {
     if (!DEBUG_BLOCK_MENU) return;
     const s = this.store.settings;
     const el = detail?.element;
@@ -368,7 +368,16 @@ export default class CalDavPlugin extends Plugin {
       return `${(n.tagName || "?").toLowerCase()} sub=${n.getAttribute?.("data-subtype") || "-"} id=${id} cb=${cb}`;
     };
     const found = this.resolveTaskNode(detail);
-    const foundId = found ? (found.getAttribute("data-node-id") || "").slice(0, 8) : "null";
+    const nodeId = found ? (found.getAttribute("data-node-id") || "") : "";
+    const foundId = nodeId ? nodeId.slice(0, 8) : "null";
+    // 该块在 store 里有无映射、块上有无忽略标记（决定走「取消同步 / 重新同步 / 同步」哪一态）
+    const mapped = nodeId ? this.store.getAll().find((it) => it.kind === "todo" && it.blockId === nodeId) : undefined;
+    let skipped = false;
+    try {
+      if (nodeId) skipped = await isBlockSkipped(this.kernelCaller(), nodeId);
+    } catch {
+      skipped = false;
+    }
     const parent = el?.parentElement;
     const grand = parent?.parentElement;
     const firstCb = (typeof document !== "undefined" && document.querySelector)
@@ -379,7 +388,7 @@ export default class CalDavPlugin extends Plugin {
       ? document.querySelectorAll('.protyle-task, input[type="checkbox"], [class*="checkbox"], [class*="task"]').length
       : -1;
     showMessage(
-      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | element=${descri(el)} | found=${foundId} | cbInDoc=${tasksInDoc}`,
+      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | found=${foundId} | mapped=${!!mapped} | skipped=${skipped} | cbInDoc=${tasksInDoc}`,
       6000,
       "info",
       "caldav-block-menu-diag"
@@ -393,6 +402,8 @@ export default class CalDavPlugin extends Plugin {
       grandHtml: grand ? grand.outerHTML.slice(0, 800) : null,
       blockElements: be.map((n: any) => ({ tag: n.tagName, dataType: n.getAttribute?.("data-type"), id: (n.getAttribute?.("data-node-id") || "").slice(0, 8) })),
       found,
+      mapped: !!mapped,
+      skipped,
       tasksInDoc,
       inputsInDoc: (typeof document !== "undefined") ? document.querySelectorAll('input[type=checkbox]').length : -1,
       firstCheckboxHtml: firstCb ? (firstCb.outerHTML || "").slice(0, 300) : null,
@@ -403,7 +414,7 @@ export default class CalDavPlugin extends Plugin {
     try {
       const s = this.store.settings;
       const detail = e?.detail;
-      this.diagnoseBlockMenu(detail); // 临时诊断：每次块右键都弹一次（固定 id，不堆叠）
+      void this.diagnoseBlockMenu(detail); // 临时诊断：每次块右键都弹一次（固定 id，不堆叠）
       if (!s.blockSyncEnabled) return;
       // detail.element 通常是任务项内部的段落（NodeParagraph），真正的任务块（NodeListItem）
       // 是它的祖先，需向上 closest 取到。resolveTaskNode 已处理自身/祖先两种情况。

@@ -355,12 +355,17 @@ export default class CalDavPlugin extends Plugin {
     };
     const found = this.resolveTaskNode(detail);
     const foundId = found ? (found.getAttribute("data-node-id") || "").slice(0, 8) : "null";
-    // 文档内真实任务块计数（.protyle-task 是思源原生复选框），用于确认文档里到底有没有标准任务块
+    const parent = el?.parentElement;
+    const grand = parent?.parentElement;
+    const firstCb = (typeof document !== "undefined" && document.querySelector)
+      ? document.querySelector('[class*="checkbox"], [class*="task"], input[type=checkbox]')
+      : null;
+    // 文档内"复选框样"元素综合计数（覆盖 .protyle-task / 原生 input / 各类 checkbox|task class）
     const tasksInDoc = (typeof document !== "undefined" && document.querySelectorAll)
-      ? document.querySelectorAll(".protyle-task").length
+      ? document.querySelectorAll('.protyle-task, input[type="checkbox"], [class*="checkbox"], [class*="task"]').length
       : -1;
     showMessage(
-      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | element=${descri(el)} | blockElements=${be.length} | found=${foundId} | tasksInDoc=${tasksInDoc}`,
+      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | element=${descri(el)} | found=${foundId} | cbInDoc=${tasksInDoc}`,
       6000,
       "info",
       "caldav-block-menu-diag"
@@ -368,15 +373,15 @@ export default class CalDavPlugin extends Plugin {
     console.warn("[caldav][块菜单诊断] 完整信息:", {
       enabled: s.blockSyncEnabled,
       element: el
-        ? { tag: el.tagName, sub: el.getAttribute?.("data-subtype"), id: el.getAttribute?.("data-node-id"), html: (el.outerHTML || "").slice(0, 400) }
+        ? { tag: el.tagName, dataSubtype: el.getAttribute?.("data-subtype"), dataType: el.getAttribute?.("data-type"), id: el.getAttribute?.("data-node-id"), html: (el.outerHTML || "").slice(0, 500) }
         : null,
-      blockElements: be.map((n: any) => ({
-        tag: n.tagName,
-        sub: n.getAttribute?.("data-subtype"),
-        id: (n.getAttribute?.("data-node-id") || "").slice(0, 8),
-      })),
+      parentHtml: parent ? parent.outerHTML.slice(0, 800) : null,
+      grandHtml: grand ? grand.outerHTML.slice(0, 800) : null,
+      blockElements: be.map((n: any) => ({ tag: n.tagName, dataType: n.getAttribute?.("data-type"), id: (n.getAttribute?.("data-node-id") || "").slice(0, 8) })),
       found,
       tasksInDoc,
+      inputsInDoc: (typeof document !== "undefined") ? document.querySelectorAll('input[type=checkbox]').length : -1,
+      firstCheckboxHtml: firstCb ? (firstCb.outerHTML || "").slice(0, 300) : null,
     });
   }
 

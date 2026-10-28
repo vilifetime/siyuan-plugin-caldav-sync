@@ -98,7 +98,7 @@ X-SIYUAN-BLOCK-ID: 20261028123456-abcdef
 | `src/core/block-sync.ts` | 执行层 `runBlockSync` / `convertBlock` / `unsyncBlock` / `resyncBlock` / `clearBlockSync`；所有上传/删除走 `SyncEngine` 的串行推送链（不绕过，避免 412 丢改动） |
 | `src/core/ics.ts` | `X-SIYUAN-BLOCK-ID` 写入/读回，纳入 MANAGED 属性集 |
 | `src/core/types.ts` | 新增配置项与 `CalItem.blockId?`/`blockText?`/`blockChecked?` |
-| `src/index.ts` | 同步周期末尾跑 `blockSyncPass`；`open-menu-content` 挂块菜单 `onBlockMenu`；注入 `listNotebooks`/`scanBlocksNow`/`clearBlockItems` 给面板 |
+| `src/index.ts` | 同步周期末尾跑 `blockSyncPass`；`open-menu-content` 挂块菜单 `onBlockMenu`（项进思源「插件」子菜单）、`click-blockicon` 挂 `onBlockIconMenu`（项进「任务块 ⇄ VTODO」子菜单，共用 `buildBlockSyncMenuItems`）；注入 `listNotebooks`/`scanBlocksNow`/`clearBlockItems` 给面板 |
 | `src/ui/settings-dialog.ts` | 新增「思源任务块识别与映射」设置段 + 立即扫描 / 一键清理 |
 | `src/ui/view-task.ts` / `src/ui/panel.ts` | 块来源条目加「文档」角标 |
 | `src/index.css` | `.cal-task-doc`、`.caldav-dock-tag--ghost` 样式 |
@@ -138,12 +138,22 @@ X-SIYUAN-BLOCK-ID: 20261028123456-abcdef
 
 来自文档任务块的待办，在标题前加一个「**文档**」小角标（`[文档]` 文字或文档图标，取决于视图），提示它源自思源任务块、双向联动。可在设置里关掉（纯 UI，不动数据）。
 
-### 5.3 单笔映射菜单（重点）
+### 5.3 单笔映射菜单（重点 · 双入口）
 
-**位置：在思源文档里，右键某个任务列表块（或点块左侧的图标把手 / `⋮⋮` 拖拽手柄唤出的菜单），弹出的块右键菜单里。**
+单笔转换现在有**两个入口**，功能完全一致（同一套三态同步项，共用 `buildBlockSyncMenuItems`）：
 
-- 该入口由 `eventBus.on("open-menu-content", …)` 钩子注入（`src/index.ts` 的 `onBlockMenu()`）。
-- **必须先打开总开关**，否则菜单不出现。
+**入口 A — 右键正文（open-menu-content）**
+在思源文档里对**某个任务列表块的正文文字**右键 → 原生块右键菜单里。
+- 由 `eventBus.on("open-menu-content", …)` 钩子注入（`src/index.ts` 的 `onBlockMenu()`）。
+- ⚠️ 思源内核（v2.9.4+）会把所有插件注入项**自动收进一个名为「插件」的子菜单**（带拼图图标），本插件无法改这个名字（核心写死）。三态同步项平铺在这个「插件」子菜单里。
+
+**入口 B — 点块左侧图标把手（click-blockicon）**
+点任务块左侧的 `⋮⋮` 图标把手 → 弹出的块菜单里。
+- 由 `eventBus.on("click-blockicon", …)` 钩子注入（`src/index.ts` 的 `onBlockIconMenu()`）。
+- 该路径下插件**完全掌控 label**，故用一个名为 **「任务块 ⇄ VTODO」** 的子菜单收拢同步项（⇄ 为普通 Unicode 箭头，渲染正常），不再受「插件」分组命名限制。
+
+> 两个入口**都需先打开总开关**，否则菜单不出现；都对非任务块（标题/段落/图片）自动不注入。
+
 - 菜单项**三态**，取决于该块当前状态：
 
 | 块状态 | 菜单项 | 行为 |
@@ -152,7 +162,7 @@ X-SIYUAN-BLOCK-ID: 20261028123456-abcdef
 | 已同步 | 「取消同步（删除对应的 CalDAV 待办）」 | 删 VTODO + 给块打 `custom-caldav-skip` 忽略标记（**见 5.4**） |
 | 已忽略 | 「重新同步到 CalDAV」 | 清标记 → 立刻重建 VTODO |
 
-> 菜单钩子全程 try/catch，插件异常不会污染思源右键菜单体验。
+> 菜单钩子全程 try/catch，插件异常不会污染思源右键菜单体验。两入口注入路径均为**同步** `addItem`，杜绝此前「`await` 把菜单项推迟到渲染之后而丢失」的 bug。
 
 ### 5.4 「取消同步」为什么必须打忽略标记
 

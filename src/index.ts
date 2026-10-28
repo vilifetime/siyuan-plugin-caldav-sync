@@ -299,6 +299,10 @@ export default class CalDavPlugin extends Plugin {
     // 「同步此任务到 CalDAV」/「取消同步」/「重新同步到 CalDAV」三态。
     // ⚠️ 总开关没打开就**一个菜单项都不挂** —— 功能没启用就不该在界面上出现。
     this.eventBus.on("open-menu-content", (e: any) => void this.onBlockMenu(e));
+    // 块图标把手菜单入口（点块左侧 ⋮⋮ 图标把手）：与 open-menu-content 双入口并存。
+    // 该路径下插件完全掌控 label，故用名为「任务块 ⇄ VTODO」的子菜单收拢三态同步项，
+    // 绕开思源内核对 open-menu-content 自动套的「插件」分组（其名不可改）。
+    this.eventBus.on("click-blockicon", (e: any) => this.onBlockIconMenu(e));
 
     if (this.store.isConfigured()) {
       this.sync.startAutoSync(() => this.reminder?.reschedule());
@@ -424,11 +428,31 @@ export default class CalDavPlugin extends Plugin {
       if (!nodeId) return;
       const menu = detail?.menu;
       if (!menu?.addItem) return;
+      // 右键正文路径：项直接挂到思源内核自动生成的「插件」子菜单下（该分组名不可改），三态同步项平铺进去。
+      for (const item of this.buildBlockSyncMenuItems(nodeId, el, s)) menu.addItem(item);
+    } catch (err) {
+      console.warn("[caldav] 块菜单钩子失败（已忽略）", err);
+    }
+  }
 
-      const caller = this.kernelCaller();
-      const mapped = this.store.getAll().find((it) => it.kind === "todo" && it.blockId === nodeId);
-      if (mapped) {
-        menu.addItem({
+  /**
+   * 构建「任务块 ⇄ VTODO」三态同步菜单项，两个入口（open-menu-content / click-blockicon）共用。
+   *
+   * 三态（由块状态决定）：
+   *   已映射 → 「取消同步（删除对应的 CalDAV 待办）」  删 VTODO + 打 skip 标记（防下轮重建）
+   *   未映射 + 有 skip 标记 → 「重新同步到 CalDAV」    清标记 → 立刻建回
+   *   未映射 + 无标记 → 「同步此任务到 CalDAV」        建 VTODO（X-SIYUAN-BLOCK-ID 锚住块 ID）
+   *
+   * ⚠️ 同步读取「忽略标记」：直接读块 DOM 上的 BLOCK_SKIP_ATTR（setBlockSkip 写的同一个属性）。
+   * 绝不能 await 内核查询 —— 钩子是 async 时 await 会把 menu.addItem 推迟到微任务之后，
+   * 而思源派发菜单事件后**同步**就渲染菜单，被推迟的 addItem 会丢失（菜单项不出现）。
+   */
+  private buildBlockSyncMenuItems(nodeId: string, el: HTMLElement, s: any): any[] {
+    const caller = this.kernelCaller();
+    const mapped = this.store.getAll().find((it) => it.kind === "todo" && it.blockId === nodeId);
+    if (mapped) {
+      return [
+        {
           icon: "iconCalDavSync",
           label: "取消同步（删除对应的 CalDAV 待办）",
           click: () => {
@@ -440,14 +464,12 @@ export default class CalDavPlugin extends Plugin {
               (err) => showMessage(`取消同步失败：${String((err as Error)?.message || err)}`, 6000)
             );
           }
-        });
-        return;
-      }
-      // ⚠️ 同步读取「忽略标记」：直接读任务块 DOM 上的 custom-caldav-skip 属性（setBlockSkip 写的是同一个属性）。
-      // 绝不能 await 内核查询 —— onBlockMenu 是 async 钩子，await 会把 menu.addItem 推迟到微任务之后，
-      // 而思源在派发 open-menu-content 后**同步**就渲染菜单了，被推迟的 addItem 会丢失（表现为菜单项不出现）。
-      const skipped = !!el.getAttribute(BLOCK_SKIP_ATTR);
-      menu.addItem({
+        }
+      ];
+    }
+    const skipped = !!el.getAttribute(BLOCK_SKIP_ATTR);
+    return [
+      {
         icon: "iconCalDavSync",
         label: skipped ? "重新同步到 CalDAV" : "同步此任务到 CalDAV",
         click: () => {
@@ -469,9 +491,36 @@ export default class CalDavPlugin extends Plugin {
             showMessage(`同步失败：${String((err as Error)?.message || err)}`, 6000)
           );
         }
+      }
+    ];
+  }
+
+  /**
+   * 块图标把手菜单入口（click-blockicon）：点块左侧图标把手（⋮⋮）弹出的菜单。
+   * 该路径下插件**完全掌控 label**，故用一个名为「任务块 ⇄ VTODO」的子菜单收拢三态同步项，
+   * 不再受思源内核对 open-menu-content 自动套的「插件」子菜单（其名不可改）限制。
+   *
+   * ⚠️ 全程同步 addItem，禁止在注入前 await（否则项丢失）。
+   */
+  private onBlockIconMenu(e: any): void {
+    try {
+      const s = this.store.settings;
+      if (!s.blockSyncEnabled) return;
+      const detail = e?.detail;
+      const el = this.resolveTaskNode(detail);
+      if (!el) return;
+      const nodeId = el.getAttribute("data-node-id") || "";
+      if (!nodeId) return;
+      const menu = detail?.menu;
+      if (!menu?.addItem) return;
+      menu.addItem({
+        icon: "iconCalDavSync",
+        label: "任务块 ⇄ VTODO",
+        type: "submenu",
+        submenu: this.buildBlockSyncMenuItems(nodeId, el, s),
       });
     } catch (err) {
-      console.warn("[caldav] 块菜单钩子失败（已忽略）", err);
+      console.warn("[caldav] 块图标菜单钩子失败（已忽略）", err);
     }
   }
 

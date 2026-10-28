@@ -29,7 +29,7 @@ import { dailyNoteAttrName, diaryWhenLabel, renderDailyNotePath, sqlText, baseNa
 import { showReminderToast, clearReminderToasts } from "@/ui/reminder-toast";
 import { newDialog } from "@/ui/dialog";
 import type { KernelCaller } from "@/core/block-api";
-import { getTaskBlockById, isBlockSkipped, setBlockSkip, listNotebooks } from "@/core/block-api";
+import { getTaskBlockById, isBlockSkipped, setBlockSkip, listNotebooks, BLOCK_SKIP_ATTR } from "@/core/block-api";
 import { runBlockSync, convertBlock, unsyncBlock, clearBlockSync } from "@/core/block-sync";
 
 /**
@@ -443,7 +443,10 @@ export default class CalDavPlugin extends Plugin {
         });
         return;
       }
-      const skipped = await isBlockSkipped(caller, nodeId);
+      // ⚠️ 同步读取「忽略标记」：直接读任务块 DOM 上的 custom-caldav-skip 属性（setBlockSkip 写的是同一个属性）。
+      // 绝不能 await 内核查询 —— onBlockMenu 是 async 钩子，await 会把 menu.addItem 推迟到微任务之后，
+      // 而思源在派发 open-menu-content 后**同步**就渲染菜单了，被推迟的 addItem 会丢失（表现为菜单项不出现）。
+      const skipped = !!el.getAttribute(BLOCK_SKIP_ATTR);
       menu.addItem({
         icon: "iconCalDavSync",
         label: skipped ? "重新同步到 CalDAV" : "同步此任务到 CalDAV",

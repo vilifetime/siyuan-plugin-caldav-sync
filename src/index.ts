@@ -319,13 +319,17 @@ export default class CalDavPlugin extends Plugin {
    * 全程 try/catch：菜单是思源主流程上的钩子，插件抛错会污染用户的右键菜单体验。
    */
   /**
-   * 从 open-menu-content 的 detail 里定位任务列表块元素（<li data-node-id>）。
+   * 从 open-menu-content 的 detail 里定位「任务列表块」（思源的 NodeListItem）。
    *
-   * 关键：思源的任务复选框渲染为 `<div class="protyle-task">`（内含 SVG 图标），
-   * **不是原生 `input[type="checkbox"]`**；且各版本对任务项 li 的 `data-subtype` 渲染值也不一致。
-   * 因此统一以「含 `.protyle-task` 的最近块」来定位任务列表项，最稳：
-   *   - 先认自身：若自身含 `.protyle-task` 且自身/祖先有 `data-node-id` → 返回该块；
-   *   - 容器（<ul>/<div>）情况：从后代的 `.protyle-task` 向上 `.closest("[data-node-id]")` 取到任务项。
+   * 真实 DOM（本机思源实测，2026-10-28）：
+   *   - 右键时 detail.element 通常是任务项**内部**的 <div data-type="NodeParagraph" class="p">（段落），
+   *     而不是任务块本身；
+   *   - 真正的任务块（NodeListItem）是它的父节点：<li data-subtype="t" data-type="NodeListItem" class="li protyle-task--done">，
+   *     其 data-node-id 才是该任务的块 ID；
+   *   - 复选框渲染为 <div class="protyle-action protyle-action--task"><svg>，既不是 .protyle-task 也不是 input[type=checkbox]。
+   *   - 已完成态：li 上 data-task="X"（或 class 含 protyle-task--done）、未完成 data-task=" "。
+   *
+   * 策略：从 element 自身或向上 closest('[data-type="NodeListItem"][data-subtype="t"]') 取到任务项。
    * 兼容 detail.blockElements（部分版本把命中块放在这里）。
    */
   private resolveTaskNode(detail: any): HTMLElement | undefined {
@@ -333,10 +337,20 @@ export default class CalDavPlugin extends Plugin {
     if (detail?.element) roots.push(detail.element);
     if (Array.isArray(detail?.blockElements)) roots.push(...detail.blockElements);
     for (const el of roots) {
-      if (!el || typeof el.querySelector !== "function") continue;
-      // 思源任务复选框是 .protyle-task（SVG），不是 input；向上找最近的块节点即任务项 <li>
-      const task = el.querySelector?.(".protyle-task")?.closest?.("[data-node-id]");
-      if (task) return task as HTMLElement;
+      if (!el || typeof el.closest !== "function") continue;
+      // 自身即任务项（NodeListItem + subtype=t）
+      if (
+        el.getAttribute?.("data-type") === "NodeListItem" &&
+        el.getAttribute?.("data-subtype") === "t" &&
+        el.getAttribute?.("data-node-id")
+      ) {
+        return el;
+      }
+      // 自身是任务项内部的段落/复选框/动作 div → 向上找最近的 NodeListItem
+      const li =
+        el.closest?.('[data-type="NodeListItem"][data-subtype="t"]') ||
+        el.closest?.('li[data-subtype="t"]');
+      if (li) return li as HTMLElement;
     }
     return undefined;
   }
@@ -391,9 +405,8 @@ export default class CalDavPlugin extends Plugin {
       const detail = e?.detail;
       this.diagnoseBlockMenu(detail); // 临时诊断：每次块右键都弹一次（固定 id，不堆叠）
       if (!s.blockSyncEnabled) return;
-      // 思源对列表/任务块右键时，detail.element 有时是外层 <ul>（subtype 为 u/空），
-      // 真正的任务项 <li data-subtype="t"> 是它的后代 —— 直接读 element 的 subtype 会取不到，
-      // 菜单项就永远不出现。这里先认自身、再向下找 li[data-subtype="t"]，并兼容 detail.blockElements。
+      // detail.element 通常是任务项内部的段落（NodeParagraph），真正的任务块（NodeListItem）
+      // 是它的祖先，需向上 closest 取到。resolveTaskNode 已处理自身/祖先两种情况。
       const el = this.resolveTaskNode(detail);
       if (!el) return;
       const nodeId = el.getAttribute("data-node-id") || "";

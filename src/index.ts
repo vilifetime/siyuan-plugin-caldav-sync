@@ -319,13 +319,13 @@ export default class CalDavPlugin extends Plugin {
    * 全程 try/catch：菜单是思源主流程上的钩子，插件抛错会污染用户的右键菜单体验。
    */
   /**
-   * 从 open-menu-content 的 detail 里定位任务列表块元素（带复选框的 <li data-node-id>）。
+   * 从 open-menu-content 的 detail 里定位任务列表块元素（<li data-node-id>）。
    *
-   * 不依赖 data-subtype 的精确取值（各思源版本对列表项 li 的 data-subtype 渲染不一致，
-   * 且右键时 detail.element 常是外层 <ul> 而非 <li>），改认**任务列表项一定带
-   * `input[type="checkbox"]`** 这个稳定 DOM 特征来定位任务 <li>：
-   *   - 自身就是任务项（含复选框或 subtype=t，且有 data-node-id）→ 直接返回；
-   *   - 自身是列表容器 <ul> → 向下找「含复选框的 li[data-node-id]」，兜底找 `li[data-subtype=t]`。
+   * 关键：思源的任务复选框渲染为 `<div class="protyle-task">`（内含 SVG 图标），
+   * **不是原生 `input[type="checkbox"]`**；且各版本对任务项 li 的 `data-subtype` 渲染值也不一致。
+   * 因此统一以「含 `.protyle-task` 的最近块」来定位任务列表项，最稳：
+   *   - 先认自身：若自身含 `.protyle-task` 且自身/祖先有 `data-node-id` → 返回该块；
+   *   - 容器（<ul>/<div>）情况：从后代的 `.protyle-task` 向上 `.closest("[data-node-id]")` 取到任务项。
    * 兼容 detail.blockElements（部分版本把命中块放在这里）。
    */
   private resolveTaskNode(detail: any): HTMLElement | undefined {
@@ -334,18 +334,9 @@ export default class CalDavPlugin extends Plugin {
     if (Array.isArray(detail?.blockElements)) roots.push(...detail.blockElements);
     for (const el of roots) {
       if (!el || typeof el.querySelector !== "function") continue;
-      // 只有列表项 <li> 才认自身；容器 <ul>/<ol> 一律走后代查找（避免把列表块 ID 当任务项 ID）
-      if ((el.tagName || "").toUpperCase() === "LI") {
-        const selfId = el.getAttribute?.("data-node-id");
-        const selfTask =
-          el.getAttribute?.("data-subtype") === "t" ||
-          !!el.querySelector?.('input[type="checkbox"], .protyle-task');
-        if (selfId && selfTask) return el;
-      }
-      const cbLi =
-        el.querySelector?.('li[data-node-id] input[type="checkbox"]')?.closest?.("li[data-node-id]") ||
-        el.querySelector?.("[data-node-id][data-subtype='t']");
-      if (cbLi) return cbLi as HTMLElement;
+      // 思源任务复选框是 .protyle-task（SVG），不是 input；向上找最近的块节点即任务项 <li>
+      const task = el.querySelector?.(".protyle-task")?.closest?.("[data-node-id]");
+      if (task) return task as HTMLElement;
     }
     return undefined;
   }

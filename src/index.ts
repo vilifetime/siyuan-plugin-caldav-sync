@@ -335,11 +335,14 @@ export default class CalDavPlugin extends Plugin {
    *
    * 策略：从 element 自身或向上 closest('[data-type="NodeListItem"][data-subtype="t"]') 取到任务项。
    * 兼容 detail.blockElements（部分版本把命中块放在这里）。
+   * 也兼容 click-blockicon 入口：该事件无 detail.element，块信息在 detail.data.dom。
    */
   private resolveTaskNode(detail: any): HTMLElement | undefined {
     const roots: any[] = [];
     if (detail?.element) roots.push(detail.element);
     if (Array.isArray(detail?.blockElements)) roots.push(...detail.blockElements);
+    // click-blockicon 入口：块信息在 detail.data.dom（无 detail.element），须一并纳入
+    if (detail?.data?.dom) roots.push(detail.data.dom);
     for (const el of roots) {
       if (!el || typeof el.closest !== "function") continue;
       // 自身即任务项（NodeListItem + subtype=t）
@@ -359,11 +362,11 @@ export default class CalDavPlugin extends Plugin {
     return undefined;
   }
 
-  /** 临时诊断：块右键菜单钩子的命中情况，定位「菜单项不出现」用，DEBUG_BLOCK_MENU 关闭即失效 */
-  private async diagnoseBlockMenu(detail: any): Promise<void> {
+  /** 临时诊断：块菜单钩子（右键 open-menu-content / ⋮⋮ click-blockicon）的命中情况，定位「菜单项不出现」用，DEBUG_BLOCK_MENU 关闭即失效 */
+  private async diagnoseBlockMenu(detail: any, source: "content" | "icon" = "content"): Promise<void> {
     if (!DEBUG_BLOCK_MENU) return;
     const s = this.store.settings;
-    const el = detail?.element;
+    const el = detail?.element || detail?.data?.dom;
     const be = Array.isArray(detail?.blockElements) ? detail.blockElements : [];
     const descri = (n: any): string => {
       if (!n) return "null";
@@ -392,12 +395,12 @@ export default class CalDavPlugin extends Plugin {
       ? document.querySelectorAll('.protyle-task, input[type="checkbox"], [class*="checkbox"], [class*="task"]').length
       : -1;
     showMessage(
-      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | found=${foundId} | mapped=${!!mapped} | skipped=${skipped} | cbInDoc=${tasksInDoc}`,
+      `[块菜单诊断·${source}] hook=✓ enabled=${s.blockSyncEnabled} | found=${foundId} | mapped=${!!mapped} | skipped=${skipped} | cbInDoc=${tasksInDoc}`,
       6000,
       "info",
       "caldav-block-menu-diag"
     );
-    console.warn("[caldav][块菜单诊断] 完整信息:", {
+    console.warn(`[caldav][块菜单诊断·${source}] 完整信息:`, {
       enabled: s.blockSyncEnabled,
       element: el
         ? { tag: el.tagName, dataSubtype: el.getAttribute?.("data-subtype"), dataType: el.getAttribute?.("data-type"), id: el.getAttribute?.("data-node-id"), html: (el.outerHTML || "").slice(0, 500) }
@@ -405,6 +408,10 @@ export default class CalDavPlugin extends Plugin {
       parentHtml: parent ? parent.outerHTML.slice(0, 800) : null,
       grandHtml: grand ? grand.outerHTML.slice(0, 800) : null,
       blockElements: be.map((n: any) => ({ tag: n.tagName, dataType: n.getAttribute?.("data-type"), id: (n.getAttribute?.("data-node-id") || "").slice(0, 8) })),
+      dataKeys: detail?.data ? Object.keys(detail.data) : null,
+      dataId: detail?.data?.id || null,
+      dataType: detail?.data?.type || null,
+      dataSubType: detail?.data?.subType || null,
       found,
       mapped: !!mapped,
       skipped,
@@ -418,7 +425,7 @@ export default class CalDavPlugin extends Plugin {
     try {
       const s = this.store.settings;
       const detail = e?.detail;
-      void this.diagnoseBlockMenu(detail); // 临时诊断：每次块右键都弹一次（固定 id，不堆叠）
+      void this.diagnoseBlockMenu(detail, "content"); // 临时诊断：每次块右键都弹一次（固定 id，不堆叠）
       if (!s.blockSyncEnabled) return;
       // detail.element 通常是任务项内部的段落（NodeParagraph），真正的任务块（NodeListItem）
       // 是它的祖先，需向上 closest 取到。resolveTaskNode 已处理自身/祖先两种情况。
@@ -507,6 +514,7 @@ export default class CalDavPlugin extends Plugin {
       const s = this.store.settings;
       if (!s.blockSyncEnabled) return;
       const detail = e?.detail;
+      void this.diagnoseBlockMenu(detail, "icon"); // 临时诊断：⋮⋮ 块图标菜单也弹一次，便于确认 detail.data 结构
       const el = this.resolveTaskNode(detail);
       if (!el) return;
       const nodeId = el.getAttribute("data-node-id") || "";

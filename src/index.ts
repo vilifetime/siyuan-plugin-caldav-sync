@@ -315,17 +315,37 @@ export default class CalDavPlugin extends Plugin {
    *
    * 全程 try/catch：菜单是思源主流程上的钩子，插件抛错会污染用户的右键菜单体验。
    */
+  /**
+   * 从 open-menu-content 的 detail 里定位任务列表块元素（<li data-subtype="t">）。
+   *
+   * 思源对列表右键时 detail.element 可能是外层 <ul>（subtype 非 t），真正的任务项在它的后代里，
+   * 故先认自身、再向下找，并兼容 detail.blockElements（部分版本把命中块放在这里）。
+   */
+  private resolveTaskNode(detail: any): HTMLElement | undefined {
+    const roots: any[] = [];
+    if (detail?.element) roots.push(detail.element);
+    if (Array.isArray(detail?.blockElements)) roots.push(...detail.blockElements);
+    for (const el of roots) {
+      if (!el || typeof el.getAttribute !== "function") continue;
+      if (el.getAttribute("data-subtype") === "t" && el.getAttribute("data-node-id")) return el;
+      const li = el.querySelector?.('[data-subtype="t"][data-node-id]');
+      if (li) return li as HTMLElement;
+    }
+    return undefined;
+  }
+
   private async onBlockMenu(e: any): Promise<void> {
     try {
       const s = this.store.settings;
       if (!s.blockSyncEnabled) return;
       const detail = e?.detail;
-      const el: HTMLElement | undefined = detail?.element || detail?.blockElements?.[0];
-      // 只认任务列表块（思源的任务块 subtype 是 t）
-      const nodeId = el?.getAttribute?.("data-node-id") || "";
+      // 思源对列表/任务块右键时，detail.element 有时是外层 <ul>（subtype 为 u/空），
+      // 真正的任务项 <li data-subtype="t"> 是它的后代 —— 直接读 element 的 subtype 会取不到，
+      // 菜单项就永远不出现。这里先认自身、再向下找 li[data-subtype="t"]，并兼容 detail.blockElements。
+      const el = this.resolveTaskNode(detail);
+      if (!el) return;
+      const nodeId = el.getAttribute("data-node-id") || "";
       if (!nodeId) return;
-      const subtype = el?.getAttribute?.("data-subtype") || "";
-      if (subtype !== "t") return;
       const menu = detail?.menu;
       if (!menu?.addItem) return;
 

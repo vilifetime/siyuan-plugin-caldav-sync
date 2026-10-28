@@ -355,8 +355,12 @@ export default class CalDavPlugin extends Plugin {
     };
     const found = this.resolveTaskNode(detail);
     const foundId = found ? (found.getAttribute("data-node-id") || "").slice(0, 8) : "null";
+    // 文档内真实任务块计数（.protyle-task 是思源原生复选框），用于确认文档里到底有没有标准任务块
+    const tasksInDoc = (typeof document !== "undefined" && document.querySelectorAll)
+      ? document.querySelectorAll(".protyle-task").length
+      : -1;
     showMessage(
-      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | element=${descri(el)} | blockElements=${be.length} | found=${foundId}`,
+      `[块菜单诊断] hook=✓ enabled=${s.blockSyncEnabled} | element=${descri(el)} | blockElements=${be.length} | found=${foundId} | tasksInDoc=${tasksInDoc}`,
       6000,
       "info",
       "caldav-block-menu-diag"
@@ -372,6 +376,7 @@ export default class CalDavPlugin extends Plugin {
         id: (n.getAttribute?.("data-node-id") || "").slice(0, 8),
       })),
       found,
+      tasksInDoc,
     });
   }
 

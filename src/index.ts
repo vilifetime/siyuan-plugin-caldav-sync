@@ -300,8 +300,8 @@ export default class CalDavPlugin extends Plugin {
     // ⚠️ 总开关没打开就**一个菜单项都不挂** —— 功能没启用就不该在界面上出现。
     this.eventBus.on("open-menu-content", (e: any) => void this.onBlockMenu(e));
     // 块图标把手菜单入口（点块左侧 ⋮⋮ 图标把手）：与 open-menu-content 双入口并存。
-    // 该路径下插件完全掌控 label，故用名为「任务块 ⇄ VTODO」的子菜单收拢三态同步项，
-    // 绕开思源内核对 open-menu-content 自动套的「插件」分组（其名不可改）。
+    // 两个入口都通过 addFirstLevelMenuItem 直接挂主菜单第一层，绕过思源内核把插件项
+    // 统一收进写死「插件」子菜单的机制（已读 emitOpenMenu 源码确认无法改名/置顶）。
     this.eventBus.on("click-blockicon", (e: any) => this.onBlockIconMenu(e));
 
     if (this.store.isConfigured()) {
@@ -435,8 +435,10 @@ export default class CalDavPlugin extends Plugin {
       if (!nodeId) return;
       const menu = detail?.menu;
       if (!menu?.addItem) return;
-      // 右键正文路径：项直接挂到思源内核自动生成的「插件」子菜单下（该分组名不可改），三态同步项平铺进去。
-      for (const item of this.buildBlockSyncMenuItems(nodeId, el, s)) menu.addItem(item);
+      // 右键正文路径：思源内核会把插件项统一收进写死的「插件」子菜单（已读 emitOpenMenu 源码确认，
+      // open-menu-content 与 click-blockicon 都套「插件」、且插件侧无法改名/置顶）。
+      // 故直接挂到主菜单第一层（钩子在「插件」被套之前执行），让项不再埋进「插件」。
+      for (const item of this.buildBlockSyncMenuItems(nodeId, el, s)) this.addFirstLevelMenuItem(menu, item);
     } catch (err) {
       console.warn("[caldav] 块菜单钩子失败（已忽略）", err);
     }
@@ -509,6 +511,22 @@ export default class CalDavPlugin extends Plugin {
    *
    * ⚠️ 全程同步 addItem，禁止在注入前 await（否则项丢失）。
    */
+  /**
+   * 把同步菜单项加到「第一层」主菜单，从而绕过思源内核把插件项统一收进写死「插件」子菜单的机制。
+   *
+   * 依据（已读本机思源 resources/stage/build/desktop/main.*.js 的 emitOpenMenu 源码，模块 31417）：
+   *   内核在广播 open-menu-content / click-blockicon 事件（我们的钩子就在这时执行）**之后**，
+   *   才把临时 submenu 套进名为「插件」(languages.plugin) 的子菜单，且插件侧无法改名/置顶。
+   *   所以钩子里直接往 window.siyuan.menus.menu 加项，就能落在「插件」之前、即第一层
+   *   （番茄钟等插件也是这个套路）。旧版本若取不到主菜单对象，则回退到 detail.menu
+   *   （仍会被收进「插件」，但不致报错）。
+   */
+  private addFirstLevelMenuItem(detailMenu: any, item: any): void {
+    const main = (window as any)?.siyuan?.menus?.menu;
+    const target = main && typeof main.addItem === "function" ? main : detailMenu;
+    target.addItem(item);
+  }
+
   private onBlockIconMenu(e: any): void {
     try {
       const s = this.store.settings;
@@ -521,7 +539,8 @@ export default class CalDavPlugin extends Plugin {
       if (!nodeId) return;
       const menu = detail?.menu;
       if (!menu?.addItem) return;
-      menu.addItem({
+      // 绕过「插件」分组：直接挂主菜单第一层（内核 emitOpenMenu 在钩子之后才套「插件」）。
+      this.addFirstLevelMenuItem(menu, {
         icon: "iconCalDavSync",
         label: "任务块 ⇄ VTODO",
         type: "submenu",

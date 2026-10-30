@@ -27,6 +27,15 @@
  */
 import type { CalItem, CalSettings } from "./types";
 import { defaultStartStamp, todayStamp, stampOfMs, addDays as addDaysStamp } from "./date";
+import {
+  type TaskState,
+  canWriteState,
+  mergeServerState,
+  markerOfState,
+  stateOfStatus,
+  statusFields,
+  taskStateOfMarkdown
+} from "./task-state";
 
 /** 文档里的任务块（内核 SQL 出来后已清洗） */
 export interface BlockTask {
@@ -34,8 +43,17 @@ export interface BlockTask {
   id: string;
   /** 块的可见文字（已去 `- [ ] ` 标记、引用链接还原为纯文本、去前后空白、去掉同步前缀） */
   text: string;
-  /** 勾选态（完成） */
+  /**
+   * 任务状态（四态）：待办 / 进行中 / 完成 / 放弃。
+   *
+   * 来自 markdown 第一行的 marker（`- [ ]` / `- [/]` / `- [X]` / `- [-]`），
+   * 与 VTODO 的 STATUS 一一对应。详见 core/task-state.ts。
+   */
+  state: TaskState;
+  /** 勾选态（完成）—— `state === "done"` 的兼容视图，保留给旧调用点 */
   checked: boolean;
+  /** markdown 里的原始 marker（自定义任务状态时用它才能原样写回） */
+  marker?: string;
   /** 所在文档 ID */
   rootId?: string;
   /** 所在笔记本 ID */
@@ -54,6 +72,9 @@ export interface BlockCreate {
   block: BlockTask;
   /** 写入 VTODO 的标题（已按设置拼好前缀） */
   summary: string;
+  /** 块的任务状态（四态） */
+  state: TaskState;
+  /** 勾选态（完成）—— 兼容视图 */
   completed: boolean;
 }
 
@@ -63,10 +84,13 @@ export interface BlockPush {
   block: BlockTask;
 }
 
-/** 回写动作：把块改成 checked（文字不回写，理由见下） */
+/** 回写动作：把块改成指定状态（文字不回写，理由见下） */
 export interface BlockWriteback {
   item: CalItem;
   block: BlockTask;
+  /** 目标状态（四态） */
+  state: TaskState;
+  /** 勾选态（完成）—— 兼容视图 */
   checked: boolean;
 }
 
@@ -85,10 +109,17 @@ export const DEFAULT_BLOCK_PREFIX = "[文档]";
 /**
  * 块的原始 markdown → 勾选态。
  * 只看第一个 `- [ ]` / `- [x]`（块可能有缩进，也可能带子块），避免误伤正文里的方括号。
+ *
+ * ⚠️ 现在走统一的状态模型（core/task-state.ts），所以 `- [/]`（进行中）、`- [-]`（放弃）
+ *    也认得 —— 它们都不是「勾选态」，所以这里返回 false，与旧口径一致。
  */
 export function blockCheckedOf(markdown: string): boolean {
-  const m = /^\s*[-*+]\s+\[([ xX])\]/.exec(markdown || "");
-  return !!m && m[1].toLowerCase() === "x";
+  return taskStateOfMarkdown(markdown).state === "done";
+}
+
+/** 块的原始 markdown → 四态任务状态（待办 / 进行中 / 完成 / 放弃） */
+export function blockStateOf(markdown: string): TaskState {
+  return taskStateOfMarkdown(markdown).state;
 }
 
 /**
@@ -122,9 +153,19 @@ export function blockBadgeOn(settings: CalSettings): boolean {
   return settings.blockSyncMarks === undefined || settings.blockSyncMarks.includes("badge");
 }
 
-/** 完成态的字段组合（与编辑器口径一致：完成=100%/COMPLETED，未完成=0%/NEEDS-ACTION） */
+/**
+ * 完成态的字段组合（与编辑器口径一致：完成=100%/COMPLETED，未完成=0%/NEEDS-ACTION）。
+ *
+ * ⚠️ 旧的二态接口，保留给非块来源的调用点（编辑器、面板等）。
+ *    块来源的条目请用 `statusFields(state)`（四态，见 core/task-state.ts）。
+ */
 export function completedFields(completed: boolean): Pick<CalItem, "status" | "percent"> {
   return completed ? { status: "COMPLETED", percent: 100 } : { status: "NEEDS-ACTION", percent: 0 };
+}
+
+/** 四态 → 服务端条目字段（转发到统一状态模型，避免两处各写一份映射） */
+export function stateFields(state: TaskState): Pick<CalItem, "status" | "percent"> {
+  return statusFields(state);
 }
 
 /**
@@ -150,6 +191,19 @@ export function blockDefaultStart(): string {
 
 function localNowStamp(): string {
   return stampOfMs(Date.now());
+}
+
+/**
+ * 条目缓存的块状态。
+ *
+ * ⚠️ `blockState` 是四态改造新增的字段，**老数据只有 `blockChecked`（布尔）** ——
+ *    这里从它推导：true → 完成，false → 待办。
+ *    （进行中 / 放弃是新增能力，老数据本来就没有，推导不出也不影响正确性。）
+ */
+export function cachedStateOf(item: CalItem): TaskState | undefined {
+  if (item.blockState) return item.blockState;
+  if (item.blockChecked === undefined) return undefined;
+  return item.blockChecked ? "done" : "todo";
 }
 
 /**
@@ -197,13 +251,15 @@ export function planBlockSync(
       plan.creates.push({
         block: b,
         summary: withPrefix(b.text, settings),
-        completed: b.checked
+        state: b.state,
+        completed: b.state === "done"
       });
       continue;
     }
     byBlock.delete(b.id);
 
-    const serverCompleted = it.percent === 100 || it.status === "COMPLETED";
+    // 服务端条目当前的**四态**（STATUS + PERCENT-COMPLETE → 待办/进行中/完成/放弃）
+    const serverState = stateOfStatus(it.status, it.percent);
     // ── 文字：**一律以块为准**（文档是主体）──
     //
     // 为什么不回写块文字：块的 `content` 是纯文本，块里可能有加粗、行内代码、引用
@@ -214,23 +270,29 @@ export function planBlockSync(
     const nextText = b.text;
     const textDiffers = stripPrefix(it.summary || "", settings) !== nextText;
 
-    // ── 勾选 / 完成：双向 ──
-    // 判据靠缓存：稳态下 `块.checked === item.blockChecked === 服务端完成态`，
+    // ── 任务状态（四态）：双向 ──
+    //
+    // 判据靠缓存：稳态下 `块.state === item.blockState === 服务端状态`，
     // 谁跟缓存不一样就是谁动了。缓存缺失（服务端重建映射）→ 以块为准。
-    const cachedChecked = it.blockChecked;
-    const blockChanged = cachedChecked === undefined ? false : b.checked !== cachedChecked;
-    const serverChanged = cachedChecked === undefined ? false : serverCompleted !== cachedChecked;
-    let nextChecked: boolean;
+    const cachedState = cachedStateOf(it);
+    const blockChanged = cachedState === undefined ? false : b.state !== cachedState;
+    const serverChanged = cachedState === undefined ? false : serverState !== cachedState;
+    let nextState: TaskState;
     if (blockChanged && serverChanged) {
-      // 两边都动了 → 完成优先（完成是终态，避免来回翻转）
-      nextChecked = b.checked || serverCompleted;
+      // 两边都动了 → 完成优先（完成是终态，避免来回翻转）；其余以块为准
+      nextState = b.state === "done" || serverState === "done" ? "done" : b.state;
     } else if (blockChanged) {
-      nextChecked = b.checked;
+      // 块改了 → 以块为准（用户的主数据）
+      nextState = b.state;
     } else if (serverChanged) {
-      // 服务端态与缓存不符，而**块没动**。
+      // 服务端态与缓存不符，而**块没动** → 走**单向保险**。
       //
-      // ⚠️⚠️ **只有「服务端说完成了、块说没完成」才回写块（勾上）**（2026-10-30 用户实测踩中）。
-      //   反过来「服务端说没完成、块说已完成」→ **一律以块为准，绝不回写取消勾选**。
+      // ⚠️⚠️ **服务端只能把块往前推，不能把块往回拽**（2026-10-30 用户实测踩中过一次）。
+      //   规则（见 core/task-state.ts 的 mergeServerState）：
+      //     · 服务端「完成」  → 允许（块可以是待办/进行中/放弃）
+      //     · 服务端「进行中」→ 只在块是「待办」时允许
+      //     · 服务端「放弃」  → 只在块是「待办/进行中」时允许
+      //     · 服务端「待办」  → **永远不允许**（服务端只是「没标完成」，没有更多信息）
       //
       // 【踩坑经过】用户「AI开发」文档里 60 个已勾选的任务块，一夜之间全被改成未勾选。
       //   根因：服务端那条 VTODO 当时是 NEEDS-ACTION，而缓存记着「块是勾选的」→
@@ -245,48 +307,57 @@ export function planBlockSync(
       //   更新时带 `If-Match: <本地 etag>`，服务端内容已变 → 返 412 →
       //   插件按冲突策略（server=服务端优先）丢弃本地改动 → 完成态被服务端那份覆盖。
       //
-      // 【正确口径】完成态只允许**单向**影响块：服务端「完成」→ 块可以勾上；
-      //   服务端「未完成」→ **不许**把块取消勾选。取消勾选只能由用户在文档里直接做。
-      //   这条铁律不依赖「服务端靠不靠谱」，是**结构性保险**：最坏只是该勾的没勾，
+      // 【正确口径】状态只允许**单向**影响块：服务端能安全推进块时才写回；
+      //   取消勾选只能由用户在文档里直接做。
+      //   这条铁律不依赖「服务端靠不靠谱」，是**结构性保险**：最坏只是该推进的没推进，
       //   绝不会出现用户勾好的待办被插件悄悄取消。
-      nextChecked = serverCompleted ? true : b.checked;
+      nextState = mergeServerState(b.state, serverState);
     } else {
-      nextChecked = cachedChecked === undefined ? b.checked : cachedChecked;
+      nextState = cachedState === undefined ? b.state : cachedState;
     }
 
-    const checkedDiffers = b.checked !== nextChecked;
-    const itemDiffers = textDiffers || serverCompleted !== nextChecked;
+    const stateDiffers = b.state !== nextState;
+    const itemDiffers = textDiffers || serverState !== nextState;
 
     const next: CalItem = {
       ...it,
       blockText: nextText,
-      blockChecked: nextChecked
+      blockChecked: nextState === "done",
+      blockState: nextState
     };
     if (itemDiffers) {
       next.summary = withPrefix(nextText, settings);
-      Object.assign(next, completedFields(nextChecked));
-      if (nextChecked && !it.completedAt) next.completedAt = localNowStamp();
-      if (!nextChecked) next.completedAt = undefined;
+      Object.assign(next, statusFields(nextState));
+      if (nextState === "done" && !it.completedAt) next.completedAt = localNowStamp();
+      if (nextState !== "done") next.completedAt = undefined;
     }
 
-    if (!itemDiffers && !checkedDiffers) {
+    if (!itemDiffers && !stateDiffers) {
       // 完全对齐，但缓存可能还没建（首次/映射重建）→ 只落缓存，不算动作
-      if (it.blockText !== nextText || it.blockChecked !== nextChecked) {
+      if (it.blockText !== nextText || it.blockChecked !== (nextState === "done")) {
         plan.pushes.push({ item: next, block: b });
       } else {
         plan.unchanged++;
       }
       continue;
     }
-    // 块侧要改 → 回写块的勾选
+    // 块侧要改 → 回写块的状态
     //
-    // ⚠️⚠️ **回写块只允许「勾上」，绝不允许「取消勾选」**（2026-10-30 用户实测踩中）。
-    //   这是结构性保险：哪怕上面的判定逻辑将来又被改错，最坏也只是「该勾的没勾」，
+    // ⛔⛔ **结构性保险（函数级）**：只有「服务端状态能安全推进块」时才允许回写。
+    //   `canWriteState` 把「不许降级」写死在状态模型里（core/task-state.ts），
+    //   哪怕上面的判定逻辑将来又被改错，最坏也只是「该推进的没推进」，
     //   绝不会出现「用户勾好的待办被插件悄悄取消」—— 那是直接改写用户的主数据。
-    //   取消勾选只能由用户在文档里亲手做。
-    const wouldUncheck = b.checked === true && nextChecked === false;
-    if (checkedDiffers && !wouldUncheck) plan.writebacks.push({ item: next, block: b, checked: nextChecked });
-    // 条目侧要改（文字/完成态，或只是补缓存）→ 推送
+    //   （旧口径是特判 `wouldUncheck`，只能防「取消完成」；现在连「取消完成」、
+    //   「撤销放弃」、「把进行中拽回待办」都一并挡住了。）
+    if (stateDiffers && canWriteState(b.state, nextState)) {
+      plan.writebacks.push({
+        item: next,
+        block: b,
+        state: nextState,
+        checked: nextState === "done"
+      });
+    }
+    // 条目侧要改（文字/状态，或只是补缓存）→ 推送
     plan.pushes.push({ item: next, block: b });
   }
 
@@ -321,14 +392,18 @@ export function planBlockSync(
  */
 export function blockItemDrift(item: CalItem, settings: CalSettings): boolean {
   if (item.kind !== "todo" || !item.blockId) return false;
-  if (item.blockChecked === undefined || item.blockText === undefined) return true;
-  const serverCompleted = item.percent === 100 || item.status === "COMPLETED";
-  // ⚠️ 完成态只认**一个方向**的漂移：「服务端完成了、块还没完成」—— 那才是真需要
-  //   把块勾上的场景（手机端勾完成 → 回写文档）。
-  //   反过来「服务端没完成、块是勾好的」**不算漂移**：服务端完成态不可靠（实测 Baikal
-  //   会把 COMPLETED 降级回 NEEDS-ACTION），判成漂移会让每轮扫描都把这些条目按 ID
-  //   捞回来重新对账 —— 白跑一轮，且反复触发完成态判定（2026-10-30 用户实测踩中）。
-  if (serverCompleted && !item.blockChecked) return true;
+  const cached = cachedStateOf(item);
+  if (cached === undefined || item.blockText === undefined) return true;
+  const server = stateOfStatus(item.status, item.percent);
+  // ⚠️ 只认**能安全推进块**的方向的漂移 —— 判据直接复用单向保险的同一函数
+  //   （mergeServerState）：服务端状态若会改变块的状态，就是真漂移。
+  //   · 服务端「完成」+ 块未完成 → 漂移（要回写勾上，手机端勾完成 → 回写文档）
+  //   · 服务端「进行中/放弃」+ 块是待办 → 漂移（明确状态，可以推进）
+  //   · 服务端「待办」+ 块已完成 → **不算漂移**：服务端只是没标完成，没有更多信息；
+  //     判成漂移会让每轮扫描都把这些条目按 ID 捞回来重新对账 —— 白跑一轮，
+  //     且反复触发完成态判定（2026-10-30 用户实测踩中）。
+  //   · 服务端「进行中/放弃」+ 块已完成 → **不算漂移**（不撤销用户的完成）
+  if (mergeServerState(cached, server) !== cached) return true;
   if (stripPrefix(item.summary || "", settings) !== item.blockText) return true;
   return false;
 }

@@ -594,11 +594,14 @@ section("[blockscan] ⑨ 完成态回写的方向性（2026-10-30 用户实测�
 //   而 store 缓存里记着「块是勾选的」→ 旧逻辑判定成「服务端改了」→ 回写块取消勾选。
 //   后果：用户 60 个已勾选的任务块被批量拍成 "- [ ]"。
 const checkedRow = (id, text) => fakeBlock(id, text, "20260101000000", { markdown: `- [X] ${text}` });
-const blockTask = (id, text, checked) => ({
+const blockTask = (id, text, checked, state) => ({
   id,
   text,
   markdown: checked ? `- [X] ${text}` : `- [ ] ${text}`,
   checked,
+  // 四态（待办/进行中/完成/放弃）—— 不显式给 state 时按 checked 推导
+  state: state ?? (checked ? "done" : "todo"),
+  marker: checked ? "X" : " ",
   rootId: "doc1",
   box: "box1",
   hpath: "/测试"

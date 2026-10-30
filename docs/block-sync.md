@@ -69,27 +69,75 @@ X-SIYUAN-BLOCK-ID: 20261028123456-abcdef
 > 这样「文档被删且当时没打开」「笔记本被删」都能正确跟删 VTODO；
 > 反过来，块只是「不在本次扫描范围内」（文档关着、不在指定笔记本）**绝不能误删**。
 
-### 2.3 状态映射与冲突
+### 2.3 状态映射与冲突（四态完全对应）
+
+思源任务块有四种状态，RFC 5545 的 VTODO 也恰好有四个 `STATVALUE-TODO` ——
+**两边一一对应，插件做的是完整映射，不只映射「完成 / 未完成」两态**。
+
+| 思源（菜单 / markdown） | marker | 块状态 | VTODO `STATUS` | `PERCENT-COMPLETE` |
+| --- | --- | --- | --- | --- |
+| 待办 | `" "` | `- [ ]` | `NEEDS-ACTION` | 0 |
+| 进行中 | `"/"` | `- [/]` | `IN-PROCESS` | 0 |
+| 完成 | `"X"` | `- [X]` | `COMPLETED` | 100 |
+| 放弃 | `"-"` | `- [-]` | `CANCELLED` | 0 |
+
+**marker 的来源是思源内核源码，不是猜的**：
+
+- `app/src/protyle/wysiwyg/taskStatusDialog.ts` —— 菜单项与 marker 的对应：
+  `taskStatusTodo` → `" "`、`taskStatusInProgress` → `"/"`、
+  `taskStatusDone` → `"X"`、`taskStatusCanceled` → `"-"`。
+- `app/src/protyle/wysiwyg/taskListMarker.ts` —— 状态循环顺序 `[" ", "/", "X", "-"]`；
+  `isTaskListMarker` 允许**任意单字符**（用户可自定义任务状态）。
+- `app/src/protyle/wysiwyg/list.ts` 的 `setTaskListItemMarker` —— 点菜单就是改 marker，
+  再 `updateTransaction` 写回文档。
+- `kernel/treenode/block_structure.go` —— 内核 AST 有**专门的节点类型**
+  `ast.NodeTaskListItemMarker`，marker 是独立节点（不是拼在文本里的），
+  序列化时原样写回。
+
+**本机真机实测（内核 Lute 解析，只读、无副作用）**：
+把 markdown 丢给内核的 `/api/lute/spinBlockDOM`，看它渲染出的任务项上 `data-task` 属性：
+
+| 输入 markdown | 内核 `data-task` | `data-subtype` |
+| --- | --- | --- |
+| `- [ ] 待办` | `" "` | `t` |
+| `- [/] 进行中` | `"/"` | `t` |
+| `- [X] 完成` | `"X"` | `t` |
+| `- [-] 放弃` | `"-"` | `t` |
+| `- [!] 自定义` | `"!"` | `t` |
+
+→ **内核原样保留 marker 字符**，四态映射的前提成立。
+（复现脚本见 `.probe/probe-lute.cjs`，只调 Lute 解析接口，不建块不删块。）
+
+**自定义任务状态**（`- [!]` 这类）：VTODO 没有对应值，**保守归为「待办」**
+（既不说成完成，也不说成放弃）。插件也**不会**去改写这类块的 marker ——
+状态没变就不写回。
 
 | 方向 | 规则 |
 | --- | --- |
-| 块 → VTODO | `checked` → `COMPLETED/percent=100`，否则 `NEEDS-ACTION/percent=0` |
-| VTODO → 块 | `COMPLETED` → 块打勾 `- [X]`；**`NEEDS-ACTION` 一律不回写块**（见 2.7） |
+| 块 → VTODO | 按上表逐态映射（`STATUS` + `PERCENT-COMPLETE`） |
+| VTODO → 块 | 服务端状态**只允许往前推**块（见 2.7）：完成 → `- [X]`、进行中 → `- [/]`、放弃 → `- [-]`；「待办」**一律不回写** |
 | 文字 | **一律以块为准**（详见 2.4） |
 | 完成优先 | 两边都动了、其中一边是完成 → 按完成处理（完成是终态，不会来回翻转） |
 
-待办块没有「放弃」状态，对应到 VTODO 只有「完成 / 未完成」两态（按完成映射）。
+**实现位置**：状态模型集中在 `src/core/task-state.ts`（思源 marker ⇄ 内部四态 ⇄
+VTODO `STATUS`/`PERCENT`），core 里其它模块一律引用那里的函数，**不各写一份映射**。
 
-### 2.7 完成态回写是**单向**的：只许勾上，不许取消（2026-10-30 用户实测踩中）
+> ⚠️ 服务端可能给出四个合法值之外的东西（别的客户端乱写的）。`normalizeTodoStatus`
+> 一律归一到 `NEEDS-ACTION`，**绝不把不认识的值原样写回去** —— 那会让部分客户端解析失败。
 
-**规则**：服务端完成态**只允许**「勾上」块，**绝不允许**「取消勾选」块。
+### 2.7 状态回写是**单向**的：服务端只能把块往前推（2026-10-30 用户实测踩中）
+
+**规则**：服务端状态**只允许**把块往前推，**绝不允许**把块往回拽。
 
 ```
-服务端说「已完成」+ 块说「没完成」 → 回写块（勾上）✓
-服务端说「未完成」+ 块说「已完成」 → 以块为准 + 推送服务端，**不回写块** ✓
+服务端「完成」   + 块任意状态     → 回写块（完成）✓
+服务端「进行中」 + 块是待办        → 回写块（进行中）✓
+服务端「放弃」   + 块是待办/进行中 → 回写块（放弃）✓
+服务端「待办」   + 块任意状态     → 以块为准 + 推送服务端，**不回写块** ✓
+服务端「进行中/放弃」+ 块已完成   → 以块为准，**不回写块** ✓
 ```
 
-**为什么不能信服务端说「未完成」**：服务端那份完成态**可能因为同步冲突而与本地不一致**。
+**为什么不能信服务端说「未完成」**：服务端那份状态**可能因为同步冲突而与本地不一致**。
 ⚠️ **不要归咎于「Baikal 会降级完成态」** —— 那是错的，2026-10-30 实测证伪：
 
 - Baikal **完整保留** `STATUS:COMPLETED`：新建即 `COMPLETED` → `GET` 仍是 `COMPLETED`；
@@ -116,15 +164,19 @@ X-SIYUAN-BLOCK-ID: 20261028123456-abcdef
 修复后同一场景：**回写 0 次**，且把服务端纠正回 `COMPLETED`（自愈）。
 
 **三重保险**：
-1. 判定层：`serverChanged` 分支改为「服务端勾了才回写勾上；服务端没勾 → 以块为准」。
-2. 结构性保险：`writebacks` 里**永不允许出现「把已勾选的块改成未勾选」**的条目 ——
-   哪怕将来判定逻辑又被改错，最坏也只是「该勾的没勾」，绝不会动用户的主数据。
-3. 漂移检测只认「服务端完成、块未完成」这一个方向 —— 否则服务端不支持完成态时，
-   每轮扫描都会把所有条目按 ID 捞回来重新对账（白跑一轮）。
+1. 判定层：`serverChanged` 分支改为「服务端状态**能安全推进块**时才推进；
+   服务端说「待办」→ 一律以块为准」。
+2. 结构性保险（**函数级**）：回写之前必须过 `canWriteState(current, target)` ——
+   判据直接复用状态模型里 `mergeServerState` 的同一套规则，**不是特判「取消勾选」**。
+   哪怕将来上面的判定逻辑又被改错，最坏也只是「该推进的没推进」，
+   绝不会动用户的主数据（旧口径只能防「取消完成」，现在连「撤销放弃」、
+   「把进行中拽回待办」都一并挡住了）。
+3. 漂移检测只认「**能安全推进块**」的方向 —— 判据同样是 `mergeServerState(cached, server) !== cached`。
+   否则服务端不支持完成态时，每轮扫描都会把所有条目按 ID 捞回来重新对账（白跑一轮）。
 4. `mergeServerItems`：块来源条目的完成态**自我保护** —— 本地记着「已完成」而服务端说
    「未完成」时保留本地态，避免冲突污染扩散到插件各处（待办列表显示错乱、反复推送）。
 
-> 代价：在别的客户端**取消**勾选，不再同步回文档。取消勾选只能由用户在文档里亲手做。
+> 代价：在别的客户端**取消**勾选 / 改成待办，不再同步回文档。取消勾选只能由用户在文档里亲手做。
 > 这是有意取舍：用户的主数据在文档里，服务端那份可能因 412 冲突与本地不一致。
 
 ### 2.4 为什么不回写块文字（重要设计取舍）
@@ -225,8 +277,9 @@ LIMIT 5000
 
 | 文件 | 职责 |
 | --- | --- |
+| `src/core/task-state.ts` | **状态模型唯一实现**：思源 marker（`" "`/`"/"`/`"X"`/`"-"`）⇄ 内部四态（`todo`/`in-progress`/`done`/`canceled`）⇄ VTODO `STATUS`/`PERCENT-COMPLETE`；外加**单向保险** `mergeServerState` / `canWriteState` 与 marker 改写 `withMarkerMarkdown` |
 | `src/core/block-todo.ts` | 对账纯逻辑 `planBlockSync()`、文字清洗、前缀、默认截止、完成字段、类型 `BlockTask`/`CalItem.blockId` 等 |
-| `src/core/block-api.ts` | **唯一碰内核接口的地方**：`scanTaskBlocks`（支持增量 `since`）/ `scanTaskBlocksByIds`（漂移用）/ `blocksExistById`（返回 `{found, failed, truncated}`）/ `setBlockChecked` / `setBlockSkip` / `getTaskBlockById` / `blockStampOf` / `listNotebooks`，通过注入 `KernelCaller` 解耦 |
+| `src/core/block-api.ts` | **唯一碰内核接口的地方**：`scanTaskBlocks`（支持增量 `since`）/ `scanTaskBlocksByIds`（漂移用）/ `blocksExistById`（返回 `{found, failed, truncated}`）/ `setBlockChecked` / `setBlockState`（四态写回）/ `setBlockSkip` / `getTaskBlockById` / `blockStampOf` / `listNotebooks`，通过注入 `KernelCaller` 解耦 |
 | `src/core/block-sync.ts` | 执行层 `runBlockSync`（含全量/增量模式判定、水位线推进、漂移检测）/ `convertBlock` / `unsyncBlock` / `resyncBlock` / `clearBlockSync`；所有上传/删除走 `SyncEngine` 的串行推送链（不绕过，避免 412 丢改动） |
 | `src/core/ics.ts` | `X-SIYUAN-BLOCK-ID` 写入/读回，纳入 MANAGED 属性集 |
 | `src/core/types.ts` | 新增配置项与 `CalItem.blockId?`/`blockText?`/`blockChecked?` |
@@ -234,8 +287,9 @@ LIMIT 5000
 | `src/ui/settings-dialog.ts` | 新增「思源任务块识别与映射」设置段 + 立即扫描 / 一键清理 |
 | `src/ui/view-task.ts` / `src/ui/panel.ts` | 块来源条目加「文档」角标 |
 | `src/index.css` | `.cal-task-doc`、`.caldav-dock-tag--ghost` 样式 |
-| `test/blocksync.test.mjs` | 44 项单测（含「删除判生死不得按扫描范围收口」源码级断言），已挂进 `npm test` |
+| `test/blocksync.test.mjs` | 46 项单测（含「删除判生死不得按扫描范围收口」源码级断言），已挂进 `npm test` |
 | `test/blockscan.test.mjs` | 37 项单测（增量扫描 / 水位线 / 漂移 / 截断坑 / 缓存不被抹掉 / **★单文档扫描误删回归** / **★完成态回写方向性**），已挂进 `npm test` |
+| `test/task-state.test.mjs` | **51 项单测**（marker ⇄ 四态 ⇄ VTODO 映射 / marker 改写 / **★单向保险** / 四态对账动作 / ICS 往返 / 源码级防漂移），已挂进 `npm test` |
 
 ---
 
@@ -347,7 +401,7 @@ LIMIT 5000
 
 ## 8. 测试覆盖
 
-`test/blocksync.test.mjs`（**43 项**）+ `test/blockscan.test.mjs`（**23 项**），均已挂进 `npm test`：
+`test/blocksync.test.mjs`（**46 项**）+ `test/blockscan.test.mjs`（**37 项**）+ `test/task-state.test.mjs`（**51 项**），均已挂进 `npm test`：
 
 1. **ICS 层**：`X-SIYUAN-BLOCK-ID` 写入 / 读回 / 编辑后不丢不重复。
 2. **对账层**：create / push / writeback / delete 四类动作；完成优先；范围存在性判据（删文档/笔记本不漏删、范围外不误删）。
@@ -355,6 +409,7 @@ LIMIT 5000
 5. **完成态方向性（2026-10-30 新增）**：服务端说未完成 + 块已勾选 → **绝不回写取消勾选**；服务端说已完成 + 块未勾 → 仍要回写勾上（反向能力不能坏）；writebacks 里永不允许「取消勾选」；漂移检测只认单向；冲突覆盖完成态时块来源条目保留本地完成态。
 6. **服务端不降级完成态（2026-10-30 实测证伪旧结论）**：以源码断言固化「不得把完成态不可靠归因于服务端降级」的注释口径 —— 防止后来者照着错误的旧注释再改回错误逻辑。
 4. **增量扫描（新增）**：增量 SQL 条件 / 空 `updated` 兜底；水位线推进规则（推进、单文档不推进、截断不推进、范围变更退回全量、24h 校准、手动全量）；服务端漂移 → 按 ID 捞块并回写；增量模式下删除判定；**内核 64 行截断坑**（存在性查询必须带 LIMIT）；`mergeServerItems` 不抹掉对账缓存。
+7. **四态映射（2026-10-30 新增，`test/task-state.test.mjs`）**：marker ⇄ 四态 ⇄ VTODO `STATUS`/`PERCENT` 的双向映射；marker 改写只动一个字符、子块不动；**★单向保险**（服务端「待办」永不覆盖块、服务端「进行中/放弃」不撤销已完成）；自定义任务状态保守归待办且不被改写；ICS 往返四态不失真；非法 `STATUS` 归一不原样回写。
 
 > 全量测试通过。
 

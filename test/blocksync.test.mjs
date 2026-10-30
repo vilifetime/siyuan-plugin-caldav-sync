@@ -53,10 +53,14 @@ const baseSettings = (over = {}) => ({
   blockSyncPrefix: "[文档]",
   ...over
 });
-const block = (id, text, checked = false) => ({
+const block = (id, text, checked = false, state) => ({
   id,
   text,
+  // 四态（待办/进行中/完成/放弃）—— 不显式给 state 时按 checked 推导，
+  // 兼容旧的二态用例（state 缺省 → 待办/完成）
+  state: state ?? (checked ? "done" : "todo"),
   checked,
+  marker: checked ? "X" : " ",
   markdown: `- [${checked ? "X" : " "}] ${text}`
 });
 const item = (over = {}) => ({
@@ -394,9 +398,14 @@ check("完成态不可靠的归因必须是「同步冲突(412)」，不得写�
 });
 check("服务端完成态被冲突覆盖时，块来源条目保留本地完成态", () => {
   const stSrc = read("src/core/store.ts");
+  // 自我保护的判据：本地记着「已完成」—— 四态里的 done，老数据走 blockChecked 兜底
   assert.match(
     stSrc,
-    /merged\.blockId && keep\?\.blockChecked === true && !\(merged\.percent === 100 \|\| merged\.status === "COMPLETED"\)/
+    /keep\?\.blockState === "done" \|\| \(keep\?\.blockState === undefined && keep\?\.blockChecked === true\)/
+  );
+  assert.match(
+    stSrc,
+    /merged\.blockId && localDone && !\(merged\.percent === 100 \|\| merged\.status === "COMPLETED"\)/
   );
 });
 

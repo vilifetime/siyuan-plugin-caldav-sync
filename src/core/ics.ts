@@ -9,6 +9,7 @@ import {
   addDays, dateStampOfMs, isDateOnly, parseLocalStamp, stampOfMs, zoneOffsetMs, weekdayIndexOfCode, padDate
 } from "./date";
 import { pad2 } from "./types";
+import { normalizeTodoStatus } from "./task-state";
 
 /**
  * 单个内联附件的**默认**硬上限（MB，2026-10-15，设置项可改）。
@@ -513,6 +514,9 @@ function itemFromComponent(
     const cm = firstProp(comp, "COMPLETED");
     if (cm?.value) item.completedAt = parseIcsStamp(cm);
     if (item.status === "COMPLETED") item.percent = 100;
+    // 「放弃」不是「部分完成」：服务端标了 CANCELLED 就把进度归零，
+    // 否则会读成「做到一半就放弃了」（块侧对应 `- [-]`）。
+    if (item.status === "CANCELLED") item.percent = 0;
   }
   const rr = firstProp(comp, "RRULE");
   if (rr?.value) item.rrule = parseRRule(rr.value);
@@ -658,9 +662,19 @@ function rebuildComponent(comp: IcsComponent, item: CalItem): IcsComponent {
   } else {
     if (item.end) push("DUE", stampToIcs(item.end, dateOnly), dateOnly ? { VALUE: "DATE" } : {});
     if (item.priority) push("PRIORITY", String(item.priority));
-    push("STATUS", item.percent === 100 ? "COMPLETED" : item.status === "IN-PROCESS" ? "IN-PROCESS" : "NEEDS-ACTION");
-    if (item.percent !== undefined && item.percent > 0) push("PERCENT-COMPLETE", String(item.percent));
-    if (item.percent === 100) push("COMPLETED", icsUtc(Date.now()));
+    // ⚠️ STATUS 归一到 VTODO 的四个 STATVALUE-TODO（RFC 5545）：
+    //   NEEDS-ACTION（待办）/ IN-PROCESS（进行中）/ COMPLETED（完成）/ CANCELLED（放弃）。
+    //   服务端可能存了别的值（别的客户端乱写的），一律按 NEEDS-ACTION 兜底 ——
+    //   绝不把「不认识的值」原样写回去，那会让部分客户端解析失败。
+    const todoStatus = normalizeTodoStatus(item.status, item.percent);
+    push("STATUS", todoStatus);
+    if (todoStatus === "COMPLETED") {
+      push("PERCENT-COMPLETE", "100");
+      push("COMPLETED", icsUtc(Date.now()));
+    } else if (todoStatus !== "CANCELLED" && item.percent !== undefined && item.percent > 0 && item.percent < 100) {
+      // 「放弃」不写进度 —— 放弃不是「部分完成」。
+      push("PERCENT-COMPLETE", String(item.percent));
+    }
   }
   if (item.rrule) push("RRULE", serializeRRule(item.rrule));
   if (item.recurId) push("RECURRENCE-ID", stampToIcs(item.recurId, item.allDay), item.allDay ? { VALUE: "DATE" } : {});

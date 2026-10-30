@@ -509,9 +509,9 @@ export class CalStore {
           continue;
         }
       }
-      // ⚠️ 块来源条目的**对账缓存不能丢**：blockId / blockText / blockChecked 记的是
-      //    「这条待办对应哪个块、上次对账时块是什么文字什么勾选态」。
-      //    服务端回来的 ICS 里**没有**后两个字段（只有 X-SIYUAN-BLOCK-ID），
+      // ⚠️ 块来源条目的**对账缓存不能丢**：blockId / blockText / blockChecked / blockState
+      //    记的是「这条待办对应哪个块、上次对账时块是什么文字什么状态」。
+      //    服务端回来的 ICS 里**没有**后几个字段（只有 X-SIYUAN-BLOCK-ID），
       //    整体替换会把缓存清空 —— 后果：下轮对账判不出「块改了还是服务端改了」，
       //    只能「以块为准」，于是**服务端那边的改动会被块的状态覆盖回去**
       //    （2026-10-30 实测：手机端勾完成 → 回到思源后又被未勾的块盖掉）。
@@ -523,7 +523,8 @@ export class CalStore {
         deleted: false,
         blockId: inc.blockId ?? keep?.blockId,
         blockText: inc.blockText ?? keep?.blockText,
-        blockChecked: inc.blockChecked ?? keep?.blockChecked
+        blockChecked: inc.blockChecked ?? keep?.blockChecked,
+        blockState: inc.blockState ?? keep?.blockState
       };
       // ⚠️⚠️ **块来源条目的完成态要自我保护**（2026-10-30 用户实测踩中）。
       //   ⚠️ **不要写成「服务端会降级完成态」** —— 那是错的，2026-10-30 实测证伪：
@@ -545,7 +546,12 @@ export class CalStore {
       //   故：块来源条目若本地记着「已完成」而服务端说「未完成」，**保留本地的完成态**。
       //   代价是「在别的客户端取消勾选」同步不过来 —— 这是有意取舍：
       //   用户的完成态主数据在文档里，服务端那份可能被 412 冲突覆盖。
-      if (merged.blockId && keep?.blockChecked === true && !(merged.percent === 100 || merged.status === "COMPLETED")) {
+      //
+      // ⚠️ 四态口径：这里只保护**完成态**（done）。进行中/放弃不在保护范围内 ——
+      //   它们的「降级」是正常的状态流转（手机端取消一条进行中的待办 → NEEDS-ACTION
+      //   是合法的），且回写块那一步还有 `canWriteState` 单向保险兜底。
+      const localDone = keep?.blockState === "done" || (keep?.blockState === undefined && keep?.blockChecked === true);
+      if (merged.blockId && localDone && !(merged.percent === 100 || merged.status === "COMPLETED")) {
         merged.status = "COMPLETED";
         merged.percent = 100;
       }

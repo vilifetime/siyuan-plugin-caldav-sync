@@ -21,12 +21,12 @@ import {
   blockDefaultStart,
   blockItemDrift,
   blockScopeSig,
-  completedFields,
   newBlockUid,
   planBlockSync,
+  stateFields,
   withPrefix
 } from "./block-todo";
-import { scanTaskBlocks, scanTaskBlocksByIds, blocksExistById, setBlockChecked, setBlockSkip, blockStampOf } from "./block-api";
+import { scanTaskBlocks, scanTaskBlocksByIds, blocksExistById, setBlockState, setBlockSkip, blockStampOf } from "./block-api";
 import type { BlockTask } from "./block-todo";
 import { stampOfMs, todayStamp } from "./date";
 
@@ -109,7 +109,8 @@ export function resolveBlockCalendar(s: CalSettings): CalCalendar | undefined {
 export function blockToItem(block: BlockTask, cal: CalCalendar, s: CalSettings): CalItem {
   const uid = newBlockUid();
   const start = blockDefaultStart();
-  const done = completedFields(block.checked);
+  // 四态 → 服务端字段（待办/进行中/完成/放弃），见 core/task-state.ts
+  const fields = stateFields(block.state);
   return {
     uid,
     kind: "todo",
@@ -120,12 +121,13 @@ export function blockToItem(block: BlockTask, cal: CalCalendar, s: CalSettings):
     start,
     end: blockDefaultEnd(s, start),
     priority: 0,
-    ...done,
-    completedAt: block.checked ? stampOfMs(Date.now()) : undefined,
+    ...fields,
+    completedAt: block.state === "done" ? stampOfMs(Date.now()) : undefined,
     createdAt: todayStamp() + "T" + new Date().toTimeString().slice(0, 8),
     blockId: block.id,
     blockText: block.text,
-    blockChecked: block.checked
+    blockChecked: block.state === "done",
+    blockState: block.state
   };
 }
 
@@ -254,11 +256,14 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
     checked
   });
 
-  // 1) 回写块（服务端完成态变了）：先改块，再改条目 —— 块是用户看得见的那一边
+  // 1) 回写块（服务端状态变了）：先改块，再改条目 —— 块是用户看得见的那一边
+  //
+  // ⚠️ 写回前 `planBlockSync` 已过 `canWriteState` 的**单向保险**：
+  //    只写「能安全推进」的状态，绝不把用户勾好的待办拽回未完成。
   for (const w of plan.writebacks) {
-    const ok = await setBlockChecked(deps.caller, {
+    const ok = await setBlockState(deps.caller, {
       id: w.block.id,
-      checked: w.checked,
+      state: w.state,
       markdown: w.block.markdown || ""
     });
     if (ok) res.written++;

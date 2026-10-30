@@ -22,6 +22,7 @@
  */
 import type { BlockTask } from "./block-todo";
 import { blockCheckedOf, cleanBlockText } from "./block-todo";
+import { type TaskState, markerOfState, taskStateOfMarkdown, withMarkerMarkdown } from "./task-state";
 
 /**
  * 内核接口调用：返回**完整响应信封** `{code,msg,data,limit,truncated}`。
@@ -141,11 +142,16 @@ function toBlockTasks(rows: any[], prefix?: string): BlockTask[] {
   for (const r of rows) {
     const text = cleanBlockText(r?.content || "", prefix);
     if (!r?.id || !text) continue;
+    const markdown = String(r.markdown || "");
+    // 四态（待办/进行中/完成/放弃）从 markdown 第一行的 marker 读，见 core/task-state.ts
+    const { state, marker } = taskStateOfMarkdown(markdown);
     out.push({
       id: String(r.id),
       text,
-      checked: blockCheckedOf(String(r.markdown || "")),
-      markdown: String(r.markdown || ""),
+      state,
+      marker,
+      checked: state === "done",
+      markdown,
       rootId: r.root_id ? String(r.root_id) : undefined,
       box: r.box ? String(r.box) : undefined,
       hpath: r.hpath ? String(r.hpath) : undefined
@@ -291,14 +297,24 @@ export function blockStampOf(ms: number): string {
 /**
  * 改块的勾选态：只动第一行 `- [ ]` / `- [X]` 的方括号，其余行（子块）原样带回。
  * @returns 改后的 markdown；返回 null 说明这行不是任务块行（拒绝改写，防止毁数据）
+ *
+ * ⚠️ 旧的二态接口，保留给非块来源的调用点。四态请用 `withStateMarkdown`。
  */
 export function withCheckedMarkdown(markdown: string, checked: boolean): string | null {
-  const lines = String(markdown || "").split("\n");
-  const first = lines[0] || "";
-  const m = /^(\s*[-*+]\s+\[)([ xX])(\])/.exec(first);
-  if (!m) return null;
-  lines[0] = `${m[1]}${checked ? "X" : " "}${m[3]}${first.slice(m[0].length)}`;
-  return lines.join("\n");
+  return withMarkerMarkdown(markdown, checked ? "X" : " ");
+}
+
+/**
+ * 改块的任务状态（四态）：只动第一行方括号里那**一个字符**。
+ *
+ * 思源的四种状态就存在这个字符里（`- [ ]` 待办 / `- [/]` 进行中 / `- [X]` 完成 /
+ * `- [-]` 放弃），详见 core/task-state.ts。写回时也只改这一个字符，
+ * 子块、缩进、正文里的方括号一律原样带回。
+ *
+ * @returns 改后的 markdown；返回 null 说明这行不是任务块行（拒绝改写，防止毁数据）
+ */
+export function withStateMarkdown(markdown: string, state: TaskState): string | null {
+  return withMarkerMarkdown(markdown, markerOfState(state));
 }
 
 /** 写回块的勾选态（用扫描时拿到的原始 markdown 改写，不重新拼整块） */
@@ -310,6 +326,22 @@ export async function setBlockChecked(
   if (!data) return false;
   const res = await caller("/api/block/updateBlock", { id: opts.id, dataType: "markdown", data });
   // 内核接口「成功但无 data」也算子成功，只有显式 code 才是失败
+  return !res || res.code === 0;
+}
+
+/**
+ * 写回块的任务状态（四态）。
+ *
+ * ⚠️ 调用方**必须**先过 `canWriteState`（单向保险）再调这里 —— 这里只管写，
+ *    不做判断，是刻意的：判断集中在一处，避免两处口径不一致。
+ */
+export async function setBlockState(
+  caller: KernelCaller,
+  opts: { id: string; state: TaskState; markdown: string }
+): Promise<boolean> {
+  const data = withStateMarkdown(opts.markdown, opts.state);
+  if (!data) return false;
+  const res = await caller("/api/block/updateBlock", { id: opts.id, dataType: "markdown", data });
   return !res || res.code === 0;
 }
 
@@ -341,11 +373,15 @@ export async function getTaskBlockById(
   if (!r?.id) return undefined;
   const text = cleanBlockText(r.content || "", prefix);
   if (!text) return undefined;
+  const markdown = String(r.markdown || "");
+  const { state, marker } = taskStateOfMarkdown(markdown);
   return {
     id: String(r.id),
     text,
-    checked: blockCheckedOf(String(r.markdown || "")),
-    markdown: String(r.markdown || ""),
+    state,
+    marker,
+    checked: state === "done",
+    markdown,
     rootId: r.root_id ? String(r.root_id) : undefined,
     box: r.box ? String(r.box) : undefined,
     hpath: r.hpath ? String(r.hpath) : undefined

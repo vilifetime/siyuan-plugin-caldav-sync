@@ -1,3 +1,5 @@
+import type { TaskState } from "./task-state";
+
 /** 条目种类 */
 export type CalKind = "event" | "todo";
 
@@ -104,6 +106,13 @@ export interface CalItem {
   blockText?: string;
   /** 上次同步时该块的勾选状态（对账缓存），作用同 blockText */
   blockChecked?: boolean;
+  /**
+   * 上次同步时该块的**四态任务状态**（待办 / 进行中 / 完成 / 放弃），作用同 blockText。
+   *
+   * ⚠️ 四态改造后新增的字段。老数据只有 `blockChecked`（布尔），由
+   *    `cachedStateOf()` 推导兼容（true → 完成，false → 待办）。
+   */
+  blockState?: TaskState;
   /** 待办完成度 0-100 */
   percent?: number;
   completedAt?: LocalStamp;

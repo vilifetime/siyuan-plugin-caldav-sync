@@ -164,15 +164,19 @@ function localNowStamp(): string {
  *                         跳过；不在 → 块真的没了，删 VTODO。
  *                         ⚠️ 用 ID 直接查存在性，而不是靠扫描范围判断 —— 否则「文档被删且
  *                         当时没打开」会被误判成「不在范围内」而漏删（雄哥 2026-10-28 追问）。
+ * @param opts.checked    **本轮实际查过存在性**的 blockId 集合。只有落在它里面、又不在
+ *                         `existing` 里的块才允许删除 —— 防止白名单出错导致删光用户待办
+ *                         （2026-10-30 用户实测踩中，见下方删除分支的注释）。
  */
 export function planBlockSync(
   blocks: BlockTask[],
   items: CalItem[],
   settings: CalSettings,
-  opts: { conflict?: "local" | "server"; existing?: Set<string> } = {}
+  opts: { conflict?: "local" | "server"; existing?: Set<string>; checked?: Set<string> } = {}
 ): BlockSyncPlan {
   const conflict = opts.conflict || "server";
   const existing = opts.existing || new Set<string>();
+  const checked = opts.checked;
   // 文字一律以块为准，冲突策略此刻只影响未来的「文字双向」能力，先留着（见下）
   void conflict;
   const plan: BlockSyncPlan = { creates: [], pushes: [], writebacks: [], deletions: [], unchanged: 0 };
@@ -223,7 +227,29 @@ export function planBlockSync(
     } else if (blockChanged) {
       nextChecked = b.checked;
     } else if (serverChanged) {
-      nextChecked = serverCompleted;
+      // 服务端态与缓存不符，而**块没动**。
+      //
+      // ⚠️⚠️ **只有「服务端说完成了、块说没完成」才回写块（勾上）**（2026-10-30 用户实测踩中）。
+      //   反过来「服务端说没完成、块说已完成」→ **一律以块为准，绝不回写取消勾选**。
+      //
+      // 【踩坑经过】用户「AI开发」文档里 60 个已勾选的任务块，一夜之间全被改成未勾选。
+      //   根因：服务端那条 VTODO 当时是 NEEDS-ACTION，而缓存记着「块是勾选的」→
+      //   判定落在 serverChanged 分支 → nextChecked = serverCompleted = false →
+      //   回写块，把用户的 `- [X]` 拍成 `- [ ]`。
+      //
+      // 【⚠️ 不要归咎于「服务端降级」】2026-10-30 实测证伪了那个说法：
+      //   Baikal **不会**无缘无故把 COMPLETED 改成 NEEDS-ACTION（新建→GET、
+      //   改回→GET、等 3 秒→GET 四轮往返全对；199 条 COMPLETED 逐条 GET 与
+      //   REPORT 两条路径读回来全是 COMPLETED）。
+      //   服务端那一刻之所以是 NEEDS-ACTION，是**插件自己写的**：
+      //   更新时带 `If-Match: <本地 etag>`，服务端内容已变 → 返 412 →
+      //   插件按冲突策略（server=服务端优先）丢弃本地改动 → 完成态被服务端那份覆盖。
+      //
+      // 【正确口径】完成态只允许**单向**影响块：服务端「完成」→ 块可以勾上；
+      //   服务端「未完成」→ **不许**把块取消勾选。取消勾选只能由用户在文档里直接做。
+      //   这条铁律不依赖「服务端靠不靠谱」，是**结构性保险**：最坏只是该勾的没勾，
+      //   绝不会出现用户勾好的待办被插件悄悄取消。
+      nextChecked = serverCompleted ? true : b.checked;
     } else {
       nextChecked = cachedChecked === undefined ? b.checked : cachedChecked;
     }
@@ -252,20 +278,69 @@ export function planBlockSync(
       }
       continue;
     }
-    // 块侧要改（服务端完成态变了）→ 回写块的勾选
-    if (checkedDiffers) plan.writebacks.push({ item: next, block: b, checked: nextChecked });
+    // 块侧要改 → 回写块的勾选
+    //
+    // ⚠️⚠️ **回写块只允许「勾上」，绝不允许「取消勾选」**（2026-10-30 用户实测踩中）。
+    //   这是结构性保险：哪怕上面的判定逻辑将来又被改错，最坏也只是「该勾的没勾」，
+    //   绝不会出现「用户勾好的待办被插件悄悄取消」—— 那是直接改写用户的主数据。
+    //   取消勾选只能由用户在文档里亲手做。
+    const wouldUncheck = b.checked === true && nextChecked === false;
+    if (checkedDiffers && !wouldUncheck) plan.writebacks.push({ item: next, block: b, checked: nextChecked });
     // 条目侧要改（文字/完成态，或只是补缓存）→ 推送
     plan.pushes.push({ item: next, block: b });
   }
 
   // 映射有、本轮扫描没扫到 → 查存在性：还活着（只是不在范围内）跳过，真没了就删
+  //
+  // ⚠️⚠️ **只有「本轮确实查过存在性、且确认不存在」的块才允许删**（2026-10-30 用户实测踩中）。
+  //   曾经的写法是「不在 existing 白名单里 → 删」—— 这意味着**白名单漏一个就删一个**。
+  //   而白名单的构造一旦出错（范围收窄、查询失败、忘了传），后果是**把用户的待办删光**。
+  //   改成「必须落在 checked（查过存在性）里，且不在 existing（还活着）里」→ 双重条件，
+  //   白名单算错最多是「该删的没删」，绝不会「不该删的删了」。
   for (const it of byBlock.values()) {
     const id = it.blockId as string;
-    if (existing.has(id)) continue;
+    if (existing.has(id)) continue;      // 还活着 → 跳过
+    if (checked && !checked.has(id)) continue; // 没查过存在性 → 不动（保守）
     plan.deletions.push(it);
   }
 
   return plan;
+}
+
+/**
+ * 条目是否「与服务端漂移」—— 即**服务端那边**的态，跟上次对账时缓存的块态对不上。
+ *
+ * 为什么需要它（增量扫描的配套件）：增量扫描只看**块侧**的改动。用户在手机端把待办
+ * 勾完成、或改了标题，块没动 → 增量扫描看不见这条 → 对账就不会发生，「服务端完成
+ * → 回写文档勾选」这条链就断了。靠本函数把这些条目挑出来，按 ID 把块捞回来对账。
+ *
+ * 判据与 planBlockSync 的缓存判据同源：
+ *   完成态：服务器态（percent / status）≠ 缓存的 blockChecked
+ *   标题  ：服务器标题（去前缀）≠ 缓存的 blockText
+ *   缓存缺失（老数据 / 映射重建）→ 视为漂移，让它重新对账一次把缓存建起来
+ */
+export function blockItemDrift(item: CalItem, settings: CalSettings): boolean {
+  if (item.kind !== "todo" || !item.blockId) return false;
+  if (item.blockChecked === undefined || item.blockText === undefined) return true;
+  const serverCompleted = item.percent === 100 || item.status === "COMPLETED";
+  // ⚠️ 完成态只认**一个方向**的漂移：「服务端完成了、块还没完成」—— 那才是真需要
+  //   把块勾上的场景（手机端勾完成 → 回写文档）。
+  //   反过来「服务端没完成、块是勾好的」**不算漂移**：服务端完成态不可靠（实测 Baikal
+  //   会把 COMPLETED 降级回 NEEDS-ACTION），判成漂移会让每轮扫描都把这些条目按 ID
+  //   捞回来重新对账 —— 白跑一轮，且反复触发完成态判定（2026-10-30 用户实测踩中）。
+  if (serverCompleted && !item.blockChecked) return true;
+  if (stripPrefix(item.summary || "", settings) !== item.blockText) return true;
+  return false;
+}
+
+/**
+ * 扫描范围的签名。
+ *
+ * 范围一变（换了范围模式、增删了笔记本），旧的水位线就不再覆盖新范围 → 必须重新
+ * 做一次全量，否则新范围里那些「老于水位线」的块会被永远跳过（静默漏同步）。
+ */
+export function blockScopeSig(s: CalSettings): string {
+  return JSON.stringify([s.blockSyncScope || "all", (s.blockSyncNotebooks || []).slice().sort()]);
 }
 
 /** 生成块来源条目的 UID（不依赖 ui 层，core 不能反向依赖 ui） */

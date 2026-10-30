@@ -174,8 +174,14 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
 
     // ── 渲染 ────────────────────────────────────────────────
     const rerender = (): void => {
+      // 记住滚动位置：innerHTML 重建后滚动条会归零，设置页一翻到底再重渲就弹回开头。
+      // 滚动发生在内层 .caldav-settings-form 上（外层 .caldav-settings 是 overflow:hidden）。
+      const formBefore = el.querySelector<HTMLElement>(".caldav-settings-form");
+      const keepTop = formBefore ? formBefore.scrollTop : 0;
       el.innerHTML = settingsHtml(s, mobile, activeAccId);
       bindAll();
+      const formAfter = el.querySelector<HTMLElement>(".caldav-settings-form");
+      if (formAfter && keepTop) formAfter.scrollTop = keepTop;
     };
 
     // ── 账户段交互 ──────────────────────────────────────────
@@ -503,7 +509,11 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         s.defaultTaskFilter = (($("select[data-s='defaultTaskFilter']")?.value || "last") as CalSettings["defaultTaskFilter"]);
         // 新建待办的默认截止时间（2026-10-27）
         s.todoDefaultEnd = (($("select[data-s='todoDefaultEnd']")?.value || "plus8h") as CalSettings["todoDefaultEnd"]);
-        s.blockSyncEnabled = !!($("input[data-s='blockSyncEnabled']") as HTMLInputElement | null)?.checked;
+        s.blockSyncEnabled = !!($("input[data-blk-enable]") as HTMLInputElement | null)?.checked;
+        s.blockSyncOnStartup = !!($("input[data-s='blockSyncOnStartup']") as HTMLInputElement | null)?.checked;
+        s.blockSyncOnManualSync = !!($("input[data-s='blockSyncOnManualSync']") as HTMLInputElement | null)?.checked;
+        s.blockSyncOnDocClose = !!($("input[data-s='blockSyncOnDocClose']") as HTMLInputElement | null)?.checked;
+        s.blockSyncIncremental = !!($("input[data-s='blockSyncIncremental']") as HTMLInputElement | null)?.checked;
         const bsCal = $("select[data-s='blockSyncCal']")?.value || "";
         s.blockSyncCalendarUrl = bsCal || undefined;
         s.blockSyncDefaultEnd = (($("select[data-s='blockSyncEnd']")?.value || "sameAsTodo") as CalSettings["blockSyncDefaultEnd"]);
@@ -615,6 +625,46 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
      * 笔记本列表是**异步**拿的（内核接口），所以容器先空着，选中「笔记本」范围时再填。
      */
     function bindBlockSync(): void {
+      // 任务块卡片的「全局开关 + 展开/收起」：胶囊 toggle（data-blk-enable）与卡片头（data-blk-head）
+      // 都能切换启用态 —— 开启即展开子设置，关闭即收起并完全停用（不扫描、无块菜单、不同步）。
+      const blkHead = el.querySelector<HTMLElement>("[data-blk-head]");
+      const blkEnable = el.querySelector<HTMLInputElement>("input[data-blk-enable]");
+      const toggleBlock = (): void => {
+        s.blockSyncEnabled = !s.blockSyncEnabled;
+        const on = !!s.blockSyncEnabled;
+        // 局部切换 DOM，**不 rerender**：重渲整页会把滚动位置弹回设置开头，
+        // 而开关就在页面底部 —— 一点就跳走，等于没法连续操作（2026-10-30 雄哥反馈）。
+        // body 一直在 DOM 里（只是 hidden），绑定早已挂好，展开即可用。
+        const card = el.querySelector<HTMLElement>("[data-blk-acc]");
+        const body = card?.querySelector<HTMLElement>(".caldav-blk-body");
+        const tag = card?.querySelector<HTMLElement>(".caldav-blk-tag");
+        const hint = el.querySelector<HTMLElement>(".caldav-blk-hint");
+        card?.classList.toggle("is-open", on);
+        if (blkEnable) blkEnable.checked = on; // 点标题切换时，开关状态要跟着走
+        if (body) body.hidden = !on;
+        if (tag) tag.hidden = on;
+        if (hint) hint.hidden = on;
+        // 展开后把本卡滚到滚动区顶部：卡片在设置页最底部，展开的内容多半落在视口外，
+        // 不滚一下等于"展开了但看不见"。等下一帧布局稳定后再算位置（body 刚由 hidden 放开）。
+        if (on) {
+          requestAnimationFrame(() => {
+            const form = el.querySelector<HTMLElement>(".caldav-settings-form");
+            const node = el.querySelector<HTMLElement>("[data-blk-acc]");
+            if (!form || !node) return;
+            const delta = node.getBoundingClientRect().top - form.getBoundingClientRect().top;
+            form.scrollTo({ top: Math.max(0, form.scrollTop + delta - 8), behavior: "smooth" });
+          });
+        }
+        void ctx.store.persist();
+        ctx.refreshPanels?.();
+      };
+      blkHead?.addEventListener("click", (ev) => {
+        const t = ev.target as HTMLElement;
+        if (t.closest("input,button,.caldav-blk-switch")) return; // 开关/按钮不触发展开
+        toggleBlock();
+      });
+      blkEnable?.addEventListener("change", toggleBlock);
+
       const scopeSel = el.querySelector<HTMLSelectElement>("select[data-s='blockSyncScope']");
       const nbWrap = el.querySelector<HTMLElement>("[data-blocksync-nbs]");
       const prefixCb = el.querySelector<HTMLInputElement>("input[data-s='blockSyncMarkPrefix']");
@@ -938,78 +988,119 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
     ⚠️ 总开关没打开就完全不启用：不自动扫描、块菜单不出现、不做状态同步，
     「立即扫描」按钮点了也只提示功能未启用。
   -->
-  <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.tasks}</span>思源任务块识别与映射</div>
-    <p class="caldav-set-hint">
-      把文档里写的任务块（<code>- [ ] 待办</code>）同步成 CalDAV 待办，手机上完成，思源里的勾也跟着打上；
-      在思源里打勾，服务端的待办也标完成。块与待办用 Block ID 锚定，改文字也不会对丢。
-    </p>
-    <label class="caldav-check-row">
-      <input type="checkbox" data-s="blockSyncEnabled" ${s.blockSyncEnabled ? "checked" : ""}/>
-      <span><b>启用文档任务块识别与映射</b>（关闭则完全停用：不扫描、无块菜单、不同步）</span>
-    </label>
-
-    <div class="caldav-field">
-      <label class="caldav-field-label">文档任务块转 VTODO 的默认日历</label>
-      <div class="caldav-input-wrap">
-        <select class="caldav-input" data-s="blockSyncCal">
-          <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>使用新建条目的默认日历</option>
-          ${blockCalOptions(s)}
-        </select>
-        <span class="caldav-input-suffix">${icons.chevron}</span>
-      </div>
+  <!--
+    ⚠️ 类名**一律 caldav-blk-*，绝不复用 .caldav-acc / .caldav-acc-head / .caldav-acc-body**。
+    设置页到处是全局 .caldav-acc-head 选择器（bindAccounts 给账户卡挂展开收起）、
+    测试也按 .caldav-acc 数账户卡 —— 复用会让这张卡被当成一张账户卡：
+    点它的卡头会去走账户展开逻辑（activeAccId 被置空 → 整页 rerender），
+    账户计数也会平白多一张。外观在 index.css 里另写一份同样的规则。
+  -->
+  <div class="caldav-blk-acc ${s.blockSyncEnabled ? "is-open" : ""}" data-blk-acc>
+    <div class="caldav-blk-head" data-blk-head>
+      <span class="caldav-blk-dot"></span>
+      <span class="caldav-blk-name">思源任务块识别与映射</span>
+      <span class="caldav-blk-sum">把文档里的任务块同步成 CalDAV 待办</span>
+      <span class="caldav-blk-tag" ${s.blockSyncEnabled ? "hidden" : ""}>未启用</span>
+      <label class="caldav-blk-switch" title="启用 / 停用：开启后展开下方设置，关闭则完全停用（不扫描、无块菜单、不同步）">
+        <input type="checkbox" class="b3-switch" data-blk-enable ${s.blockSyncEnabled ? "checked" : ""}/>
+      </label>
     </div>
+    <div class="caldav-blk-body" ${s.blockSyncEnabled ? "" : "hidden"}>
+      <p class="caldav-set-hint">
+        把文档里写的任务块（<code>- [ ] 待办</code>）同步成 CalDAV 待办，手机上完成，思源里的勾也跟着打上；
+        在思源里打勾，服务端的待办也标完成。块与待办用 Block ID 锚定，改文字也不会对丢。
+      </p>
 
-    <div class="caldav-field">
-      <label class="caldav-field-label">文档任务块转 VTODO 的默认结束时间</label>
-      <div class="caldav-input-wrap">
-        <select class="caldav-input" data-s="blockSyncEnd">
-          <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>与新建待办任务一致</option>
-          <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>空（即无日期任务）</option>
-        </select>
-        <span class="caldav-input-suffix">${icons.chevron}</span>
-      </div>
-    </div>
-
-    <div class="caldav-field">
-      <label class="caldav-field-label">自动扫描文档任务块的范围</label>
-      <div class="caldav-input-wrap">
-        <select class="caldav-input" data-s="blockSyncScope">
-          <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>打开的文档</option>
-          <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>仅日记</option>
-          <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>笔记本</option>
-          <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>全部文档</option>
-        </select>
-        <span class="caldav-input-suffix">${icons.chevron}</span>
-      </div>
-      <div class="caldav-blocksync-nbs" data-blocksync-nbs hidden></div>
-      <p class="caldav-set-hint">范围只决定**哪些新块会被识别**；已建立的映射照常双向同步，不受范围限制。</p>
-    </div>
-
-    <div class="caldav-field">
-      <label class="caldav-field-label">文档任务块转 VTODO 的标记</label>
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>扫描时机</div>
       <label class="caldav-check-row">
-        <input type="checkbox" data-s="blockSyncMarkBadge" ${(s.blockSyncMarks || ["badge"]).includes("badge") ? "checked" : ""}/>
-        <span>加「文档」小角标（只在插件的任务视图 / 侧栏里显示，不动数据）</span>
+        <input type="checkbox" data-s="blockSyncOnStartup" ${s.blockSyncOnStartup !== false ? "checked" : ""}/>
+        <span>插件启动后（约 3 秒）自动扫描任务块</span>
       </label>
       <label class="caldav-check-row">
-        <input type="checkbox" data-s="blockSyncMarkPrefix" ${(s.blockSyncMarks || []).includes("prefix") ? "checked" : ""}/>
-        <span>自定义前缀（会写进待办标题，手机端 Tasks.org 里也能看出来）</span>
+        <input type="checkbox" data-s="blockSyncOnManualSync" ${s.blockSyncOnManualSync !== false ? "checked" : ""}/>
+        <span>手动点「同步」时自动扫描任务块</span>
       </label>
-      <div class="caldav-input-wrap caldav-blocksync-prefix" data-blocksync-prefix hidden>
-        <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || "[文档]")}" placeholder="[文档]"/>
-      </div>
-    </div>
+      <label class="caldav-check-row">
+        <input type="checkbox" data-s="blockSyncOnDocClose" ${s.blockSyncOnDocClose ? "checked" : ""}/>
+        <span>关闭当前文档时扫描该文档的任务块（捕获刚关掉的文档里的改动 / 删除）</span>
+      </label>
+      <p class="caldav-set-hint">「立即扫描」按钮与右键块的「扫描任务块」菜单属主动触发，不受上面三个开关限制。</p>
 
-    <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>立即扫描</span></button>
-      <button class="caldav-btn caldav-btn--sm" data-action="blocks-clear">${icons.trash}<span data-blocksync-clear-label>一键清理</span></button>
-      <span class="caldav-set-msg" data-blocksync-msg></span>
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>扫描方式</div>
+      <label class="caldav-check-row">
+        <input type="checkbox" data-s="blockSyncIncremental" ${s.blockSyncIncremental !== false ? "checked" : ""}/>
+        <span>增量扫描（只查改动过的任务块，更快）</span>
+      </label>
+      <p class="caldav-set-hint">
+        增量扫描按思源任务块的「最后修改时间」定位改动，只把改过的块拉回来对账。
+        范围一变、或距上次全量超过 24 小时，都会自动改做一次全量校准；关掉则每次都全量扫描。
+      </p>
+
+      <div class="caldav-field">
+        <label class="caldav-field-label">文档任务块转 VTODO 的默认日历</label>
+        <div class="caldav-input-wrap">
+          <select class="caldav-input" data-s="blockSyncCal">
+            <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>使用新建条目的默认日历</option>
+            ${blockCalOptions(s)}
+          </select>
+          <span class="caldav-input-suffix">${icons.chevron}</span>
+        </div>
+      </div>
+
+      <div class="caldav-field">
+        <label class="caldav-field-label">文档任务块转 VTODO 的默认结束时间</label>
+        <div class="caldav-input-wrap">
+          <select class="caldav-input" data-s="blockSyncEnd">
+            <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>与新建待办任务一致</option>
+            <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>空（即无日期任务）</option>
+          </select>
+          <span class="caldav-input-suffix">${icons.chevron}</span>
+        </div>
+      </div>
+
+      <div class="caldav-field">
+        <label class="caldav-field-label">自动扫描文档任务块的范围</label>
+        <div class="caldav-input-wrap">
+          <select class="caldav-input" data-s="blockSyncScope">
+            <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>打开的文档</option>
+            <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>仅日记</option>
+            <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>笔记本</option>
+            <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>全部文档</option>
+          </select>
+          <span class="caldav-input-suffix">${icons.chevron}</span>
+        </div>
+        <div class="caldav-blocksync-nbs" data-blocksync-nbs hidden></div>
+        <p class="caldav-set-hint">范围只决定**哪些新块会被识别**；已建立的映射照常双向同步，不受范围限制。</p>
+      </div>
+
+      <div class="caldav-field">
+        <label class="caldav-field-label">文档任务块转 VTODO 的标记</label>
+        <label class="caldav-check-row">
+          <input type="checkbox" data-s="blockSyncMarkBadge" ${(s.blockSyncMarks || ["badge"]).includes("badge") ? "checked" : ""}/>
+          <span>加「文档」小角标（只在插件的任务视图 / 侧栏里显示，不动数据）</span>
+        </label>
+        <label class="caldav-check-row">
+          <input type="checkbox" data-s="blockSyncMarkPrefix" ${(s.blockSyncMarks || []).includes("prefix") ? "checked" : ""}/>
+          <span>自定义前缀（会写进待办标题，手机端 Tasks.org 里也能看出来）</span>
+        </label>
+        <div class="caldav-input-wrap caldav-blocksync-prefix" data-blocksync-prefix hidden>
+          <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || "[文档]")}" placeholder="[文档]"/>
+        </div>
+      </div>
+
+      <div class="caldav-actions-row">
+        <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>立即扫描</span></button>
+        <button class="caldav-btn caldav-btn--sm" data-action="blocks-clear">${icons.trash}<span data-blocksync-clear-label>一键清理</span></button>
+        <span class="caldav-set-msg" data-blocksync-msg></span>
+      </div>
+      <p class="caldav-set-hint">
+        「立即扫描」当场扫一遍（不等下个同步周期）；同步时也会自动扫。
+        「一键清理」删掉全部由文档任务块转来的待办（文档里的块不动）——
+        后悔了就用它；若开关还开着、范围还覆盖着，下一轮又会重新建回来。
+      </p>
     </div>
-    <p class="caldav-set-hint">
-      「立即扫描」当场扫一遍（不等下个同步周期）；同步时也会自动扫。
-      「一键清理」删掉全部由文档任务块转来的待办（文档里的块不动）——
-      后悔了就用它；若开关还开着、范围还覆盖着，下一轮又会重新建回来。
+    <p class="caldav-set-hint caldav-blk-hint" ${s.blockSyncEnabled ? "hidden" : ""}>
+      未启用：点击上方绿色开关（或本卡片标题）开启后，下方「扫描时机 / 默认日历 / 范围 / 标记 / 扫描按钮」等设置才会出现。
     </p>
   </div>
 

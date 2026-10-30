@@ -32,3 +32,9 @@ tsconfig.purgeui.json
 
 # 块同步单测（issue #2）的 tsc 临时产物
 .test-blocksync/
+
+# 真机取证探针（2026-10-30 状态实测）：内含凭据解密脚本与服务器响应样本，绝不入库
+.probe/
+
+# 数据恢复备份（用户文档原始内容，绝不入库）
+.restore-backup-*.json

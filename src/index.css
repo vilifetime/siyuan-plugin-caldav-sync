@@ -1417,6 +1417,20 @@
 
 .caldav-editor-form, .caldav-settings-form { padding: 12px 14px 6px; }
 
+/*
+ * 滚动区的直接子项（各张卡片）一律不许参与 flex 压缩。
+ *
+ * ⚠️ 不加这条，最后一张卡片会被压成 0 高度只剩一条边框线（2026-10-30 雄哥实测）：
+ * 本容器是 `display:flex; flex-direction:column`，子项默认 `flex-shrink:1`；
+ * 而 flex item 的自动最小尺寸（min-height:auto）只在 `overflow: visible` 时才等于
+ * 内容高度 —— `.caldav-acc`（手风琴卡片，含「思源任务块识别与映射」）带
+ * `overflow: hidden`，自动最小尺寸退化成 **0**，于是它成了唯一能被压扁的卡片，
+ * 高度归零、只剩上下 1px 边框。其余 `.caldav-section--card` 没有 overflow:hidden，
+ * 压不动，所以看起来"只有任务块那一段不见了"。
+ */
+.caldav-editor-form > *,
+.caldav-settings-form > * { flex: 0 0 auto; }
+
 /* 自定义滚动条 */
 .caldav-editor-form::-webkit-scrollbar,
 .caldav-settings-form::-webkit-scrollbar { width: 9px; }
@@ -2922,6 +2936,51 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-acc-delconf { padding: 8px 10px; border-top: 1px solid var(--caldav-border); background: var(--caldav-bg-3); }
 .caldav-acc-delconf[hidden] { display: none; }
 .caldav-acc-delconf .caldav-actions-row { margin-top: 6px; }
+
+/* 思源任务块识别与映射卡片（设置页最底部）。
+   外观与账户卡一致，但**类名自成一套 caldav-blk-*** —— 绝不能复用 .caldav-acc：
+   设置页 bindAccounts 用全局 `.caldav-acc-head` 挂账户展开/收起，测试也按
+   `.caldav-acc` 数账户卡；复用会让这张卡被当成账户卡（点卡头走账户逻辑 →
+   整页 rerender，账户计数还平白多一张）。故这里把需要的规则另写一份。 */
+.caldav-blk-acc {
+  border: 1px solid var(--caldav-border);
+  border-radius: 10px;
+  background: var(--caldav-bg);
+  overflow: hidden;
+}
+.caldav-blk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.caldav-blk-head:hover { background: var(--caldav-bg-3); }
+.caldav-blk-acc.is-open .caldav-blk-head {
+  background: var(--caldav-bg-3);
+  border-bottom: 1px solid var(--caldav-border);
+}
+.caldav-blk-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; background: var(--caldav-accent); }
+.caldav-blk-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.caldav-blk-sum {
+  flex: 1;
+  font-size: 11px;
+  color: var(--caldav-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caldav-blk-switch { display: inline-flex; align-items: center; margin-left: auto; }
+.caldav-blk-body { padding: 4px 12px 12px; }
+/* 停用态收起子设置：body 用 hidden 收口（单卡无 data-s 跨卡串扰，无需像账户卡那样移出 DOM） */
+.caldav-blk-body[hidden] { display: none; }
+.caldav-blk-subtitle { margin: 12px 0 6px; font-size: 12px; }
+/* 停用态的常驻提示：点开关/标题即可展开（不改变「关掉就隐藏」的设计，只是让段「找得到」） */
+.caldav-blk-hint { margin: 6px 12px 10px; padding: 6px 10px; border-left: 3px solid var(--caldav-accent); background: var(--caldav-bg-3); border-radius: 0 6px 6px 0; }
+/* 收起卡头上的「未启用」状态标签：让停用态一眼可见，不会误以为整段消失 */
+.caldav-blk-tag { flex: 0 0 auto; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px; color: var(--caldav-text-2); background: var(--caldav-bg-3); border: 1px solid var(--caldav-border); }
+.caldav-blk-tag[hidden] { display: none; }
 
 /* 账户内的日历行 = 原「日历」段同款布局 */
 .caldav-acc-cal {

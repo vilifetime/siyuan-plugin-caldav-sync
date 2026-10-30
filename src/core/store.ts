@@ -39,6 +39,17 @@ export class CalStore {
   /** 上次同步的中性提示（对账自愈等），**不是错误**，见 types.ts 的 SyncState */
   lastNote?: string;
   /**
+   * 任务块**增量扫描**的运行时状态（落盘，见 types.ts 的 SyncState）。
+   *
+   * 放在 store 而不是 settings：它是机器状态（跟着这台机器的数据走），
+   * 不是用户可调的偏好。换个工作区/重装插件 → 数据重置 → 水位线自然作废 → 退回全量。
+   */
+  blockScanWatermark?: number;
+  /** 上次全量扫描的时间（epoch 毫秒）：距今超 24 小时就强制全量校准 */
+  blockScanFullAt?: number;
+  /** 上次扫描时的范围签名：范围变了 → 水位线作废 */
+  blockScanScopeSig?: string;
+  /**
    * 即时推送成功上传/删除的**条目 key**（按 key 去重），下一轮 syncAll 合并进
    * 报告后清零。为什么按 key：同一条目被操作 N 次会推 N 次，按推送轮次计数会让
    * 同步报告虚报「上传 N 条」（2026-10-19 雄哥实测），详见 types.ts 的 SyncState。
@@ -91,6 +102,10 @@ export class CalStore {
       // 老数据里的 number 字段直接忽略——计数只是展示用，丢一次无碍
       this.pendingUploadedKeys = Array.isArray(data.sync?.pendingUploadedKeys) ? data.sync.pendingUploadedKeys : [];
       this.pendingDeletedKeys = Array.isArray(data.sync?.pendingDeletedKeys) ? data.sync.pendingDeletedKeys : [];
+      // 任务块增量扫描的水位线 / 上次全量时间 / 范围签名（见 core/block-sync.ts）
+      this.blockScanWatermark = typeof data.sync?.blockScanWatermark === "number" ? data.sync.blockScanWatermark : undefined;
+      this.blockScanFullAt = typeof data.sync?.blockScanFullAt === "number" ? data.sync.blockScanFullAt : undefined;
+      this.blockScanScopeSig = data.sync?.blockScanScopeSig || undefined;
       this.keyring = (data as any).keyring || "";
       this.purgeBackup = data.purgeBackup;
     }
@@ -179,6 +194,16 @@ export class CalStore {
     this.persistSoon();
   }
 
+  /**
+   * 运行时状态（如任务块增量扫描的水位线）改动后排期落盘。
+   *
+   * 与 markSettingsDirty 的区别只是语义：那个记的是「设置被改了」，
+   * 这个记的是「机器状态变了」，两者最终都走同一条落盘通道。
+   */
+  markStateDirty(): void {
+    this.persistSoon();
+  }
+
   async persist(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -209,7 +234,10 @@ export class CalStore {
         lastError: this.lastError,
         lastNote: this.lastNote,
         pendingUploadedKeys: this.pendingUploadedKeys,
-        pendingDeletedKeys: this.pendingDeletedKeys
+        pendingDeletedKeys: this.pendingDeletedKeys,
+        blockScanWatermark: this.blockScanWatermark,
+        blockScanFullAt: this.blockScanFullAt,
+        blockScanScopeSig: this.blockScanScopeSig
       }
     });
   }
@@ -481,7 +509,47 @@ export class CalStore {
           continue;
         }
       }
-      this.items.set(keyOf(inc), { ...inc, dirty: false, deleted: false });
+      // ⚠️ 块来源条目的**对账缓存不能丢**：blockId / blockText / blockChecked 记的是
+      //    「这条待办对应哪个块、上次对账时块是什么文字什么勾选态」。
+      //    服务端回来的 ICS 里**没有**后两个字段（只有 X-SIYUAN-BLOCK-ID），
+      //    整体替换会把缓存清空 —— 后果：下轮对账判不出「块改了还是服务端改了」，
+      //    只能「以块为准」，于是**服务端那边的改动会被块的状态覆盖回去**
+      //    （2026-10-30 实测：手机端勾完成 → 回到思源后又被未勾的块盖掉）。
+      //    故 incoming 没有的字段，一律沿用本地那份。
+      const keep = existing && existing.blockId ? existing : undefined;
+      const merged: CalItem = {
+        ...inc,
+        dirty: false,
+        deleted: false,
+        blockId: inc.blockId ?? keep?.blockId,
+        blockText: inc.blockText ?? keep?.blockText,
+        blockChecked: inc.blockChecked ?? keep?.blockChecked
+      };
+      // ⚠️⚠️ **块来源条目的完成态要自我保护**（2026-10-30 用户实测踩中）。
+      //   ⚠️ **不要写成「服务端会降级完成态」** —— 那是错的，2026-10-30 实测证伪：
+      //     · Baikal 完整保留 STATUS:COMPLETED（新建→GET、改回→GET、等 3 秒→GET，
+      //       四轮往返全对；服务端 199 条 COMPLETED 的条目逐条 GET 与 REPORT
+      //       两条路径读回来全是 COMPLETED）。**Baikal 不会无缘无故改状态。**
+      //     · 那 8 条「本地 COMPLETED / raw 里 STATUS:NEEDS-ACTION」是**假象**：
+      //       raw 是**本地缓存的旧原文**（上传成功时也不会刷新，见 sync.ts
+      //       `item.raw = item.raw || ics`），不是服务端当前的内容。
+      //       逐条 GET 服务端 → 那 8 条全是 COMPLETED，etag 也与本地一致。
+      //
+      //   【真正的事故机制】插件更新条目时带 `If-Match: <本地 etag>`（乐观锁）。
+      //     若服务端内容已被别的客户端改过 → 服务端返 **412** → 插件按账户的
+      //     冲突策略（server=服务端优先）**丢弃本地改动**，于是本地完成态被
+      //     服务端那一刻的状态覆盖。若那一刻服务端是 NEEDS-ACTION，块来源条目
+      //     的完成态就被污染 → 下一轮对账判定「服务端未完成」→ 回写文档 → 把
+      //     用户已勾好的 `- [X]` 拍成 `- [ ]`。
+      //
+      //   故：块来源条目若本地记着「已完成」而服务端说「未完成」，**保留本地的完成态**。
+      //   代价是「在别的客户端取消勾选」同步不过来 —— 这是有意取舍：
+      //   用户的完成态主数据在文档里，服务端那份可能被 412 冲突覆盖。
+      if (merged.blockId && keep?.blockChecked === true && !(merged.percent === 100 || merged.status === "COMPLETED")) {
+        merged.status = "COMPLETED";
+        merged.percent = 100;
+      }
+      this.items.set(keyOf(inc), merged);
       changed = true;
       applied++;
     }

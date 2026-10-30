@@ -543,6 +543,34 @@ export interface CalSettings {
   blockSyncMarks?: ("badge" | "prefix")[];
   /** 前缀文本（blockSyncMarks 含 "prefix" 时用）。写入时统一拼成 `${前缀}${文本}`，默认 "[文档]" */
   blockSyncPrefix?: string;
+  /**
+   * 是否在**插件启动后约 3 秒**自动扫一遍任务块。默认 true。
+   * 与 `blockSyncOnManualSync` 互不重叠：启动扫一次即可，手动同步另算；
+   * 「立即扫描」按钮与块菜单单笔操作属用户主动触发，不受这两个开关影响。
+   */
+  blockSyncOnStartup?: boolean;
+  /**
+   * 是否在**手动点「同步」**时自动扫一遍任务块。默认 true。
+   * 「立即扫描」按钮与块菜单单笔操作属用户主动触发，不受此开关影响。
+   */
+  blockSyncOnManualSync?: boolean;
+  /**
+   * 是否在**关闭当前文档**时扫描该文档的任务块（捕获刚关掉的文档里的改动 / 删除）。
+   * 默认 false（保守：避免关文档时静默触发网络同步）。受总开关 gate。
+   */
+  blockSyncOnDocClose?: boolean;
+  /**
+   * 是否用**增量扫描**（只查「最后修改时间」变动过的任务块）。默认 true。
+   *
+   * 关掉就退回「每次全量扫描」—— 行为与 2026-10-30 之前完全一致，只是慢一点。
+   *
+   * 增量的依据是思源内核 `blocks.updated`（`YYYYMMDDHHmmss`，秒级、逐块更新）。
+   * 配套的三重保险（都在 core/block-sync.ts）：
+   *   ① 水位线回退 2 秒（updated 只到秒，防同秒改动漏掉）；
+   *   ② 范围一变就作废水位线、重新全量；
+   *   ③ 每 24 小时强制做一次全量校准。
+   */
+  blockSyncIncremental?: boolean;
 
   // ── 「上次使用项」的记录值（2026-10-27 改存配置，随数据同步）──
   //
@@ -658,7 +686,13 @@ export const DEFAULT_SETTINGS: CalSettings = {
   blockSyncScope: "all",
   blockSyncNotebooks: [],
   blockSyncMarks: ["badge"],
-  blockSyncPrefix: "[文档]"
+  blockSyncPrefix: "[文档]",
+  // 三种触发时机：启动扫 / 手动同步扫 默认开；关闭文档时扫 默认关（保守，避免关文档静默联网）
+  blockSyncOnStartup: true,
+  blockSyncOnManualSync: true,
+  blockSyncOnDocClose: false,
+  // 增量扫描默认开（只查改动过的任务块）；关掉则每次全量
+  blockSyncIncremental: true
 };
 
 export interface SyncState {
@@ -686,6 +720,26 @@ export interface SyncState {
   pendingUploadedKeys?: string[];
   /** 同上，即时推送成功删除的条目 key */
   pendingDeletedKeys?: string[];
+  /**
+   * 任务块**增量扫描的水位线**（epoch 毫秒）：只扫「最后修改时间」晚于它的块。
+   *
+   * 存**毫秒**而不是内核那种 `YYYYMMDDHHmmss` 字符串：毫秒好做「回退 2 秒」的重叠
+   * 计算（updated 只精确到秒，不重叠就会漏掉同一秒里的改动），落库时再换算成
+   * 内核认的格式（见 core/block-api.ts 的 blockStampOf）。
+   */
+  blockScanWatermark?: number;
+  /**
+   * 上次**全量**扫描任务块的时间（epoch 毫秒）。
+   *
+   * 作用是安全网：距今超过 24 小时就强制做一次全量校准，兜住一切水位线可能
+   * 漏掉的改动（属性变更、导入、数据库重建等不会体现在 blocks.updated 上的情况）。
+   */
+  blockScanFullAt?: number;
+  /**
+   * 上次扫描时的**范围签名**（见 core/block-todo.ts 的 blockScopeSig）。
+   * 范围一变 → 水位线不再覆盖新范围 → 下一轮自动退回全量。
+   */
+  blockScanScopeSig?: string;
 }
 
 export interface PersistData {

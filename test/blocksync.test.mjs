@@ -231,15 +231,72 @@ const settingsSrc = read("src/ui/settings-dialog.ts");
 const indexSrc = read("src/index.ts");
 const apiSrc = read("src/core/block-api.ts");
 const typesSrc = read("src/core/types.ts");
+const cssSrc = read("src/index.css");
 
-check("设置区有「思源任务块识别与映射」段与总开关", () => {
+check("设置区有「思源任务块识别与映射」段与（胶囊式）总开关", () => {
   assert.match(settingsSrc, /思源任务块识别与映射/);
-  assert.match(settingsSrc, /data-s="blockSyncEnabled"/);
+  // 总开关改成胶囊 toggle（b3-switch），标识改为 data-blk-enable（不再用 data-s 打勾）
+  assert.match(settingsSrc, /data-blk-enable/);
+  assert.match(settingsSrc, /b3-switch/);
+});
+check("停用态有常驻提示（点开关/标题即可展开，不改变「关掉就隐藏」设计）", () => {
+  assert.match(settingsSrc, /caldav-blk-hint/);
+  assert.match(settingsSrc, /未启用/);
+  // 启用时提示带 hidden（不显示），停用时不带
+  assert.match(settingsSrc, /caldav-blk-hint"[^>]*>\s*未启用/);
+});
+check("收起卡头有「未启用」状态标签（停用可见、启用隐藏），且只收起开关以下", () => {
+  // 收起卡头带未启用标签；body 才带 hidden，head/开关本身不带 → 验证「以下收起，不是全部」
+  assert.match(settingsSrc, /caldav-blk-tag/);
+  assert.match(settingsSrc, /caldav-blk-head[^>]*>\s*<span class="caldav-blk-dot"/);
+  // 开关 input 不带 hidden（始终可见）
+  assert.doesNotMatch(settingsSrc, /<input type="checkbox" class="b3-switch" data-blk-enable[^>]*\shidden/);
+});
+check("任务块卡**不复用** .caldav-acc 类名（否则会被 bindAccounts 当成账户卡）", () => {
+  // 设置页 bindAccounts 用全局 .caldav-acc-head 挂账户展开/收起、测试按 .caldav-acc 数账户卡。
+  // 这张卡若带 .caldav-acc，点卡头会走账户逻辑（整页 rerender）、账户计数还会多一张。
+  assert.doesNotMatch(
+    settingsSrc,
+    /class="caldav-acc[^"]*caldav-blk-acc/,
+    "任务块卡不该再挂 .caldav-acc（账户卡专用）"
+  );
+  assert.doesNotMatch(settingsSrc, /class="caldav-acc-head"[^>]*data-blk-head/, "卡头类名必须独立");
+});
+check("设置区有「扫描时机」三个独立开关（启动扫 / 手动同步扫 / 关闭文档扫）", () => {
+  for (const k of ['data-s="blockSyncOnStartup"', 'data-s="blockSyncOnManualSync"', 'data-s="blockSyncOnDocClose"']) {
+    assert.ok(settingsSrc.includes(k), "缺 " + k);
+  }
 });
 check("设置区四个配置项齐全（日历 / 结束时间 / 范围 / 标记）", () => {
   for (const k of ["data-s=\"blockSyncCal\"", "data-s=\"blockSyncEnd\"", "data-s=\"blockSyncScope\"", "data-s=\"blockSyncMarkBadge\"", "data-s=\"blockSyncMarkPrefix\""]) {
     assert.ok(settingsSrc.includes(k), "缺 " + k);
   }
+});
+check("设置区有「增量扫描」开关（默认开）", () => {
+  assert.ok(settingsSrc.includes('data-s="blockSyncIncremental"'), "缺增量扫描开关");
+  assert.match(settingsSrc, /data-s="blockSyncIncremental"[^\n]*checked/);
+  assert.strictEqual(T.DEFAULT_SETTINGS.blockSyncIncremental, true, "默认应为增量");
+  assert.match(settingsSrc, /s\.blockSyncIncremental\s*=/, "保存时要落盘这个开关");
+});
+check("增量扫描的判据是内核 blocks.updated（SQL 里带 updated 条件）", () => {
+  assert.match(apiSrc, /updated > /, "增量 SQL 应按 updated 过滤");
+  assert.match(apiSrc, /updated IS NULL OR updated = ''/, "空 updated 的老块要永远命中");
+});
+check("存在性/按 ID 查询必须显式写 LIMIT（内核没写 LIMIT 时只回 64 行，会误删待办）", () => {
+  const m = apiSrc.match(/SELECT id FROM blocks WHERE id IN \([\s\S]{0,200}?LIMIT/);
+  assert.ok(m, "存在性查询后面必须跟 LIMIT");
+  // 「按 ID 查 root_id」已随 blocksRootByIds 一起删除（那是错误逻辑的产物），
+  // 现在按 ID 取块只有一条路径：scanTaskBlocksByIds。
+  // ⚠️ 它的 `id IN (...)` 在 where 数组里、与 SELECT 不同行 → 不能用单行正则匹配源码，
+  //    改为断言「按 ID 取块的那条 SELECT 语句末尾带 LIMIT」。
+  const r = apiSrc.match(/SELECT id, content, markdown[^\n]*LIMIT \$\{chunk\.length\}/);
+  assert.ok(r, "按 ID 取块（漂移用）后面必须跟 LIMIT");
+  assert.doesNotMatch(apiSrc, /blocksRootByIds/, "blocksRootByIds 已删除，不该再出现");
+});
+check("手动「扫描全部」/「立即扫描」走全量，其余按增量 + 安全网", () => {
+  assert.match(indexSrc, /blockSyncPass\(undefined, \{ full: true \}\)/, "手动扫描应强制全量");
+  assert.match(read("src/core/block-sync.ts"), /BLOCK_FULL_SCAN_INTERVAL_MS/, "要有 24h 全量校准");
+  assert.match(read("src/core/block-sync.ts"), /blockScopeSig/, "范围变了要退回全量");
 });
 check("范围含四项（打开的文档 / 仅日记 / 笔记本 / 全部文档）", () => {
   for (const v of ['value="open"', 'value="daily"', 'value="notebooks"', 'value="all"']) {
@@ -255,11 +312,36 @@ check("总开关守卫：没启用就不跑对账 / 不挂块菜单", () => {
   assert.match(indexSrc, /if \(!this\.store\.settings\.blockSyncEnabled\) return/);
   assert.match(indexSrc, /open-menu-content/);
 });
+check("扫描时机受 onStartup / onManualSync 两个开关 gate（手动走 onManualSync，非手动走 onStartup）", () => {
+  assert.match(indexSrc, /blockSyncOnManualSync/);
+  assert.match(indexSrc, /blockSyncOnStartup/);
+});
+check("关闭文档时扫描：监听 destroy-protyle + 受 onDocClose gate", () => {
+  assert.match(indexSrc, /destroy-protyle/);
+  assert.match(indexSrc, /blockSyncOnDocClose/);
+  assert.match(indexSrc, /onDocClose/);
+});
+check("块菜单始终挂两个固定扫描项（当前文档 / 全部）", () => {
+  assert.match(indexSrc, /扫描任务块（当前文档）/);
+  assert.match(indexSrc, /扫描任务块（全部）/);
+});
 check("扫块排除 skip 标记用的是 attributes 子查询（不是逐块调 API）", () => {
   assert.match(apiSrc, /id NOT IN \(SELECT block_id FROM attributes WHERE name = '\$\{BLOCK_SKIP_ATTR\}'\)/);
 });
 check("删除判生死走 blocksExistById（不靠扫描范围）", () => {
   assert.match(read("src/core/block-sync.ts"), /blocksExistById/);
+});
+check("★删除判生死不得按扫描范围收口（用户实测：关文档时把 100+ 条 VTODO 全删了）", () => {
+  const bs = read("src/core/block-sync.ts");
+  // 存在性查询必须针对**全部** missing 块，不能被 docIds / scope 过滤
+  assert.match(bs, /blocksExistById\(deps\.caller, missing\)/, "存在性查询必须查全部 missing 块");
+  // 绝不能出现「按 docIds 过滤后再查存在性」的写法（那会把别的文档的块踢出白名单 → 全删）
+  assert.doesNotMatch(bs, /blocksExistById\(deps\.caller, inDoc\)/, "不能按文档收口存在性查询");
+  assert.doesNotMatch(bs, /blocksRootByIds/, "blocksRootByIds 是错误逻辑的产物，不该再用");
+});
+check("★删除必须双重保险：既要在白名单外、也要确认查过存在性", () => {
+  const bt = read("src/core/block-todo.ts");
+  assert.match(bt, /if \(checked && !checked\.has\(id\)\) continue;/, "没查过存在性的块不得进删除队列");
 });
 check("取消同步必须打 skip 标记（否则下轮会被重建）", () => {
   const bs = read("src/core/block-sync.ts");
@@ -275,6 +357,47 @@ check("CalItem 有 blockId / blockText / blockChecked 三个字段", () => {
   assert.match(typesSrc, /blockId\?: string;/);
   assert.match(typesSrc, /blockText\?: string;/);
   assert.match(typesSrc, /blockChecked\?: boolean;/);
+});
+check("任务块开关切换为局部更新（不 rerender，避免滚动弹回设置开头）", () => {
+  const m = settingsSrc.match(/const toggleBlock = \(\)[\s\S]*?\n {6}\};/);
+  assert.ok(m, "找到 toggleBlock 定义");
+  assert.doesNotMatch(m[0], /rerender\(\)/, "toggleBlock 不应整页重渲");
+  assert.match(m[0], /body\.hidden = !on/, "应就地展开/收起 body");
+  assert.match(m[0], /blkEnable\.checked = on/, "点标题切换时开关状态要同步");
+  // 卡片在页面最底部，展开后要把它滚到滚动区顶部，否则"展开了但看不见"
+  assert.match(m[0], /behavior:\s*"smooth"/, "展开后应平滑滚到顶部");
+  assert.match(m[0], /requestAnimationFrame/, "须等下一帧布局稳定后再算位置");
+});
+check("rerender 需记住滚动位置（innerHTML 重建会把滚动条归零）", () => {
+  assert.match(settingsSrc, /keepTop/);
+  assert.match(settingsSrc, /formAfter\.scrollTop = keepTop/);
+});
+check("滚动区子项禁止 flex 压缩（否则手风琴卡因 overflow:hidden 被压成 0 高的一条线）", () => {
+  // 2026-10-30 实测：.caldav-acc 带 overflow:hidden → flex item 自动最小尺寸退化为 0
+  // → 成为唯一能被压扁的卡片（任务块卡压成上下 1px 边框）。必须锁住这条兜底。
+  assert.match(cssSrc, /\.caldav-settings-form\s*>\s*\*[\s\S]{0,120}flex:\s*0\s+0\s+auto/);
+  assert.match(cssSrc, /\.caldav-editor-form\s*>\s*\*[\s\S]{0,120}flex:\s*0\s+0\s+auto/);
+});
+check("完成态不可靠的归因必须是「同步冲突(412)」，不得写成「服务端降级」(2026-10-30 实测证伪)", () => {
+  // 2026-10-30 实测：Baikal 完整保留 STATUS:COMPLETED（新建→GET / 改回→GET / 等 3 秒→GET
+  // 四轮往返全对；199 条 COMPLETED 逐条 GET 与 REPORT 双路径读回一致）。
+  // 曾经的「降级活证据」是本地 store 里的**陈旧 raw 快照**，不是服务端内容。
+  // 若注释继续写「服务端会降级」，后来者会照着它把「单向回写」这条保险改回去 → 事故复发。
+  const btSrc = read("src/core/block-todo.ts");
+  const stSrc = read("src/core/store.ts");
+  assert.doesNotMatch(btSrc, /实测 Baikal 会把[\s\S]{0,80}降级/);
+  assert.doesNotMatch(stSrc, /实测服务端（Baikal）会把已完成的条目/);
+  assert.match(btSrc, /不要归咎于「服务端降级」/);
+  assert.match(btSrc, /If-Match/);
+  assert.match(stSrc, /不要写成「服务端会降级完成态」/);
+  assert.match(stSrc, /If-Match/);
+});
+check("服务端完成态被冲突覆盖时，块来源条目保留本地完成态", () => {
+  const stSrc = read("src/core/store.ts");
+  assert.match(
+    stSrc,
+    /merged\.blockId && keep\?\.blockChecked === true && !\(merged\.percent === 100 \|\| merged\.status === "COMPLETED"\)/
+  );
 });
 
 console.log(`\n[blocksync] 合计 ${pass} 项通过`);

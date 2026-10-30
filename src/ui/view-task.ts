@@ -56,7 +56,42 @@ function completedOn(it: CalItem, dateStr: string): boolean {
   return it.percent === 100 && !!it.completedAt && it.completedAt.slice(0, 10) === dateStr;
 }
 
+/**
+ * 每个 `viewEl` 上「本轮渲染挂的那对监听」的引用，供下一轮渲染摘掉。
+ *
+ * ⚠️ `viewEl` 是面板里**持久存在**的 `.caldav-view`（`root.innerHTML` 只在
+ * `renderPanel` 里写一次，`renderAll()` 只换它的**内容**不换它本身），
+ * 所以每轮 `renderTaskView()` 都往同一个元素上 `addEventListener`。
+ * 不摘的话监听会一轮轮叠加，而每个监听的闭包各自捕获了**那一轮**的
+ * `todos`（按当时的 `calendars[].enabled` 过滤出的快照）。
+ *
+ * 叠到 N 组时点一下组头，N 组监听依次跑：
+ *   · 第 1 组（最老那轮）先用它那份**旧快照**重画列表 —— 于是刚在日历筛选里
+ *     隐藏掉的日历，条目又冒出来了（雄哥 2026-10-30 反馈的症状）；
+ *   · 它一画完，`.cal-task-list` 的 innerHTML 整段被换掉，事件里那个 `head`
+ *     已不在 DOM 里，后面各组在 `toggleGroup` 的 `viewEl.contains(head)`
+ *     处**全部提前 return**，再没人拿新快照纠正回来。
+ *
+ * 结果是「越老的快照越说了算」，日历筛选、显示日程开关等一切触发重渲染的
+ * 设置都会被回退。故每轮渲染前先摘掉上一轮那对监听，只留最新这组。
+ *
+ * 用「记引用再 removeEventListener」而不是 AbortController：`signal` 选项在
+ * 部分宿主（含 jsdom 测试桩）对**非本 realm 的 AbortSignal** 会直接抛错，
+ * 而 removeEventListener 到处都一样。
+ */
+const VIEW_LISTENERS = new WeakMap<
+  HTMLElement,
+  { click: (ev: MouseEvent) => void; keydown: (ev: KeyboardEvent) => void }
+>();
+
 export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
+  // 本轮渲染独占监听：先摘掉上一轮挂的那对（见上方 VIEW_LISTENERS 注释）
+  const prevBound = VIEW_LISTENERS.get(viewEl);
+  if (prevBound) {
+    viewEl.removeEventListener("click", prevBound.click);
+    viewEl.removeEventListener("keydown", prevBound.keydown);
+  }
+
   const today = todayStamp();
   const tomorrow = addDays(today, 1);
   const yesterday = addDays(today, -1);
@@ -508,15 +543,19 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     if (list) list.innerHTML = listHtml(curFilter());
   };
 
-  viewEl.addEventListener("click", (ev) => {
+  // 记下本轮这对监听，供下一轮渲染摘掉（详见 VIEW_LISTENERS 注释）
+  const onClick = (ev: MouseEvent): void => {
     toggleGroup((ev.target as HTMLElement).closest<HTMLElement>("[data-toggle-group]"));
-  });
+  };
   // 键盘可达：组头是 role=button，Enter / Space 等同点击
-  viewEl.addEventListener("keydown", (ev) => {
+  const onKeydown = (ev: KeyboardEvent): void => {
     if (ev.key !== "Enter" && ev.key !== " ") return;
     ev.preventDefault();
     toggleGroup((ev.target as HTMLElement).closest<HTMLElement>("[data-toggle-group]"));
-  });
+  };
+  viewEl.addEventListener("click", onClick);
+  viewEl.addEventListener("keydown", onKeydown);
+  VIEW_LISTENERS.set(viewEl, { click: onClick, keydown: onKeydown });
 
   const input = viewEl.querySelector<HTMLInputElement>("[data-quickadd]");
   input?.addEventListener("keydown", (ev) => {

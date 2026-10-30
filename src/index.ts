@@ -29,8 +29,24 @@ import { dailyNoteAttrName, diaryWhenLabel, renderDailyNotePath, sqlText, baseNa
 import { showReminderToast, clearReminderToasts } from "@/ui/reminder-toast";
 import { newDialog } from "@/ui/dialog";
 import type { KernelCaller } from "@/core/block-api";
-import { getTaskBlockById, isBlockSkipped, setBlockSkip, listNotebooks, BLOCK_SKIP_ATTR } from "@/core/block-api";
+import { getTaskBlockById, getBlockRootId, setBlockSkip, listNotebooks, BLOCK_SKIP_ATTR } from "@/core/block-api";
 import { runBlockSync, convertBlock, unsyncBlock, clearBlockSync } from "@/core/block-sync";
+
+/**
+ * 从思源 protyle 实例里取它所属的文档（root）ID。
+ * 用于「关闭文档时扫描」：destroy-protyle / switch-protyle 的 detail.protyle 就是编辑实例，
+ * 文档根块 ID 在 protyle.block.rootID（部分版本路径略有差异，这里多兜底一级）。
+ */
+function docIdOf(protyle: any): string | undefined {
+  if (!protyle) return undefined;
+  return (
+    protyle?.protyle?.block?.rootID ||
+    protyle?.block?.rootID ||
+    protyle?.protyle?.block?.id ||
+    protyle?.block?.id ||
+    undefined
+  );
+}
 
 /**
  * Dock / 页签的类型标识。思源拿它记账（侧栏位置、已打开模型），**改了等于换一个插件**，
@@ -40,10 +56,6 @@ const DOCK_TYPE = "caldav-sync-dock";
 const TAB_TYPE = "caldav-sync-tab";
 /** 插件数据文件名：带 .json 后缀，便于在文件管理器里直接双击查看/编辑 */
 const DATA_FILE = "caldav-sync.json";
-
-/** 临时诊断开关：定位「块右键菜单项不出现」问题时开启，确认后连同 diagnoseBlockMenu 一并删除 */
-const DEBUG_BLOCK_MENU = true;
-
 
 /**
  * 0.2.12 及更早版本的数据文件名（无扩展名，历史上直接复用了 DOCK_TYPE 的值）。
@@ -300,9 +312,12 @@ export default class CalDavPlugin extends Plugin {
     // ⚠️ 总开关没打开就**一个菜单项都不挂** —— 功能没启用就不该在界面上出现。
     this.eventBus.on("open-menu-content", (e: any) => void this.onBlockMenu(e));
     // 块图标把手菜单入口（点块左侧 ⋮⋮ 图标把手）：与 open-menu-content 双入口并存。
-    // 两个入口都通过 addFirstLevelMenuItem 直接挂主菜单第一层，绕过思源内核把插件项
-    // 统一收进写死「插件」子菜单的机制（已读 emitOpenMenu 源码确认无法改名/置顶）。
+    // 两个入口都只做「识别任务块」，真正注入由 injectBlockSyncMenu 等 #commonMenu 挂到
+    // document 后完成（对齐番茄钟的靠上位置，且避开内核把插件项收进「插件」分组）。
     this.eventBus.on("click-blockicon", (e: any) => this.onBlockIconMenu(e));
+    // 关闭当前文档时扫描该文档的任务块（受 onDocClose 开关 gate）：捕获刚关掉的文档里的改动 / 删除。
+    // 用 destroy-protyle（detail = {protyle}）—— 文档 tab 真正销毁时才派发，比 switch-protyle（仅切换）精确。
+    this.eventBus.on("destroy-protyle", (e: any) => this.onDocClose(e));
 
     if (this.store.isConfigured()) {
       this.sync.startAutoSync(() => this.reminder?.reschedule());
@@ -362,70 +377,10 @@ export default class CalDavPlugin extends Plugin {
     return undefined;
   }
 
-  /** 临时诊断：块菜单钩子（右键 open-menu-content / ⋮⋮ click-blockicon）的命中情况，定位「菜单项不出现」用，DEBUG_BLOCK_MENU 关闭即失效 */
-  private async diagnoseBlockMenu(detail: any, source: "content" | "icon" = "content"): Promise<void> {
-    if (!DEBUG_BLOCK_MENU) return;
-    const s = this.store.settings;
-    const el = detail?.element || detail?.data?.dom;
-    const be = Array.isArray(detail?.blockElements) ? detail.blockElements : [];
-    const descri = (n: any): string => {
-      if (!n) return "null";
-      const id = (n.getAttribute?.("data-node-id") || "-").slice(0, 8);
-      const cb = n.querySelectorAll ? n.querySelectorAll('input[type="checkbox"]').length : 0;
-      return `${(n.tagName || "?").toLowerCase()} sub=${n.getAttribute?.("data-subtype") || "-"} id=${id} cb=${cb}`;
-    };
-    const found = this.resolveTaskNode(detail);
-    const nodeId = found ? (found.getAttribute("data-node-id") || "") : "";
-    const foundId = nodeId ? nodeId.slice(0, 8) : "null";
-    // 该块在 store 里有无映射、块上有无忽略标记（决定走「取消同步 / 重新同步 / 同步」哪一态）
-    const mapped = nodeId ? this.store.getAll().find((it) => it.kind === "todo" && it.blockId === nodeId) : undefined;
-    let skipped = false;
-    try {
-      if (nodeId) skipped = await isBlockSkipped(this.kernelCaller(), nodeId);
-    } catch {
-      skipped = false;
-    }
-    const parent = el?.parentElement;
-    const grand = parent?.parentElement;
-    const firstCb = (typeof document !== "undefined" && document.querySelector)
-      ? document.querySelector('[class*="checkbox"], [class*="task"], input[type=checkbox]')
-      : null;
-    // 文档内"复选框样"元素综合计数（覆盖 .protyle-task / 原生 input / 各类 checkbox|task class）
-    const tasksInDoc = (typeof document !== "undefined" && document.querySelectorAll)
-      ? document.querySelectorAll('.protyle-task, input[type="checkbox"], [class*="checkbox"], [class*="task"]').length
-      : -1;
-    showMessage(
-      `[块菜单诊断·${source}] hook=✓ enabled=${s.blockSyncEnabled} | found=${foundId} | mapped=${!!mapped} | skipped=${skipped} | cbInDoc=${tasksInDoc}`,
-      6000,
-      "info",
-      "caldav-block-menu-diag"
-    );
-    console.warn(`[caldav][块菜单诊断·${source}] 完整信息:`, {
-      enabled: s.blockSyncEnabled,
-      element: el
-        ? { tag: el.tagName, dataSubtype: el.getAttribute?.("data-subtype"), dataType: el.getAttribute?.("data-type"), id: el.getAttribute?.("data-node-id"), html: (el.outerHTML || "").slice(0, 500) }
-        : null,
-      parentHtml: parent ? parent.outerHTML.slice(0, 800) : null,
-      grandHtml: grand ? grand.outerHTML.slice(0, 800) : null,
-      blockElements: be.map((n: any) => ({ tag: n.tagName, dataType: n.getAttribute?.("data-type"), id: (n.getAttribute?.("data-node-id") || "").slice(0, 8) })),
-      dataKeys: detail?.data ? Object.keys(detail.data) : null,
-      dataId: detail?.data?.id || null,
-      dataType: detail?.data?.type || null,
-      dataSubType: detail?.data?.subType || null,
-      found,
-      mapped: !!mapped,
-      skipped,
-      tasksInDoc,
-      inputsInDoc: (typeof document !== "undefined") ? document.querySelectorAll('input[type=checkbox]').length : -1,
-      firstCheckboxHtml: firstCb ? (firstCb.outerHTML || "").slice(0, 300) : null,
-    });
-  }
-
   private async onBlockMenu(e: any): Promise<void> {
     try {
       const s = this.store.settings;
       const detail = e?.detail;
-      void this.diagnoseBlockMenu(detail, "content"); // 临时诊断：每次块右键都弹一次（固定 id，不堆叠）
       if (!s.blockSyncEnabled) return;
       // detail.element 通常是任务项内部的段落（NodeParagraph），真正的任务块（NodeListItem）
       // 是它的祖先，需向上 closest 取到。resolveTaskNode 已处理自身/祖先两种情况。
@@ -433,12 +388,9 @@ export default class CalDavPlugin extends Plugin {
       if (!el) return;
       const nodeId = el.getAttribute("data-node-id") || "";
       if (!nodeId) return;
-      const menu = detail?.menu;
-      if (!menu?.addItem) return;
-      // 右键正文路径：思源内核会把插件项统一收进写死的「插件」子菜单（已读 emitOpenMenu 源码确认，
-      // open-menu-content 与 click-blockicon 都套「插件」、且插件侧无法改名/置顶）。
-      // 故直接挂到主菜单第一层（钩子在「插件」被套之前执行），让项不再埋进「插件」。
-      for (const item of this.buildBlockSyncMenuItems(nodeId, el, s)) this.addFirstLevelMenuItem(menu, item);
+      // 同步加到菜单第一层并保证渲染，再异步抬高到「添加到数据库」之前（与番茄钟同高）。
+      // 注入逻辑见 injectBlockSyncMenu：失败/超时仍保证显示，不会丢项。
+      this.injectBlockSyncMenu(nodeId, el, s);
     } catch (err) {
       console.warn("[caldav] 块菜单钩子失败（已忽略）", err);
     }
@@ -458,9 +410,30 @@ export default class CalDavPlugin extends Plugin {
    */
   private buildBlockSyncMenuItems(nodeId: string, el: HTMLElement, s: any): any[] {
     const caller = this.kernelCaller();
+    // 两个固定项：始终出现（功能已启用时）。用户主动触发，不受 onManualSync/onStartup gate。
+    const fixed = [
+      {
+        icon: "iconCalDavSync",
+        label: "扫描任务块（当前文档）",
+        click: () => void this.scanBlockDoc(nodeId),
+      },
+      {
+        icon: "iconCalDavSync",
+        label: "扫描任务块（全部）",
+        click: () => void this.scanBlockAll(),
+      }
+    ];
+    const sep = { type: "separator" };
     const mapped = this.store.getAll().find((it) => it.kind === "todo" && it.blockId === nodeId);
     if (mapped) {
       return [
+        ...fixed,
+        sep,
+        {
+          icon: "iconCalDavSync",
+          label: "查看对应 VTODO",
+          click: () => this.showVtodoDetail(mapped),
+        },
         {
           icon: "iconCalDavSync",
           label: "取消同步（删除对应的 CalDAV 待办）",
@@ -478,6 +451,8 @@ export default class CalDavPlugin extends Plugin {
     }
     const skipped = !!el.getAttribute(BLOCK_SKIP_ATTR);
     return [
+      ...fixed,
+      sep,
       {
         icon: "iconCalDavSync",
         label: skipped ? "重新同步到 CalDAV" : "同步此任务到 CalDAV",
@@ -505,6 +480,49 @@ export default class CalDavPlugin extends Plugin {
   }
 
   /**
+   * 查看「任务块 ⇄ VTODO」当前绑定的 VTODO 详情（弹窗展示，避免钻多层子菜单）。
+   * 数据取自本地 store（即上次同步后的映射项）：日历名称、待办名称、开始日期、
+   * 结束日期、当前状态、UID。
+   */
+  private showVtodoDetail(item: any): void {
+    const settings = this.store.settings;
+    const cal = findCalendarByUrl(settings, item.calendarUrl);
+    const calName = cal?.displayName || item.calendarUrl || "未知日历";
+    const statusText: Record<string, string> = {
+      "needs-action": "未完成（未开始）",
+      "in-process": "进行中",
+      "completed": "已完成",
+    };
+    const status = item.status ? (statusText[item.status] || item.status) : "未完成（未开始）";
+    const dateCn = (stamp: string): string => (stamp ? `${stamp.slice(0, 4)}年${fmtDateCn(stamp)}` : "—");
+    const full = (stamp: string, allDay: boolean): string => {
+      if (!stamp) return "—";
+      const dp = dateCn(stamp);
+      return allDay ? dp : `${dp} ${fmtTime(stamp)}`;
+    };
+    const esc = (t: string): string =>
+      t.replace(/[&<>"']/g, (c) => (({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }) as Record<string, string>)[c]);
+    const rows: [string, string][] = [
+      ["日历名称", calName],
+      ["待办名称", item.summary || "—"],
+      ["开始日期", full(item.start, item.allDay)],
+      ["结束日期", item.end ? full(item.end, item.allDay) : "无（仅开始日期）"],
+      ["当前状态", status],
+      ["UID", item.uid || "—"],
+    ];
+    const body = rows
+      .map(([k, v]) => `<div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`)
+      .join("");
+    newDialog({
+      title: "对应 VTODO 详情",
+      content:
+        `<style>.caldav-vtodo-detail{padding:4px 2px;font-size:14px}.caldav-vtodo-detail .row{display:flex;justify-content:space-between;gap:18px;padding:7px 2px;border-bottom:1px solid var(--b3-border-color)}.caldav-vtodo-detail .k{color:var(--b3-theme-on-surface-light);flex:0 0 auto}.caldav-vtodo-detail .v{text-align:right;word-break:break-all}.caldav-vtodo-detail .tip{margin-top:10px;font-size:12px;color:var(--b3-theme-on-surface-light);opacity:.7}</style>` +
+        `<div class="caldav-vtodo-detail">${body}<div class="tip">数据来自上次同步后的本地缓存</div></div>`,
+      width: "440px",
+    });
+  }
+
+  /**
    * 块图标把手菜单入口（click-blockicon）：点块左侧图标把手（⋮⋮）弹出的菜单。
    * 该路径下插件**完全掌控 label**，故用一个名为「任务块 ⇄ VTODO」的子菜单收拢三态同步项，
    * 不再受思源内核对 open-menu-content 自动套的「插件」子菜单（其名不可改）限制。
@@ -512,19 +530,73 @@ export default class CalDavPlugin extends Plugin {
    * ⚠️ 全程同步 addItem，禁止在注入前 await（否则项丢失）。
    */
   /**
-   * 把同步菜单项加到「第一层」主菜单，从而绕过思源内核把插件项统一收进写死「插件」子菜单的机制。
+   * 把「任务块 ⇄ VTODO」同步子菜单注入到块菜单（右键 open-menu-content 与点 ⋮⋮ click-blockicon
+   * 两种入口共用），并定位在「添加到数据库」(addToDatabase) 之前，与番茄钟同高。
    *
-   * 依据（已读本机思源 resources/stage/build/desktop/main.*.js 的 emitOpenMenu 源码，模块 31417）：
-   *   内核在广播 open-menu-content / click-blockicon 事件（我们的钩子就在这时执行）**之后**，
-   *   才把临时 submenu 套进名为「插件」(languages.plugin) 的子菜单，且插件侧无法改名/置顶。
-   *   所以钩子里直接往 window.siyuan.menus.menu 加项，就能落在「插件」之前、即第一层
-   *   （番茄钟等插件也是这个套路）。旧版本若取不到主菜单对象，则回退到 detail.menu
-   *   （仍会被收进「插件」，但不致报错）。
+   * 为什么要「等 #commonMenu 挂载后再注入」(已读内核 + 番茄钟源码确认)：
+   *   思源块菜单的 DOM 容器是 #commonMenu，但它在钩子执行瞬间常尚未挂载到 document
+   *   （尤其是 click-blockicon 把手菜单）。旧版先往 window.siyuan.menus.menu.addItem 再加完用
+   *   DOM 搬运，项会被加进游离/随后被内核替换的容器而丢失 —— 这正是把手菜单「时有时无」的根因。
+   *   番茄钟的成熟做法是：等 #commonMenu 真正挂到 document 且稳定后，直接用 MenuItem 把项插入
+   *   #commonMenu .b3-menu__items 容器 DOM，因此两种入口都稳定靠上且对齐番茄钟。
    */
-  private addFirstLevelMenuItem(detailMenu: any, item: any): void {
+  /**
+   * 把菜单项同步加到「当前菜单实例」第一层（绕过思源内核把插件项收进写死「插件」子菜单的机制），
+   * 并返回新建的菜单项 DOM 元素。
+   *
+   * 关键：直接用 window.siyuan.menus.menu.addItem —— 该实例就是块菜单的渲染源
+   * （5efa636 版仅此一步即稳定显示，已验证可靠）。这样**保证项一定被渲染、绝不丢失**，
+   * 不再依赖 window.siyuan.MenuItem（思源并未把它挂到 window.siyuan 上，依赖它会导致注入被整体跳过）。
+   */
+  private addFirstLevelMenuItem(item: any): HTMLElement | null {
     const main = (window as any)?.siyuan?.menus?.menu;
-    const target = main && typeof main.addItem === "function" ? main : detailMenu;
-    target.addItem(item);
+    if (!main || typeof main.addItem !== "function") return null;
+    const el = main.addItem(item); // 内核 Menu.addItem 返回新建的 .b3-menu__item 元素
+    return el && el.nodeType === 1 ? (el as HTMLElement) : null;
+  }
+
+  /**
+   * 把刚加到菜单实例的项「抬高」到「添加到数据库」之前，与番茄钟同高。
+   * 等 #commonMenu 真正挂到 document 后再用 DOM 移动（钩子同步期移动会被丢，
+   * 尤其 click-blockicon 把手菜单）。本步骤失败/超时不影响显示——项已在 addFirstLevelMenuItem
+   * 时落进当前菜单实例（第一层），一定会被渲染。
+   */
+  private liftToTopWhenReady(el: HTMLElement): void {
+    if (!el || el.dataset.caldavLifted === "1") return;
+    el.dataset.caldavLifted = "1"; // 防重复抬高
+    const anchorSel = '#addToDatabase,[data-id="addToDatabase"]';
+    const whenElementExist = (sel: string): Promise<HTMLElement | null> =>
+      new Promise((resolve) => {
+        let tries = 0;
+        const tick = () => {
+          const found = typeof document !== "undefined" ? (document.querySelector(sel) as HTMLElement | null) : null;
+          if (found) return resolve(found);
+          if (tries++ > 120) return resolve(null); // ~2s 超时兜底
+          if (typeof window !== "undefined" && window.requestAnimationFrame) window.requestAnimationFrame(tick);
+          else setTimeout(tick, 16);
+        };
+        tick();
+      });
+    void whenElementExist("#commonMenu .b3-menu__items").then((container) => {
+      if (!container) return; // 超时：项已在菜单第一层，保留原位
+      const anchor = container.querySelector(anchorSel) as HTMLElement | null;
+      const anchorNode: Node | null = anchor && anchor.parentNode === container ? anchor : container.firstChild;
+      container.insertBefore(el, anchorNode);
+    });
+  }
+
+  private injectBlockSyncMenu(nodeId: string, el: HTMLElement, s: any): void {
+    // 先把「任务块 ⇄ VTODO」子菜单同步加到当前菜单实例第一层（保证一定渲染、不丢项），
+    // 再异步抬到「添加到数据库」之前与番茄钟同高。失败/超时仍保证显示。
+    const item = {
+      id: "caldavBlockSync",
+      icon: "iconCalDavSync",
+      label: "任务块 ⇄ VTODO",
+      type: "submenu",
+      submenu: this.buildBlockSyncMenuItems(nodeId, el, s),
+    };
+    const added = this.addFirstLevelMenuItem(item);
+    if (added) this.liftToTopWhenReady(added);
   }
 
   private onBlockIconMenu(e: any): void {
@@ -532,20 +604,12 @@ export default class CalDavPlugin extends Plugin {
       const s = this.store.settings;
       if (!s.blockSyncEnabled) return;
       const detail = e?.detail;
-      void this.diagnoseBlockMenu(detail, "icon"); // 临时诊断：⋮⋮ 块图标菜单也弹一次，便于确认 detail.data 结构
       const el = this.resolveTaskNode(detail);
       if (!el) return;
       const nodeId = el.getAttribute("data-node-id") || "";
       if (!nodeId) return;
-      const menu = detail?.menu;
-      if (!menu?.addItem) return;
-      // 绕过「插件」分组：直接挂主菜单第一层（内核 emitOpenMenu 在钩子之后才套「插件」）。
-      this.addFirstLevelMenuItem(menu, {
-        icon: "iconCalDavSync",
-        label: "任务块 ⇄ VTODO",
-        type: "submenu",
-        submenu: this.buildBlockSyncMenuItems(nodeId, el, s),
-      });
+      // 与右键正文入口一致：同步加第一层 + 异步抬高（失败仍显示，不会丢项）。
+      this.injectBlockSyncMenu(nodeId, el, s);
     } catch (err) {
       console.warn("[caldav] 块图标菜单钩子失败（已忽略）", err);
     }
@@ -1021,8 +1085,14 @@ export default class CalDavPlugin extends Plugin {
       this.reminder?.reschedule();
       // 文档任务块对账（issue #2）：拉取完成后跑，保证「服务端完成态」是最新的。
       // 单独兜错：块同步出错不能把整轮同步的成果报成失败。
+      // ⚠️ 受两个开关 gate：手动同步走 onManualSync，非手动（启动扫）走 onStartup；
+      // 二者互不重叠，各自独立。「立即扫描」按钮与块菜单单笔不走这里、不受 gate。
+      const wantBlock =
+        manual
+          ? this.store.settings.blockSyncOnManualSync !== false
+          : this.store.settings.blockSyncOnStartup !== false;
       try {
-        const blk = await this.blockSyncPass();
+        const blk = wantBlock ? await this.blockSyncPass() : undefined;
         if (blk?.text && manual) this.notify(blk.text, "info");
         if (blk?.text) this.refreshPanels();
       } catch (e) {
@@ -1058,7 +1128,29 @@ export default class CalDavPlugin extends Plugin {
 
   /** 内核调用器：core 层的块读写通过它打进来（本文件是唯一持内核入口的地方） */
   private kernelCaller(): KernelCaller {
-    return (url, body) => this.kernelData(url, body);
+    return (url, body) => this.kernelEnvelope(url, body);
+  }
+
+  /**
+   * 内核接口：返回**完整响应信封** `{code,msg,data,limit,truncated}`。
+   *
+   * 与 kernelData 的区别：后者只取 `data`，把 `truncated` 丢了。
+   * 而 `truncated` 恰恰是「扫描结果有没有被内核截断」的唯一信号 ——
+   * 内核 SQL 接口**没写 LIMIT 时只回 64 行**，超出的行静默丢弃；
+   * 任务块扫描一旦被截断，就不能推进增量水位线（没扫全，推了就永久漏块）。
+   */
+  private async kernelEnvelope(url: string, body: unknown): Promise<any> {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      return await res.json();
+    } catch (e) {
+      console.warn("[caldav] 内核接口调用失败:", url, e);
+      return undefined;
+    }
   }
 
   /**
@@ -1084,19 +1176,24 @@ export default class CalDavPlugin extends Plugin {
     return Array.from(ids);
   }
 
-  /** 跑一遍块对账（同步周期末尾 / 设置区「立即扫描」共用） */
-  private async blockSyncPass(): Promise<{ text: string } | undefined> {
+  /** 跑一遍块对账（同步周期末尾 / 设置区「立即扫描」/ 块菜单「扫描任务块」共用）。
+   *  @param docIds 限定只扫这些文档（按 root_id）。传入时范围只收口到这些文档。
+   *  @param opts.full 强制全量扫描（手动「扫描全部」/「立即扫描」用；其余按增量 + 安全网）。 */
+  private async blockSyncPass(docIds?: string[], opts?: { full?: boolean }): Promise<{ text: string } | undefined> {
     if (!this.store.settings.blockSyncEnabled) return undefined;
     const res = await runBlockSync({
       store: this.store,
       sync: this.sync,
       caller: this.kernelCaller(),
-      openDocIds: () => this.openDocIds()
+      openDocIds: () => this.openDocIds(),
+      docIds,
+      full: opts?.full
     });
     if (!res.scanned && !res.created && !res.updated && !res.written && !res.deleted) {
       return res.errors.length ? { text: res.errors[0] } : undefined;
     }
-    const parts = [`扫到 ${res.scanned} 个任务块`];
+    const mode = res.mode === "incremental" ? "增量" : "全量";
+    const parts = [`扫到 ${res.scanned} 个任务块（${mode}）`];
     if (res.created) parts.push(`新建 ${res.created}`);
     if (res.updated) parts.push(`更新 ${res.updated}`);
     if (res.written) parts.push(`回写 ${res.written}`);
@@ -1105,10 +1202,10 @@ export default class CalDavPlugin extends Plugin {
     return { text };
   }
 
-  /** 设置区「立即扫描」按钮 */
+  /** 设置区「立即扫描」按钮（用户主动要求「扫一遍」→ 走全量，不受增量水位线限制） */
   private async scanBlocksNow(): Promise<string> {
     if (!this.store.settings.blockSyncEnabled) return "文档任务块识别与映射未启用（先在上方打开开关）";
-    const r = await this.blockSyncPass();
+    const r = await this.blockSyncPass(undefined, { full: true });
     this.refreshPanels();
     return r?.text || "扫描完成，没有需要同步的任务块";
   }
@@ -1123,6 +1220,58 @@ export default class CalDavPlugin extends Plugin {
     this.refreshPanels();
     if (res.errors.length) return `清理完成 ${res.deleted} 条，${res.errors.length} 处出错：${res.errors[0]}`;
     return res.deleted ? `已清理 ${res.deleted} 条文档任务块转来的待办` : "没有可清理的条目";
+  }
+
+  /**
+   * 文档 tab 真正关闭时：扫描**该文档**的任务块（受 onDocClose + 总开关 gate）。
+   * 从 protyle 取出文档 root ID，按文档收口扫描 —— 这样即便范围设的是「打开的文档」，
+   * 刚关掉的文档也能被扫到（否则它已不在 open 集合里，删除会漏检）。
+   */
+  private onDocClose(e: any): void {
+    try {
+      const s = this.store.settings;
+      if (!s.blockSyncEnabled || !s.blockSyncOnDocClose) return;
+      const docId = docIdOf(e?.detail?.protyle);
+      if (!docId) return;
+      void this.blockSyncPass([docId])
+        .then((r) => {
+          if (r?.text) this.refreshPanels();
+        })
+        .catch((err) => console.warn("[caldav] 关闭文档时扫描任务块失败（已忽略）", err));
+    } catch (err) {
+      console.warn("[caldav] 关闭文档事件处理失败（已忽略）", err);
+    }
+  }
+
+  /** 块菜单「扫描任务块（当前文档）」：从点击的块反推所属文档，按该文档收口扫描 */
+  private async scanBlockDoc(nodeId: string): Promise<void> {
+    const s = this.store.settings;
+    if (!s.blockSyncEnabled) return;
+    const rootId = await getBlockRootId(this.kernelCaller(), nodeId);
+    if (!rootId) {
+      showMessage("没读到这个任务块所属的文档（可能已被删除）", 4000);
+      return;
+    }
+    try {
+      const r = await this.blockSyncPass([rootId]);
+      this.refreshPanels();
+      showMessage(r?.text || "已扫描当前文档的任务块", 4000, "info");
+    } catch (err) {
+      showMessage(`扫描失败：${String((err as Error)?.message || err)}`, 6000);
+    }
+  }
+
+  /** 块菜单「扫描任务块（全部）」：按设置范围扫全部（属用户主动触发，不受 onManualSync/onStartup gate）
+   *  —— 走**全量**：用户点「全部」就是要全扫一遍，不该被增量水位线挡住。 */
+  private async scanBlockAll(): Promise<void> {
+    if (!this.store.settings.blockSyncEnabled) return;
+    try {
+      const r = await this.blockSyncPass(undefined, { full: true });
+      this.refreshPanels();
+      showMessage(r?.text || "已扫描全部文档的任务块", 4000, "info");
+    } catch (err) {
+      showMessage(`扫描失败：${String((err as Error)?.message || err)}`, 6000);
+    }
   }
 
   /** 提醒状态摘要：让用户能区分「数据侧没设提醒」与「投递通道不通」 */

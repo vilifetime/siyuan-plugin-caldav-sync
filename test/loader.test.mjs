@@ -784,6 +784,20 @@ assert.ok(
   "「插入日记」菜单项应保留"
 );
 
+// 反回归：在主面板 calfilter 浮层里切换某个日历的启用态（toggleCalendar）后，
+// 左侧 Dock 必须跟着刷新 —— Dock 也按 enabledCalendars 过滤条目，而 persist() 不触发
+// onChange、renderAll() 只重绘本面板实例，不刷 Dock 实例（雄哥 2026-11-02 反馈：
+// 任务视图切了日历，Dock 没跟着切）。故 toggleCalendar 必须主动调 ctx.refreshPanels?.()。
+{
+  const panelSrc = fs.readFileSync(path.join(ROOT, "src/ui/panel.ts"), "utf8");
+  const idx = panelSrc.indexOf("function toggleCalendar");
+  const fn = panelSrc.slice(idx, panelSrc.indexOf("\n}", idx) + 2);
+  assert.ok(
+    /ctx\.refreshPanels\?\.\(\)/.test(fn),
+    "toggleCalendar 必须调用 ctx.refreshPanels?.() 以同步刷新左侧 Dock（否则 Dock 残留旧日历条目）"
+  );
+}
+
 // ---- 「日历视图中显示待办任务」开关：关掉后日历视图只留日程，任务视图不受影响 ----
 // 关键字形：主键 keyOf() 产出 "<uid>"（重复实例 "<uid>|<recurId>"，不含 kind），
 // chip 上用 data-kind 标种类，按它选 kind。

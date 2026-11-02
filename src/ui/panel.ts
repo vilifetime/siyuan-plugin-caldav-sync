@@ -270,7 +270,12 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       if (cal) {
         cal.enabled = !cal.enabled;
         void ctx.store.persist();
+        // persist() 不触发 onChange，renderAll() 只重绘本（主面板）实例；
+        // 左侧 Dock 是另一个实例、也按 enabledCalendars 过滤条目
+        // （见 matchesDockFilter → isEnabledCalendar），不主动刷就会残留旧日历
+        // 条目（雄哥 2026-11-02 反馈：任务视图切了日历，Dock 没跟着切）。
         renderAll();
+        ctx.refreshPanels?.();
         return;
       }
     }

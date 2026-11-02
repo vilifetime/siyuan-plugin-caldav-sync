@@ -18,6 +18,8 @@
  */
 import { Solar } from "lunar-javascript";
 import type { CalSettings } from "./types";
+import { t as _t } from "./i18n";
+
 
 export interface CnHoliday {
   /** 节假日名称，如「国庆节」 */
@@ -53,7 +55,7 @@ function fromArray(arr: any[]): Record<string, CnHoliday> | null {
   const map: Record<string, CnHoliday> = {};
   for (const it of arr) {
     if (it && it.date) {
-      map[String(it.date).slice(0, 10)] = { name: it.name || "节假日", off: it.isOffDay !== false };
+      map[String(it.date).slice(0, 10)] = { name: it.name || _t("节假日"), off: it.isOffDay !== false };
     }
   }
   return Object.keys(map).length ? map : null;
@@ -73,7 +75,7 @@ function timorNormalize(data: unknown): Record<string, CnHoliday> | null {
   for (const k of Object.keys(t.holiday)) {
     const it = t.holiday[k];
     if (it && it.date) {
-      map[String(it.date).slice(0, 10)] = { name: it.name || "节假日", off: it.holiday === true };
+      map[String(it.date).slice(0, 10)] = { name: it.name || _t("节假日"), off: it.holiday === true };
     }
   }
   return Object.keys(map).length ? map : null;
@@ -88,8 +90,8 @@ function genericNormalize(data: unknown): Record<string, CnHoliday> | null {
     const map: Record<string, CnHoliday> = {};
     for (const k of Object.keys(data as object)) {
       const it = (data as any)[k];
-      if (it && it.date) map[String(it.date).slice(0, 10)] = { name: it.name || "节假日", off: it.isOffDay !== false };
-      else if (it && it.name !== undefined) map[k.slice(0, 10)] = { name: it.name || "节假日", off: it.isOffDay !== false };
+      if (it && it.date) map[String(it.date).slice(0, 10)] = { name: it.name || _t("节假日"), off: it.isOffDay !== false };
+      else if (it && it.name !== undefined) map[k.slice(0, 10)] = { name: it.name || _t("节假日"), off: it.isOffDay !== false };
     }
     return Object.keys(map).length ? map : null;
   }
@@ -100,12 +102,12 @@ function genericNormalize(data: unknown): Record<string, CnHoliday> | null {
 const timorCand = (y: number): Cand => ({ url: `https://timor.tech/api/holiday/year/${y}`, normalize: timorNormalize });
 const SOURCES: Record<string, SourceDef> = {
   "timor": {
-    label: "timor.tech（国内部署，推荐）",
+    label: _t("timor.tech（国内部署，推荐）"),
     headers: UA,
     candidates: (y) => [timorCand(y)]
   },
   "holiday-cn": {
-    label: "NateScarlet/holiday-cn（jsdelivr，国内常受限）",
+    label: _t("NateScarlet/holiday-cn（jsdelivr，国内常受限）"),
     headers: UA,
     candidates: (y) => [
       { url: `https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${y}.json`, normalize: nateNormalize },
@@ -116,7 +118,7 @@ const SOURCES: Record<string, SourceDef> = {
     ]
   },
   "chinese-days": {
-    label: "vsme/chinese-days（jsdelivr/npm）",
+    label: _t("vsme/chinese-days（jsdelivr/npm）"),
     headers: UA,
     candidates: (y) => [
       { url: `https://fastly.jsdelivr.net/npm/chinese-days/dist/${y}.json`, normalize: genericNormalize },
@@ -131,7 +133,7 @@ function resolveSourceDef(source: string): SourceDef | null {
   if (!source) return null; // 自定义但未填 URL
   // 自定义：支持 {year} 占位；无自动镜像
   return {
-    label: "自定义",
+    label: _t("自定义"),
     headers: UA,
     candidates: (y) => [{ url: source.replace(/\{year\}/g, String(y)), normalize: genericNormalize }]
   };
@@ -185,8 +187,8 @@ async function fetchYearJson(def: SourceDef, year: number, timeoutMs = 12000): P
   const results = await Promise.all(cands.map((c) => holidayTransport(c.url, timeoutMs, def.headers)));
   const hit = results.findIndex((r) => r && r.ok);
   if (hit < 0) {
-    const errs = results.filter((r) => r && r.error).map((r) => r!.error).join("；") || "全部候选源无响应";
-    lastHolidayError = `「${def.label}」${year}年 所有候选源均失败：${errs}`;
+    const errs = results.filter((r) => r && r.error).map((r) => r!.error).join(_t("；")) || _t("全部候选源无响应");
+    lastHolidayError = `${_t("「")}${def.label}${_t("」")}${year}${_t("年")} ${_t("所有候选源均失败：")}${errs}`;
     console.warn("[caldav] " + lastHolidayError);
     return null;
   }
@@ -235,7 +237,7 @@ export function lunarFor(dateStr: string): { lunar: string; jieqi: string } {
   try {
     const l = Solar.fromYmd(y, m, d).getLunar();
     // 月、日间插入「月」字：八 → 八月廿九；闰六 → 闰六月初一；冬 → 冬月十一；正 → 正月初一
-    return { lunar: l.getMonthInChinese() + "月" + l.getDayInChinese(), jieqi: l.getJieQi() };
+    return { lunar: _t("{0}月{1}", l.getMonthInChinese(), l.getDayInChinese()), jieqi: l.getJieQi() };
   } catch {
     return { lunar: "", jieqi: "" };
   }

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /**
  * 任务状态模型：思源任务块 marker ⇄ VTODO STATUS ⇄ 插件内部状态。
  *
@@ -69,10 +70,10 @@ const VALID_STATUS = new Set<string>([
 
 /** 四态的中文短标签（用于列表 / 任务视图等 UI 状态前缀，「未开始 / 进行中 / 已完成 / 已作废」） */
 export const STATE_TEXT_ZH: Record<TaskState, string> = {
-  todo: "未开始",
-  "in-progress": "进行中",
-  done: "已完成",
-  canceled: "已作废"
+  todo: t("未开始"),
+  "in-progress": t("进行中"),
+  done: t("已完成"),
+  canceled: t("已作废")
 };
 
 /** 状态 → 中文短标签 */

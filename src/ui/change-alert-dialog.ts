@@ -12,36 +12,38 @@ import { newDialog } from "@/ui/dialog";
 import { isMobile } from "./device";
 import type { BlockChangeAlert } from "../core/block-sync";
 import { escape } from "./view-common";
+import { t } from "../core/i18n";
+
 
 function rowHtml(label: string, n: number): string {
   return `<div class="caldav-blkinfo-row">
     <span class="caldav-blkinfo-k">${escape(label)}</span>
-    <span class="caldav-blkinfo-v caldav-blkinfo-v--mono">${n} 条</span>
+    <span class="caldav-blkinfo-v caldav-blkinfo-v--mono">${n} ${t("条")}</span>
   </div>`;
 }
 
 function alertHtml(info: BlockChangeAlert): string {
   const lines: string[] = [];
-  if (info.written) lines.push(rowHtml("回写任务块", info.written));
-  if (info.created) lines.push(rowHtml("新建待办", info.created));
-  if (info.updated) lines.push(rowHtml("更新待办", info.updated));
-  if (info.deleted) lines.push(rowHtml("删除待办", info.deleted));
+  if (info.written) lines.push(rowHtml(t("回写任务块"), info.written));
+  if (info.created) lines.push(rowHtml(t("新建待办"), info.created));
+  if (info.updated) lines.push(rowHtml(t("更新待办"), info.updated));
+  if (info.deleted) lines.push(rowHtml(t("删除待办"), info.deleted));
   return `
 <div class="caldav-editor-form">
   <p class="caldav-set-hint">
-    本轮任务块对账算出来的改动共 <b>${info.total}</b> 条，超过告警值 <b>${info.threshold}</b>。
-    改动过大的一轮往往不是常态（可能是扫描范围配错、缓存被清、服务端被重建），请先过一眼：
+    ${t("本轮任务块对账算出来的改动共")} <b>${info.total}</b> ${t("条，超过告警值")} <b>${info.threshold}</b>${t("。")}
+    ${t("改动过大的一轮往往不是常态（可能是扫描范围配错、缓存被清、服务端被重建），请先过一眼：")}
   </p>
   <div class="caldav-blkinfo">${lines.join("")}</div>
   <p class="caldav-set-hint">
-    改动 <b>${info.total}</b> 条（同一条待办若既回写文档又更新服务端，只算一条）。
-    「继续同步」按上面明细执行；「取消」则本轮一条都不改（增量水位线也不推进，下一轮会重新对账）。
+    ${t("改动")} <b>${info.total}</b> ${t("条（同一条待办若既回写文档又更新服务端，只算一条）。")}
+    ${t("「继续同步」按上面明细执行；「取消」则本轮一条都不改（增量水位线也不推进，下一轮会重新对账）。")}
   </p>
 </div>
 <div class="caldav-editor-foot">
   <span class="caldav-flex"></span>
-  <button type="button" class="caldav-foot-btn caldav-foot-btn--ghost" data-act="cancel">取消</button>
-  <button type="button" class="caldav-foot-btn caldav-foot-btn--primary" data-act="ok">继续同步（${info.total} 条）</button>
+  <button type="button" class="caldav-foot-btn caldav-foot-btn--ghost" data-act="cancel">${t("取消")}</button>
+  <button type="button" class="caldav-foot-btn caldav-foot-btn--primary" data-act="ok">${t("继续同步（")}${info.total} ${t("条）")}</button>
 </div>`;
 }
 
@@ -65,7 +67,7 @@ export function confirmBlockChanges(info: BlockChangeAlert): Promise<boolean> {
     };
     const mobile = isMobile();
     const dialog = newDialog({
-      title: `任务块同步：本轮改动 ${info.total} 条`,
+      title: `${t("任务块同步：本轮改动")} ${info.total} ${t("条")}`,
       content: `<div class="caldav-editor caldav-change-alert">${alertHtml(info)}</div>`,
       // 桌面端不写死高度：内容就三四行，让弹窗自己贴合内容（写 86vh 会留一大片空白）
       width: mobile ? "100vw" : "460px",

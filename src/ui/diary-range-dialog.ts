@@ -16,13 +16,15 @@ import { isMobile } from "./device";
 import { adoptMobileLayer } from "./mobile-layers";
 import type { DiaryRange, DiaryTarget } from "./diary-range";
 import { targetOptionsOf } from "./diary-range";
+import { t } from "../core/i18n";
+
 
 /** 顺序即显示顺序，第一项是默认项 */
 const RANGES: { key: DiaryRange; label: string; hint: string }[] = [
-  { key: "day", label: "当日", hint: "今天的日程与待办" },
-  { key: "week", label: "本周", hint: "本周一至本周日（自然周，周一起算）" },
-  { key: "month", label: "本月", hint: "本月 1 日至本月最后一天" },
-  { key: "all", label: "所有", hint: "全部历史与未来的条目" }
+  { key: "day", label: t("当日"), hint: t("今天的日程与待办") },
+  { key: "week", label: t("本周"), hint: t("本周一至本周日（自然周，周一起算）") },
+  { key: "month", label: t("本月"), hint: t("本月 1 日至本月最后一天") },
+  { key: "all", label: t("所有"), hint: t("全部历史与未来的条目") }
 ];
 
 /**
@@ -35,12 +37,12 @@ export function askDiaryRange(onPick: (range: DiaryRange, target: DiaryTarget) =
 
   const mobile = isMobile();
   const dialog = newDialog({
-    title: "插入日记",
+    title: t("插入日记"),
     content: `
 <div class="caldav-range">
-  <div class="caldav-range-lead">要把哪个范围的日程与待办写入日记？</div>
+  <div class="caldav-range-lead">${t("要把哪个范围的日程与待办写入日记？")}</div>
   <fieldset class="caldav-range-opts">
-    <legend class="sr-only">插入范围</legend>
+    <legend class="sr-only">${t("插入范围")}</legend>
     ${RANGES.map(
       (o) => `
     <div class="caldav-range-opt${o.key === "day" ? " is-checked" : ""}" data-range-row="${o.key}">
@@ -49,7 +51,7 @@ export function askDiaryRange(onPick: (range: DiaryRange, target: DiaryTarget) =
           <input type="radio" name="caldav-range" value="${o.key}"${o.key === "day" ? " checked" : ""}/>
           <span class="caldav-range-opt-label">${o.label}</span>
         </label>
-        <!-- 子选项槽：只有被选中的范围行才往里渲染（见 renderSub） -->
+        <!-- ${t("子选项槽：只有被选中的范围行才往里渲染（见")} renderSub${t("）")} -->
         <span class="caldav-range-inline" data-inline></span>
       </div>
       <span class="caldav-range-opt-hint">${o.hint}</span>
@@ -58,8 +60,8 @@ export function askDiaryRange(onPick: (range: DiaryRange, target: DiaryTarget) =
   </fieldset>
   <div class="caldav-editor-foot">
     <span class="caldav-flex"></span>
-    <button class="caldav-foot-btn caldav-foot-btn--ghost" data-act="cancel">取消</button>
-    <button class="caldav-foot-btn caldav-foot-btn--primary" data-act="ok">确认插入</button>
+    <button class="caldav-foot-btn caldav-foot-btn--ghost" data-act="cancel">${t("取消")}</button>
+    <button class="caldav-foot-btn caldav-foot-btn--primary" data-act="ok">${t("确认插入")}</button>
   </div>
 </div>`,
     width: mobile ? "100vw" : "420px",

@@ -91,6 +91,10 @@ If direct requests fail with CORS errors, set the channel to "SiYuan kernel prox
   - Mobile entry points: "Calendar & Tasks" in the top-right "Plugins" menu, or the "Calendar view / Task view" buttons in the plugin side drawer
   - On iPhone long-press does not trigger the system menu, but the long-press gesture itself works (explicitly implemented, not relying on `contextmenu`)
 
+## Internationalization
+
+The plugin follows SiYuan's UI language automatically. Currently **简体中文** (default) and **English** are supported. Dictionaries live in `i18n/zh_CN.json` and `i18n/en_US.json` (flat `key → text`, where the key is the Chinese source string; missing keys fall back to Chinese rather than blanking). Conventions and how to add a new language are in [docs/i18n.md](docs/i18n.md).
+
 ## Development
 
 ```bash

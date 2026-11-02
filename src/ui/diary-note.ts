@@ -9,6 +9,8 @@
  * 绝不返回半渲染的路径 —— 否则会建出名字里带 `{{ }}` 的垃圾文档。
  */
 import { fmtDateCn, parseLocalStamp, startOfDay } from "../core/date";
+import { t } from "../core/i18n";
+
 
 /**
  * Go 的参考时间是 2006-01-02 15:04:05，所以「年」在格式串里长�� `2006`。
@@ -121,7 +123,7 @@ export function dailyNoteAttrName(day: string): string {
  * 必须带日期 —— 否则读者看到一串 09:00 根本分不清是哪天的条目。
  */
 export function diaryWhenLabel(occ: string, timed: boolean, crossDay: boolean): string {
-  const time = timed ? occ.slice(11, 16) : "全天";
+  const time = timed ? occ.slice(11, 16) : t("全天");
   return crossDay ? `${fmtDateCn(occ)} ${time}` : time;
 }
 

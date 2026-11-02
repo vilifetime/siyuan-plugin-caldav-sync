@@ -10,6 +10,8 @@ import {
 } from "./date";
 import { pad2 } from "./types";
 import { normalizeTodoStatus } from "./task-state";
+import { t } from "./i18n";
+
 
 /**
  * 单个内联附件的**默认**硬上限（MB，2026-10-15，设置项可改）。
@@ -247,7 +249,7 @@ function attachmentName(uri: string, fmttype?: string): string {
   const last = path.split("/").filter(Boolean).pop();
   if (last) return decodeURIComponent(last);
   const sub = fmttype ? "." + fmttype.split("/").pop() : "";
-  return "附件" + (sub && sub !== "." ? sub : "");
+  return t("附件{0}", (sub && sub !== "." ? sub : ""));
 }
 
 /**
@@ -736,7 +738,7 @@ function rebuildComponent(comp: IcsComponent, item: CalItem): IcsComponent {
   for (const a of item.alarms || []) {
     props.push({ name: "BEGIN", params: {}, value: "VALARM" });
     props.push({ name: "ACTION", params: {}, value: "DISPLAY" });
-    props.push({ name: "DESCRIPTION", params: {}, value: escapeText(item.summary || "提醒") });
+    props.push({ name: "DESCRIPTION", params: {}, value: escapeText(item.summary || t("提醒")) });
     props.push({ name: "TRIGGER", params: {}, value: `-PT${a.minutesBefore}M` });
     props.push({ name: "END", params: {}, value: "VALARM" });
   }
@@ -810,8 +812,8 @@ export function itemToEditedICS(item: CalItem): string {
   // 抛出来让同步层报错，条目保持脏、下次重试，比静默毁数据好。
   if (!match) {
     throw new Error(
-      `ICS 原文里找不到 ${target}（UID=${item.uid}${item.recurId ? " RECURRENCE-ID=" + item.recurId : ""}），` +
-        `已中止写入以免丢失其它属性`
+      `ICS ${t("原文里找不到")} ${target}${t("（")}UID=${item.uid}${item.recurId ? " RECURRENCE-ID=" + item.recurId : ""}${t("），")}` +
+        `${t("已中止写入以免丢失其它属性")}`
     );
   }
   // 兜底：原文没有 VCALENDAR 信封层（被 <![CDATA[ 包裹污染、或本身就是裸组件）→
@@ -865,7 +867,7 @@ export function itemToEditedICS(item: CalItem): string {
 export function itemToConvertedICS(oldItem: CalItem, newItem: CalItem): string {
   if (!oldItem.raw) {
     throw new Error(
-      `转换失败：缺少 ICS 原文（UID=${oldItem.uid}），无法保留 VTIMEZONE/ORGANIZER 等属性`
+      `${t("转换失败：缺少")} ICS ${t("原文（")}UID=${oldItem.uid}${t("），无法保留")} VTIMEZONE/ORGANIZER ${t("等属性")}`
     );
   }
   const root = parseICS(oldItem.raw);
@@ -875,8 +877,8 @@ export function itemToConvertedICS(oldItem: CalItem, newItem: CalItem): string {
   // 找不到旧组件：与 itemToEditedICS 同口径，抛错而非退回整份重拼（否则会抹掉其它属性）。
   if (!match) {
     throw new Error(
-      `ICS 原文里找不到 ${oldType}（UID=${oldItem.uid}${oldItem.recurId ? " RECURRENCE-ID=" + oldItem.recurId : ""}），` +
-        `已中止转换以免丢失其它属性`
+      `ICS ${t("原文里找不到")} ${oldType}${t("（")}UID=${oldItem.uid}${oldItem.recurId ? " RECURRENCE-ID=" + oldItem.recurId : ""}${t("），")}` +
+        `${t("已中止转换以免丢失其它属性")}`
     );
   }
   const rebuilt = rebuildComponent(match, newItem);

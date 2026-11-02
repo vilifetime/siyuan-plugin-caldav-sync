@@ -6,6 +6,8 @@ import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs } from "../core/date";
 import { stateOfStatus, STATUS_CANCELLED, type TaskState } from "../core/task-state";
 import { chinaCalendarEnabled, holidayFor, lunarFor } from "../core/holiday-cn";
+import { t } from "../core/i18n";
+
 
 export interface ViewArgs {
   ctx: PanelCtx;
@@ -77,7 +79,7 @@ export function chinaDayBarHTML(ctx: PanelCtx, dateStr: string): string {
     if (h) {
       holidayHTML =
         `<span class="cal-hl-name">${escape(h.name)}</span>` +
-        `<span class="cal-hl-tag ${h.off ? "rest" : "work"}">${h.off ? "休" : "班"}</span>`;
+        `<span class="cal-hl-tag ${h.off ? "rest" : "work"}">${h.off ? t("休") : t("班")}</span>`;
     }
   }
 
@@ -123,18 +125,18 @@ export function matchesSearchQuery(it: CalItem, q: string): boolean {
 export function monthChipHtml(it: CalItem, occ: string, calColor: string): string {
   const k = keyOfItem(it);
   const done = it.kind === "todo" && it.percent === 100;
-  const check = it.kind === "todo" ? `<button class="cal-chip-check" data-toggle="${k}" title="${done ? "标记未完成" : "标记完成"}">✓</button>` : "";
+  const check = it.kind === "todo" ? `<button class="cal-chip-check" data-toggle="${k}" title="${done ? t("标记未完成") : t("标记完成")}">✓</button>` : "";
   const timeRow = it.allDay
     ? ""
     : `<div class="cal-chip-row cal-chip-row-time"><span class="cal-chip-time">${occ.slice(11, 16)}</span></div>`;
   return `<div class="cal-chip cal-chip-month ${done ? "is-done" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColor}">
-    <div class="cal-chip-row">${check}<span class="cal-chip-title">${repeatMark(it)}${escape(it.summary || "(无标题)")}</span></div>
+    <div class="cal-chip-row">${check}<span class="cal-chip-title">${repeatMark(it)}${escape(it.summary || t("(无标题)"))}</span></div>
     ${timeRow}
   </div>`;
 }
 
 export function repeatMark(it: CalItem): string {
-  return it.rrule ? '<span class="cal-chip-repeat" title="重复">↻</span>' : "";
+  return it.rrule ? t('<span class="cal-chip-repeat" title="重复">↻</span>') : "";
 }
 
 export function escape(s: string): string {

@@ -13,6 +13,8 @@ import {
 } from "./secret";
 import { sanitizeEtag } from "./caldav";
 import { serverOriginOf } from "./server-id";
+import { t } from "./i18n";
+
 
 export interface StoreEnv {
   loadData: () => Promise<any>;
@@ -156,7 +158,7 @@ export class CalStore {
       }
       this.secretBroken = true;
       // 写进 lastError，让 Dock 状态栏能直接显示出来（否则只在控制台，用户看不到）
-      this.lastError = `账户「${acc.name}」的密码密文与本地密钥不匹配（可能由另一台设备写入），请重新输入密码`;
+      this.lastError = `${t("账户「")}${acc.name}${t("」的密码密文与本地密钥不匹配（可能由另一台设备写入），请重新输入密码")}`;
       console.warn("[caldav] 密码解密失败（密钥不匹配），请在设置中重新输入密码");
     }
   }
@@ -171,11 +173,11 @@ export class CalStore {
 
   /** 凭据是否可用（用于同步前检查与界面提示）；多账户下逐个检查，报第一个有问题的 */
   credentialsIssue(): string | undefined {
-    if (this.pendingUnlock) return "密码待解密（密钥未就绪），稍后会自动重试";
-    if (this.secretBroken) return "密码解不开（密文来自另一台设备或已换设备），请在设置中重新输入密码";
+    if (this.pendingUnlock) return t("密码待解密（密钥未就绪），稍后会自动重试");
+    if (this.secretBroken) return t("密码解不开（密文来自另一台设备或已换设备），请在设置中重新输入密码");
     for (const acc of this.settings.accounts) {
       if (!acc.enabled) continue;
-      if (acc.serverUrl && !acc.password) return `账户「${acc.name}」未填写密码，请在设置中填写`;
+      if (acc.serverUrl && !acc.password) return `${t("账户「")}${acc.name}${t("」未填写密码，请在设置中填写")}`;
     }
     return undefined;
   }
@@ -358,8 +360,8 @@ export class CalStore {
     }
     this.purgeBackup = {
       at: new Date().toISOString(),
-      keptServer: Array.from(active).join("、"),
-      removedServers: Array.from(removed).join("、"),
+      keptServer: Array.from(active).join(t("、")),
+      removedServers: Array.from(removed).join(t("、")),
       count: victims.length,
       items: victims.map((v) => ({ ...v }))
     };
@@ -394,7 +396,7 @@ export class CalStore {
     if (!victims.length) return 0;
     this.purgeBackup = {
       at: new Date().toISOString(),
-      keptServer: (this.settings.accounts.filter((a) => a.id !== accountId).map((a) => a.name).join("、") || "（无其他账户）"),
+      keptServer: (this.settings.accounts.filter((a) => a.id !== accountId).map((a) => a.name).join(t("、")) || t("（无其他账户）")),
       removedServers: acc.name,
       count: victims.length,
       items: victims.map((v) => ({ ...v })),

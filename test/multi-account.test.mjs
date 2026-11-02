@@ -891,7 +891,7 @@ console.log("[multiacc] G. 源码级防漂移");
   });
 
   await t("单账户错误带账户名且 continue（不能 return/抛错把其他账户带停）", () => {
-    assert.ok(/账户「\$\{acc\.name\}」/.test(syncSrc), "错误文案必须带账户名");
+    assert.ok(/账户「[\s\S]*\$\{acc\.name\}[\s\S]*」/.test(syncSrc), "错误文案必须带账户名（i18n 包裹后仍须把账户名包在「」里）");
     const m = /const credErr = this\.accountCredentialError\(acc\);[\s\S]*?continue;/.exec(syncSrc);
     assert.ok(m, "凭据错误分支必须 continue（跳过该账户、其他账户继续）");
     const stale = /const stale = staleCalendarNames\(acc\.serverUrl, accCals\);[\s\S]*?continue;/.exec(syncSrc);

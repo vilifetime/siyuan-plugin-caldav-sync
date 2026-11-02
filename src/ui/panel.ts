@@ -30,6 +30,8 @@ import { renderListView } from "./view-list";
 import { todoDueOccurrences, stateOfItem } from "./view-common";
 import { stateTextZh } from "../core/task-state";
 import { chinaCalendarEnabled, warmChinaCalendar } from "../core/holiday-cn";
+import { t as _t } from "../core/i18n";
+
 
 export type ViewMode = "year" | "month" | "week" | "day" | "task";
 
@@ -106,66 +108,66 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   <main class="caldav-main">
     <header class="caldav-toolbar">
       <div class="caldav-toolbar-left">
-        <button class="caldav-icon-btn" data-action="prev" title="上一页">${icons.prev}</button>
-        <button class="caldav-btn" data-action="today">今天</button>
-        <button class="caldav-icon-btn" data-action="next" title="下一页">${icons.next}</button>
+        <button class="caldav-icon-btn" data-action="prev" title="${_t("上一页")}">${icons.prev}</button>
+        <button class="caldav-btn" data-action="today">${_t("今天")}</button>
+        <button class="caldav-icon-btn" data-action="next" title="${_t("下一页")}">${icons.next}</button>
         <span class="caldav-cursor-title"></span>
       </div>
       <div class="caldav-toolbar-center">
-        <div class="caldav-seg" role="tablist" aria-label="视图切换">
-          <button class="caldav-seg-btn" data-view="year">年</button>
-          <button class="caldav-seg-btn" data-view="month">月</button>
-          <button class="caldav-seg-btn" data-view="week">周</button>
-          <button class="caldav-seg-btn" data-view="day">日</button>
+        <div class="caldav-seg" role="tablist" aria-label="${_t("视图切换")}">
+          <button class="caldav-seg-btn" data-view="year">${_t("年")}</button>
+          <button class="caldav-seg-btn" data-view="month">${_t("月")}</button>
+          <button class="caldav-seg-btn" data-view="week">${_t("周")}</button>
+          <button class="caldav-seg-btn" data-view="day">${_t("日")}</button>
         </div>
         <!--
-          「列表」按钮（2026-10-25 雄哥拍板方案 A）：放在 年/月/周/日 **右边**。
-          它是横切在时间段之上的**正交开关** —— 年/月/周/日决定范围，
-          列表决定呈现方式（见 PanelCtx.listMode）。因此切时间段时列表自动换范围，
-          不用再点一次「列表」。单独成组（不塞进 .caldav-seg 内）是为了视觉上
-          与「时间段选择」区分开 —— 挤在一个分段控件里会被误读成第五种时间段。
+          ${_t("「列表」按钮（")}2026-10-25 ${_t("雄哥拍板方案")} A${_t("）：放在")} ${_t("年")}/${_t("月")}/${_t("周")}/${_t("日")} **${_t("右边")}**${_t("。")}
+          ${_t("它是横切在时间段之上的")}**${_t("正交开关")}** ${_t("——")} ${_t("年")}/${_t("月")}/${_t("周")}/${_t("日决定范围，")}
+          ${_t("列表决定呈现方式（见")} PanelCtx.listMode${_t("）。因此切时间段时列表自动换范围，")}
+          ${_t("不用再点一次「列表」。单独成组（不塞进")} .caldav-seg ${_t("内）是为了视觉上")}
+          ${_t("与「时间段选择」区分开")} ${_t("——")} ${_t("挤在一个分段控件里会被误读成第五种时间段。")}
         -->
         <button class="caldav-list-toggle" data-action="toggle-list"
-                title="列表视图" aria-label="列表视图" aria-pressed="false">列表</button>
+                title="${_t("列表视图")}" aria-label="${_t("列表视图")}" aria-pressed="false">${_t("列表")}</button>
       </div>
       <!--
-        任务视图的统计条挂载点。放在 toolbar-right **之前** —— 任务视图时左中两块
-        被 .is-task 隐藏，统计条自然靠左；日历视图时本元素为空（见 renderView 的清空），
-        不占位。实际内容由 view-task.ts 渲染后写进来（统计数据的来源在那边）。
+        ${_t("任务视图的统计条挂载点。放在")} toolbar-right **${_t("之前")}** ${_t("——")} ${_t("任务视图时左中两块")}
+        ${_t("被")} .is-task ${_t("隐藏，统计条自然靠左；日历视图时本元素为空（见")} renderView ${_t("的清空），")}
+        ${_t("不占位。实际内容由")} view-task.ts ${_t("渲染后写进来（统计数据的来源在那边）。")}
       -->
       <div class="caldav-toolbar-stats" data-slot="task-stats"></div>
       <div class="caldav-toolbar-right">
-        <button class="caldav-btn caldav-btn-primary" data-action="new-event">${icons.plus} 日程</button>
-        <button class="caldav-btn" data-action="new-todo">${icons.plus} 待办</button>
+        <button class="caldav-btn caldav-btn-primary" data-action="new-event">${icons.plus} ${_t("日程")}</button>
+        <button class="caldav-btn" data-action="new-todo">${icons.plus} ${_t("待办")}</button>
         <!--
-          手动同步按钮（2026-10-09 雄哥要求，与 Obsidian 侧对齐）：
-          原来只有 Dock 里的刷新键与命令面板里有同步入口，主面板工具栏没有 ——
-          想立刻拉一次得先切到 Dock。图标用icons.sync。
+          ${_t("手动同步按钮（")}2026-10-09 ${_t("雄哥要求，与")} Obsidian ${_t("侧对齐）：")}
+          ${_t("原来只有")} Dock ${_t("里的刷新键与命令面板里有同步入口，主面板工具栏没有")} ${_t("——")}
+          ${_t("想立刻拉一次得先切到")} Dock${_t("。图标用")}icons.sync${_t("。")}
         -->
-        <button class="caldav-icon-btn" data-action="sync-now" title="立即同步 CalDAV"
-                aria-label="立即同步 CalDAV">${icons.sync}</button>
+        <button class="caldav-icon-btn" data-action="sync-now" title="${_t("立即同步")} CalDAV"
+                aria-label="${_t("立即同步")} CalDAV">${icons.sync}</button>
         <div class="caldav-calfilter-wrap">
-          <button class="caldav-icon-btn" data-action="calfilter" title="日历筛选">${icons.layers}</button>
+          <button class="caldav-icon-btn" data-action="calfilter" title="${_t("日历筛选")}">${icons.layers}</button>
           <div class="caldav-calfilter-pop" data-pop="calfilter" hidden>
-            <div class="caldav-cal-head">日历筛选</div>
-            <!-- 多账户（2026-10-25）：按账户分组的日历勾选（与侧栏同一份渲染，点眼睛/整行即切换） -->
+            <div class="caldav-cal-head">${_t("日历筛选")}</div>
+            <!-- ${_t("多账户（")}2026-10-25${_t("）：按账户分组的日历勾选（与侧栏同一份渲染，点眼睛")}/${_t("整行即切换）")} -->
             <div class="caldav-cal-list caldav-cal-list--filter"></div>
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
-              <span class="caldav-switch-label">日历视图中显示待办任务</span>
+              <span class="caldav-switch-label">${_t("日历视图中显示待办任务")}</span>
               <span class="caldav-switch">
                 <input type="checkbox" data-opt="showTodos"/>
                 <span class="caldav-switch-track"></span>
               </span>
             </label>
             <!--
-              任务视图的两个开关（2026-10-08 对齐 Obsidian 侧：那边就放在这个浮层里）。
-              **这是唯一入口** —— 设置弹窗里不再放同一对开关，避免两处都能改、
-              改完互相打架。默认都是关的；第二层「显示过期日程」初始 hidden，
-              主开关打开才出现，hidden 时整行不占位
-              （display 由 CSS 类定为 flex，必须另写 [hidden] 规则）。
+              ${_t("任务视图的两个开关（")}2026-10-08 ${_t("对齐")} Obsidian ${_t("侧：那边就放在这个浮层里）。")}
+              **${_t("这是唯一入口")}** ${_t("——")} ${_t("设置弹窗里不再放同一对开关，避免两处都能改、")}
+              ${_t("改完互相打架。默认都是关的；第二层「显示过期日程」初始")} hidden${_t("，")}
+              ${_t("主开关打开才出现，")}hidden ${_t("时整行不占位")}
+              ${_t("（")}display ${_t("由")} CSS ${_t("类定为")} flex${_t("，必须另写")} [hidden] ${_t("规则）。")}
             -->
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
-              <span class="caldav-switch-label">任务视图中显示日程事件</span>
+              <span class="caldav-switch-label">${_t("任务视图中显示日程事件")}</span>
               <span class="caldav-switch">
                 <input type="checkbox" data-opt="showEvents"/>
                 <span class="caldav-switch-track"></span>
@@ -173,33 +175,33 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
             </label>
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt caldav-switch-line--nested"
                    data-opt-row="showExpired" hidden>
-              <span class="caldav-switch-label">任务视图中显示过期日程</span>
+              <span class="caldav-switch-label">${_t("任务视图中显示过期日程")}</span>
               <span class="caldav-switch">
                 <input type="checkbox" data-opt="showExpired"/>
                 <span class="caldav-switch-track"></span>
               </span>
             </label>
             <!--
-              「过期」在任务视图里没有独立的「逾期」语义：分桶时直接归到「已完成」组。
-              不写这句，用户会去「逾期」组里找这些日程、然后以为开关坏了。
-              与主行同缩进、再小一档字号，视觉上属于上面那行的脚注。
+              ${_t("「过期」在任务视图里没有独立的「逾期」语义：分桶时直接归到「已完成」组。")}
+              ${_t("不写这句，用户会去「逾期」组里找这些日程、然后以为开关坏了。")}
+              ${_t("与主行同缩进、再小一档字号，视觉上属于上面那行的脚注。")}
             -->
-            <div class="caldav-calfilter-note" data-note="showExpired" hidden>（过期按[已完成]处理）</div>
+            <div class="caldav-calfilter-note" data-note="showExpired" hidden>${_t("（过期按")}[${_t("已完成")}]${_t("处理）")}</div>
             <div class="caldav-calfilter-foot">
-              <!-- 不再写死「今日」：点了先弹范围选择（当日/本周/本月/所有） -->
-              <button class="caldav-link" data-action="insert-diary">把日程与待办插入日记</button>
+              <!-- ${_t("不再写死「今日」：点了先弹范围选择（当日")}/${_t("本周")}/${_t("本月")}/${_t("所有）")} -->
+              <button class="caldav-link" data-action="insert-diary">${_t("把日程与待办插入日记")}</button>
             </div>
           </div>
         </div>
-        <button class="caldav-icon-btn" data-action="toggle-view" title="切换到任务视图" aria-label="切换到任务视图"></button>
+        <button class="caldav-icon-btn" data-action="toggle-view" title="${_t("切换到任务视图")}" aria-label="${_t("切换到任务视图")}"></button>
       </div>
     </header>
     <div class="caldav-view"></div>
   </main>
 </div>
 <div class="caldav-ctxmenu" hidden>
-  <button class="caldav-ctxmenu-item" data-ctx="edit">${icons.pencil} 编辑</button>
-  <button class="caldav-ctxmenu-item" data-ctx="delete">${icons.trash} 删除</button>
+  <button class="caldav-ctxmenu-item" data-ctx="edit">${icons.pencil} ${_t("编辑")}</button>
+  <button class="caldav-ctxmenu-item" data-ctx="delete">${icons.trash} ${_t("删除")}</button>
   <div class="caldav-ctxmenu-err" hidden></div>
 </div>`;
 
@@ -229,7 +231,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     const boxes = root.querySelectorAll<HTMLElement>(".caldav-cal-list");
     if (!accounts.length) {
       boxes.forEach((b) => {
-        b.innerHTML = `<div class="caldav-cal-empty">尚未配置服务器<br><button class="caldav-link" data-action="settings">去配置 →</button></div>`;
+        b.innerHTML = `<div class="caldav-cal-empty">${_t("尚未配置服务器")}<br><button class="caldav-link" data-action="settings">${_t("去配置")} →</button></div>`;
       });
       return;
     }
@@ -242,20 +244,20 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           .map(
             (c) => `
       <div class="caldav-cal-item ${c.enabled ? "" : "is-off"}" data-cal-url="${escapeAttr(c.url)}"
-           title="${c.enabled ? "点击在视图中隐藏此日历" : "点击在视图中显示此日历"}">
+           title="${c.enabled ? _t("点击在视图中隐藏此日历") : _t("点击在视图中显示此日历")}">
         <span class="caldav-cal-dot" style="background:${calEventColor(c)}"></span>
         <span class="caldav-cal-name" title="${escapeAttr(c.url)}">${escapeHtml(c.displayName)}</span>
         <button class="caldav-icon-btn caldav-cal-toggle" type="button"${acc.enabled ? "" : " disabled"}
                 aria-pressed="${c.enabled ? "true" : "false"}"
-                title="${acc.enabled ? (c.enabled ? "隐藏此日历" : "显示此日历") : "账户已停用"}"
-                aria-label="${acc.enabled ? (c.enabled ? "隐藏此日历" : "显示此日历") : "账户已停用"}">${c.enabled ? icons.eye : icons.eyeOff}</button>
+                title="${acc.enabled ? (c.enabled ? _t("隐藏此日历") : _t("显示此日历")) : _t("账户已停用")}"
+                aria-label="${acc.enabled ? (c.enabled ? _t("隐藏此日历") : _t("显示此日历")) : _t("账户已停用")}">${c.enabled ? icons.eye : icons.eyeOff}</button>
       </div>`
           )
           .join("");
         return `
       <div class="caldav-cal-group${off}">
-        <div class="caldav-cal-group-name" title="${escapeAttr(acc.serverUrl)}">${escapeHtml(acc.name)}${acc.enabled ? "" : '<span class="caldav-cal-group-state">已停用</span>'}</div>
-        ${rows || '<div class="caldav-cal-empty">该账户还没有发现日历</div>'}
+        <div class="caldav-cal-group-name" title="${escapeAttr(acc.serverUrl)}">${escapeHtml(acc.name)}${acc.enabled ? "" : _t('<span class="caldav-cal-group-state">已停用</span>')}</div>
+        ${rows || _t('<div class="caldav-cal-empty">该账户还没有发现日历</div>')}
       </div>`;
       })
       .join("");
@@ -303,15 +305,15 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
 
   function cursorTitle(): string {
     const c = ctx.cursor;
-    if (ctx.viewMode === "year") return `${+c.slice(0, 4)} 年`;
-    if (ctx.viewMode === "month") return `${+c.slice(0, 4)} 年 ${+c.slice(5, 7)} 月`;
+    if (ctx.viewMode === "year") return `${+c.slice(0, 4)} ${_t("年")}`;
+    if (ctx.viewMode === "month") return `${+c.slice(0, 4)} ${_t("年")} ${+c.slice(5, 7)} ${_t("月")}`;
     if (ctx.viewMode === "week") {
       const ws = startOfWeek(c);
       const we = addDays(ws, 6);
-      return `${fmtDateCn(ws)} – ${fmtDateCn(we)}`;
+      return `${fmtDateCn(ws)} ${_t("–")} ${fmtDateCn(we)}`;
     }
-    if (ctx.viewMode === "day") return `${+c.slice(0, 4)} 年 ${+c.slice(5, 7)} 月 ${+c.slice(8, 10)} 日`;
-    return "待办任务";
+    if (ctx.viewMode === "day") return `${+c.slice(0, 4)} ${_t("年")} ${+c.slice(5, 7)} ${_t("月")} ${+c.slice(8, 10)} ${_t("日")}`;
+    return _t("待办任务");
   }
 
   function renderToolbarState(): void {
@@ -340,7 +342,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   function renderViewToggle(): void {
     const toTask = ctx.viewMode !== "task";
     viewToggleBtn.innerHTML = toTask ? icons.taskList : icons.calCheck;
-    const label = toTask ? "切换到任务视图" : "切换到日历视图";
+    const label = toTask ? _t("切换到任务视图") : _t("切换到日历视图");
     viewToggleBtn.title = label;
     viewToggleBtn.setAttribute("aria-label", label);
   }
@@ -414,7 +416,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       ctxDisarmTimer = null;
     }
     ctxDelBtn.classList.remove("is-armed");
-    ctxDelBtn.innerHTML = `${icons.trash} 删除`;
+    ctxDelBtn.innerHTML = `${icons.trash} ${_t("删除")}`;
   }
 
   function hideCtxMenu(): void {
@@ -565,22 +567,22 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     // 二次点击确认：与编辑弹窗内删除保持一致，不用原生 confirm
     if (!btn.classList.contains("is-armed")) {
       btn.classList.add("is-armed");
-      btn.innerHTML = `${icons.trash} 再点一次确认删除`;
+      btn.innerHTML = `${icons.trash} ${_t("再点一次确认删除")}`;
       ctxDisarmTimer = setTimeout(resetCtxDelete, 4000);
       return;
     }
     resetCtxDelete();
     btn.setAttribute("disabled", "");
-    btn.innerHTML = "删除中…";
+    btn.innerHTML = _t("删除中…");
     void ctx.sync
       .removeItem(item)
       .then(() => {
         if (ctx.store.get(key)) {
           // 仍留在本地 = 服务端 DELETE 未成功，会留待下次同步重试
-          ctxErrEl.textContent = "服务器删除未成功，已记录，将在下次同步重试";
+          ctxErrEl.textContent = _t("服务器删除未成功，已记录，将在下次同步重试");
           ctxErrEl.hidden = false;
           btn.removeAttribute("disabled");
-          btn.innerHTML = `${icons.trash} 删除`;
+          btn.innerHTML = `${icons.trash} ${_t("删除")}`;
           return;
         }
         hideCtxMenu();
@@ -588,10 +590,10 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
         renderView();
       })
       .catch((e: any) => {
-        ctxErrEl.textContent = "删除失败：" + (e?.message || e);
+        ctxErrEl.textContent = _t("删除失败：{0}", (e?.message || e));
         ctxErrEl.hidden = false;
         btn.removeAttribute("disabled");
-        btn.innerHTML = `${icons.trash} 删除`;
+        btn.innerHTML = `${icons.trash} ${_t("删除")}`;
       });
   });
 
@@ -627,7 +629,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     root
       .querySelectorAll<HTMLElement>(`[data-toggle="${key}"]`)
       .forEach((btn) => {
-        btn.title = done ? "标记未完成" : "标记完成";
+        btn.title = done ? _t("标记未完成") : _t("标记完成");
         // ⚠️ 必须同步 textContent，不能只切 is-done class。
         // 任务视图的勾是**渲染时写死在 HTML 里**的（完成才有 ✓，见 view-task.ts），
         // 就地更新不重建 DOM，只切 class 的症状就是「圆圈填充了、勾子没有」。
@@ -657,7 +659,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     row.classList.toggle("is-cancelled", cancelled);
     row.classList.toggle("is-done", item.kind === "todo" && item.percent === 100);
     const st = row.querySelector(".cal-list-status") as HTMLElement | null;
-    if (st) st.textContent = `（${stateTextZh(stateOfItem(item))}）`;
+    if (st) st.textContent = `${_t("（")}${stateTextZh(stateOfItem(item))}${_t("）")}`;
   }
 
   // ---- 事件委托 ----
@@ -933,21 +935,21 @@ export function renderDockPanel(
   root.innerHTML = `
 <div class="caldav-dock-brand">
   <span class="caldav-brand-icon">${BRAND_ICON_HTML}</span>
-  <span class="caldav-brand-title">日历任务管理</span>
-  <button class="caldav-brand-set" data-dock-action="settings" title="设置" aria-label="设置">${icons.gear}</button>
+  <span class="caldav-brand-title">${_t("日历任务管理")}</span>
+  <button class="caldav-brand-set" data-dock-action="settings" title="${_t("设置")}" aria-label="${_t("设置")}">${icons.gear}</button>
 </div>
 <!--
-  Dock 工具行（2026-10-10 雄哥改版，同日二次调整）：
-  原两行（上行 5 个图标按钮 + 下行日期范围/分类筛选）→ 现在**一行三个操作点**：
-  ① 日期范围下拉框 ② 筛选 ③ 打开视图（2026-10-10 二次调整：筛选与打开视图左右互换，
-  筛选靠前、打开视图居末）。
-  去掉的按钮与去处：
-    · 新建 / 刷新 —— 主窗口工具栏已有（+日程 / +待办 / 立即同步），
-      Dock 页脚状态条也能点击同步；
-    · 排序 —— 任务视图本身按时间轴分桶、组内已排序，Dock 里用处不大；
-    · **日历视图 / 任务视图两个按钮合并成一个**（图标用打勾的日历 calCheck）：
-      点击打开「主窗口上次用的那个视图」，省下的一格让日期范围下拉显示完整。
-  筛选弹层见下方 catPop 的注释 —— 它挂在 body 上，不在这个模板里。
+  Dock ${_t("工具行（")}2026-10-10 ${_t("雄哥改版，同日二次调整）：")}
+  ${_t("原两行（上行")} 5 ${_t("个图标按钮")} + ${_t("下行日期范围")}/${_t("分类筛选）")}→ ${_t("现在")}**${_t("一行三个操作点")}**${_t("：")}
+  ① ${_t("日期范围下拉框")} ② ${_t("筛选")} ③ ${_t("打开视图（")}2026-10-10 ${_t("二次调整：筛选与打开视图左右互换，")}
+  ${_t("筛选靠前、打开视图居末）。")}
+  ${_t("去掉的按钮与去处：")}
+    · ${_t("新建")} / ${_t("刷新")} ${_t("——")} ${_t("主窗口工具栏已有（")}+${_t("日程")} / +${_t("待办")} / ${_t("立即同步），")}
+      Dock ${_t("页脚状态条也能点击同步；")}
+    · ${_t("排序")} ${_t("——")} ${_t("任务视图本身按时间轴分桶、组内已排序，")}Dock ${_t("里用处不大；")}
+    · **${_t("日历视图")} / ${_t("任务视图两个按钮合并成一个")}**${_t("（图标用打勾的日历")} calCheck${_t("）：")}
+      ${_t("点击打开「主窗口上次用的那个视图」，省下的一格让日期范围下拉显示完整。")}
+  ${_t("筛选弹层见下方")} catPop ${_t("的注释")} ${_t("——")} ${_t("它挂在")} body ${_t("上，不在这个模板里。")}
 -->
 <div class="caldav-dock-tools">
   <div class="caldav-dock-filter-wrap">
@@ -962,15 +964,15 @@ export function renderDockPanel(
     </div>
   </div>
   <div class="caldav-dock-filter-wrap caldav-dock-filter-wrap--btn">
-    <button class="caldav-dock-act" data-dock="category" title="筛选（优先级 / 分类）" aria-label="筛选">${icons.filter}</button>
+    <button class="caldav-dock-act" data-dock="category" title="${_t("筛选（优先级")} / ${_t("分类）")}" aria-label="${_t("筛选")}">${icons.filter}</button>
   </div>
-  <button class="caldav-dock-act" data-action="open-view" title="打开上次视图" aria-label="打开上次视图">${icons.calCheck}</button>
+  <button class="caldav-dock-act" data-action="open-view" title="${_t("打开上次视图")}" aria-label="${_t("打开上次视图")}">${icons.calCheck}</button>
 </div>
 <div class="caldav-dock-list">
   <div class="caldav-dock-items" data-dock="items"></div>
 </div>
 <div class="caldav-dock-foot">
-  <button class="caldav-dock-status" data-action="sync">未同步</button>
+  <button class="caldav-dock-status" data-action="sync">${_t("未同步")}</button>
 </div>`;
 
   const statusEl = root.querySelector(".caldav-dock-status") as HTMLElement;
@@ -996,13 +998,13 @@ export function renderDockPanel(
   catPop.dataset.pop = "category";
   catPop.hidden = true;
   catPop.innerHTML = `
-  <div class="caldav-dock-cat-head">按优先级</div>
+  <div class="caldav-dock-cat-head">${_t("按优先级")}</div>
   <div class="caldav-dock-prio-list" data-prio-list></div>
-  <div class="caldav-dock-cat-head caldav-dock-cat-head--second">选择分类</div>
+  <div class="caldav-dock-cat-head caldav-dock-cat-head--second">${_t("选择分类")}</div>
   <div class="caldav-dock-cat-list" data-cat-list></div>
   <div class="caldav-dock-cat-foot">
-    <button class="caldav-foot-btn caldav-foot-btn--ghost" data-cat-action="cancel">取消</button>
-    <button class="caldav-foot-btn caldav-foot-btn--primary" data-cat-action="ok">确定</button>
+    <button class="caldav-foot-btn caldav-foot-btn--ghost" data-cat-action="cancel">${_t("取消")}</button>
+    <button class="caldav-foot-btn caldav-foot-btn--primary" data-cat-action="ok">${_t("确定")}</button>
   </div>`;
   document.body.appendChild(catPop);
 
@@ -1074,18 +1076,18 @@ export function renderDockPanel(
     const s = opts.store.settings;
     const err = opts.store.lastError;
     const cred = opts.store.credentialsIssue();
-    const time = opts.store.lastSync || "—";
+    const time = opts.store.lastSync || _t("—");
 
     // 凭据问题优先提示：这类错误原来只写在控制台，用户完全看不到
     if (cred) {
-      statusEl.textContent = "同步不可用 · 凭据异常";
+      statusEl.textContent = _t("同步不可用 · 凭据异常");
       statusEl.title = cred;
       statusEl.classList.add("has-error");
       return;
     }
     if (!s.accounts.length) {
-      statusEl.textContent = "未配置服务器";
-      statusEl.title = "点击打开设置";
+      statusEl.textContent = _t("未配置服务器");
+      statusEl.title = _t("点击打开设置");
       statusEl.classList.remove("has-error");
       return;
     }
@@ -1093,8 +1095,8 @@ export function renderDockPanel(
     // 主窗口工具栏）都经 syncAll 置 store.syncing，行为由此一致 —— 修复
     // 2026-10-16 雄哥实测「主窗口点刷新，Dock 挂上次的 412、按钮转几分钟」。
     if (opts.store.syncing) {
-      statusEl.textContent = "同步中…";
-      statusEl.title = "正在同步，请稍候";
+      statusEl.textContent = _t("同步中…");
+      statusEl.title = _t("正在同步，请稍候");
       statusEl.classList.remove("has-error");
       return;
     }
@@ -1102,20 +1104,20 @@ export function renderDockPanel(
       // 一行呈现：状态 + 时间 + 失败原因，**整行就是同步按钮**。
       // 2026-10-15 雄哥要求：原来是两行，详情行不可点，看到错误想重试时点不到。
       // 超 40 字截断、悬浮看全文；容器宽度的兜底交给 CSS 的 ellipsis。
-      const full = `同步失败 · ${time}：${err}`;
-      statusEl.textContent = full.length > 40 ? full.slice(0, 40) + "…" : full;
+      const full = `${_t("同步失败")} · ${time}${_t("：")}${err}`;
+      statusEl.textContent = full.length > 40 ? _t("{0}…", full.slice(0, 40)) : full;
       statusEl.title = full;
       statusEl.classList.add("has-error");
     } else if (opts.store.lastNote) {
       // 对账提示是**中性信息**，不是失败 —— 不能复用「同步失败」的前缀，
       // 否则一次成功同步会被报成失败（2026-10-10 实测）。同样一行呈现 + 40 字截断。
-      const full = `上次同步 ${time}：${opts.store.lastNote}`;
-      statusEl.textContent = full.length > 40 ? full.slice(0, 40) + "…" : full;
+      const full = `${_t("上次同步")} ${time}${_t("：")}${opts.store.lastNote}`;
+      statusEl.textContent = full.length > 40 ? _t("{0}…", full.slice(0, 40)) : full;
       statusEl.title = full;
       statusEl.classList.remove("has-error");
     } else {
-      statusEl.textContent = `上次同步 ${time}`;
-      statusEl.title = "点击立即同步";
+      statusEl.textContent = `${_t("上次同步")} ${time}`;
+      statusEl.title = _t("点击立即同步");
       statusEl.classList.remove("has-error");
     }
   }
@@ -1214,7 +1216,7 @@ export function renderDockPanel(
   }
 
   function formatDockTimeRange(it: CalItem): string {
-    if (it.allDay) return "全天";
+    if (it.allDay) return _t("全天");
     if (it.kind === "event" && it.end) return `${fmtTime(it.start)} - ${fmtTime(it.end)}`;
     // 待办以到期时间为准，不再展示开始时间
     if (it.kind === "todo" && it.end) return isDateOnly(it.end) ? "" : fmtTime(it.end);
@@ -1227,10 +1229,10 @@ export function renderDockPanel(
    * 覆盖 1~9 全部取值，不只认 1/3/5/9 这四个数字。
    */
   function prioMeta(p: number): { label: string; cls: string } {
-    if (p <= 2) return { label: "紧急", cls: "prio-urgent" };
-    if (p <= 4) return { label: "高", cls: "prio-high" };
-    if (p <= 6) return { label: "中", cls: "prio-mid" };
-    return { label: "低", cls: "prio-low" };
+    if (p <= 2) return { label: _t("紧急"), cls: "prio-urgent" };
+    if (p <= 4) return { label: _t("高"), cls: "prio-high" };
+    if (p <= 6) return { label: _t("中"), cls: "prio-mid" };
+    return { label: _t("低"), cls: "prio-low" };
   }
 
   function buildDockTags(it: CalItem): string {
@@ -1247,30 +1249,30 @@ export function renderDockPanel(
     let timeLabel = "";
     let timeCls = "caldav-dock-tag--primary";
     if (overdueDays > 0) {
-      timeLabel = `逾期 ${overdueDays} 天`;
+      timeLabel = `${_t("逾期")} ${overdueDays} ${_t("天")}`;
       timeCls = "caldav-dock-tag--overdue";
-    } else if (isDoneTodo) timeLabel = "已完成";
-    else if (!date) timeLabel = "无日期";
-    else if (diff === 0) timeLabel = "今天";
-    else if (diff === 1) timeLabel = "明天";
-    else if (diff > 1) timeLabel = `${diff}天后开始`;
-    else if (diff === -1) timeLabel = "昨天";
-    else timeLabel = `${-diff}天前`;
+    } else if (isDoneTodo) timeLabel = _t("已完成");
+    else if (!date) timeLabel = _t("无日期");
+    else if (diff === 0) timeLabel = _t("今天");
+    else if (diff === 1) timeLabel = _t("明天");
+    else if (diff > 1) timeLabel = `${diff}${_t("天后开始")}`;
+    else if (diff === -1) timeLabel = _t("昨天");
+    else timeLabel = `${-diff}${_t("天前")}`;
     tags.push(`<span class="caldav-dock-tag ${timeCls}">${timeLabel}</span>`);
 
     // 类型 / 优先级
     if (it.kind === "event") {
-      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary">${icons.calendar}日程</span>`);
+      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary">${icons.calendar}${_t("日程")}</span>`);
     } else if (it.priority) {
       const pm = prioMeta(it.priority);
       tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary ${pm.cls}">${icons.flag}${pm.label}</span>`);
     } else {
-      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary">${icons.tasks}任务</span>`);
+      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--secondary">${icons.tasks}${_t("任务")}</span>`);
     }
 
     // 「文档」角标：这条待办来自思源文档里的任务块（issue #2）。设置里可关（纯 UI，不动数据）
     if (it.blockId && blockBadgeOn(opts.store.settings)) {
-      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--ghost" title="来自思源文档任务块">${icons.doc}文档</span>`);
+      tags.push(`<span class="caldav-dock-tag caldav-dock-tag--ghost" title="${_t("来自思源文档任务块")}">${icons.doc}${_t("文档")}</span>`);
     }
 
     // 自定义分类
@@ -1305,7 +1307,7 @@ export function renderDockPanel(
     const isAll = filter.length === 0;
 
     const items = [
-      { value: 0, label: "全部", cls: "" },
+      { value: 0, label: _t("全部"), cls: "" },
       ...PRIO_TIERS.map((tier) => {
         const m = prioMeta(tier.value);
         return { value: tier.value, label: m.label, cls: m.cls };
@@ -1346,8 +1348,8 @@ export function renderDockPanel(
     const isAll = filter.length === 0;
 
     const items = [
-      { key: "__all__", label: "所有分类", icon: "", color: "" },
-      { key: "__none__", label: "无分类", icon: "", color: "" },
+      { key: "__all__", label: _t("所有分类"), icon: "", color: "" },
+      { key: "__none__", label: _t("无分类"), icon: "", color: "" },
       ...cats.map((c) => ({ key: c.name, label: c.name, icon: c.icon, color: c.color }))
     ];
 
@@ -1412,11 +1414,11 @@ export function renderDockPanel(
 
     const nodateHidden = hiddenNodateCount();
     const nodateHint = nodateHidden
-      ? `<button class="caldav-dock-hint" data-dock-action="show-nodate">另有 ${nodateHidden} 条无日期待办未显示 · 点此查看</button>`
+      ? `<button class="caldav-dock-hint" data-dock-action="show-nodate">${_t("另有")} ${nodateHidden} ${_t("条无日期待办未显示")} · ${_t("点此查看")}</button>`
       : "";
 
     if (!items.length) {
-      listEl.innerHTML = `<div class="caldav-dock-empty">暂无匹配条目</div>${nodateHint}`;
+      listEl.innerHTML = `<div class="caldav-dock-empty">${_t("暂无匹配条目")}</div>${nodateHint}`;
       return;
     }
 
@@ -1424,7 +1426,7 @@ export function renderDockPanel(
       .map((it) => {
         const key = keyOf(it);
         const date = it.kind === "todo" ? it.end : it.start;
-        const dateStr = date ? fmtDateCn(date) : "无日期";
+        const dateStr = date ? fmtDateCn(date) : _t("无日期");
         const timeStr = formatDockTimeRange(it);
         const tags = buildDockTags(it);
         const isDoneTodo = it.kind === "todo" && it.percent === 100;
@@ -1536,7 +1538,7 @@ export function renderDockPanel(
       // 不传 mode = 打开「主窗口上次用的视图」（日历/任务两个按钮已合并，见模板注释）。
       if (a === "open-view") return opts.onNav();
       if (a === "sync") {
-        statusEl.textContent = "同步中…";
+        statusEl.textContent = _t("同步中…");
         void opts.onSync().finally(() => {
           renderStatus();
           renderDockList();
@@ -1665,9 +1667,9 @@ export function renderDockPanel(
   const syncViewBtnLabel = () => {
     const btn = root.querySelector<HTMLElement>('[data-action="open-view"]');
     if (!btn) return;
-    const label = opts.viewMode() === "task" ? "任务视图" : "日历视图";
-    btn.title = `打开${label}（上次打开的视图）`;
-    btn.setAttribute("aria-label", `打开${label}`);
+    const label = opts.viewMode() === "task" ? _t("任务视图") : _t("日历视图");
+    btn.title = `${_t("打开")}${label}${_t("（上次打开的视图）")}`;
+    btn.setAttribute("aria-label", `${_t("打开")}${label}`);
   };
   const onViewChange = () => syncViewBtnLabel();
   document.addEventListener(VIEW_CHANGE_EVENT, onViewChange);
@@ -1759,7 +1761,7 @@ function downloadAttachment(att: CalAttachment | undefined): void {
     const url = URL.createObjectURL(new Blob([bytes], { type: att!.fmttype || "application/octet-stream" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = att!.name || "附件";
+    a.download = att!.name || _t("附件");
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1767,7 +1769,7 @@ function downloadAttachment(att: CalAttachment | undefined): void {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   } catch {
     // 解码失败（base64 损坏 / 浏览器不支持 atob）就别静默，让用户知道
-    alert("附件读取失败：内容可能已损坏");
+    alert(_t("附件读取失败：内容可能已损坏"));
   }
 }
 

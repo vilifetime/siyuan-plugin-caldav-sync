@@ -14,6 +14,8 @@
  * 挂载点放在 document.body：页面被切走或视图容器 `overflow` 裁剪都不影响它。
  */
 import { icons } from "./icons";
+import { t } from "../core/i18n";
+
 
 export interface ReminderToastOptions {
   title: string;
@@ -110,12 +112,12 @@ export function showReminderToast(opts: ReminderToastOptions): void {
   <div class="caldav-reminder-head">
     <span class="caldav-reminder-icon">${icons.bell}</span>
     <span class="caldav-reminder-title"></span>
-    <button class="caldav-reminder-x" type="button" data-act="close" title="关闭" aria-label="关闭">${icons.close}</button>
+    <button class="caldav-reminder-x" type="button" data-act="close" title="${t("关闭")}" aria-label="${t("关闭")}">${icons.close}</button>
   </div>
   <div class="caldav-reminder-body"></div>
   <div class="caldav-reminder-acts">
-    <button class="caldav-reminder-act is-primary" type="button" data-act="open">打开</button>
-    <button class="caldav-reminder-act" type="button" data-act="snooze">稍后 ${SNOOZE_MINUTES} 分钟</button>
+    <button class="caldav-reminder-act is-primary" type="button" data-act="open">${t("打开")}</button>
+    <button class="caldav-reminder-act" type="button" data-act="snooze">${t("稍后")} ${SNOOZE_MINUTES} ${t("分钟")}</button>
   </div>`;
   // 条目标题可能含 < > &，必须用 textContent 回填，不能拼进 innerHTML
   (card.querySelector(".caldav-reminder-title") as HTMLElement).textContent = opts.title;

@@ -25,6 +25,8 @@
  * 读到的值必须落在合法集合内，否则视为无记录 —— 不让脏数据把面板卡死。
  */
 import type { CalSettings, DockFilterKey, TaskFilterKey } from "../core/types";
+import { t } from "../core/i18n";
+
 
 /**
  * 两个下拉的**选项表**（顺序即下拉中的顺序）。
@@ -34,37 +36,37 @@ import type { CalSettings, DockFilterKey, TaskFilterKey } from "../core/types";
  * 哪天往下拉里加一项，设置页就会静默少一个选项（这种漂移最不容易被发现）。
  */
 export const DOCK_FILTER_OPTIONS: Array<{ key: DockFilterKey; label: string }> = [
-  { key: "allitems", label: "所有" },
-  { key: "next7", label: "未来七天" },
-  { key: "today", label: "今日" },
-  { key: "tomorrow", label: "明日" },
-  { key: "thisweek", label: "本周" },
-  { key: "future", label: "未来" },
-  { key: "overdue", label: "过期" },
-  { key: "past7", label: "过去七天" },
-  { key: "undone", label: "所有未完成" },
-  { key: "nodate", label: "无日期" },
-  { key: "doneToday", label: "今日已完成" },
-  { key: "doneYesterday", label: "昨日已完成" },
-  { key: "done", label: "已完成" },
-  { key: "cancelled", label: "作废" }
+  { key: "allitems", label: t("所有") },
+  { key: "next7", label: t("未来七天") },
+  { key: "today", label: t("今日") },
+  { key: "tomorrow", label: t("明日") },
+  { key: "thisweek", label: t("本周") },
+  { key: "future", label: t("未来") },
+  { key: "overdue", label: t("过期") },
+  { key: "past7", label: t("过去七天") },
+  { key: "undone", label: t("所有未完成") },
+  { key: "nodate", label: t("无日期") },
+  { key: "doneToday", label: t("今日已完成") },
+  { key: "doneYesterday", label: t("昨日已完成") },
+  { key: "done", label: t("已完成") },
+  { key: "cancelled", label: t("作废") }
 ];
 
 export const TASK_FILTER_OPTIONS: Array<{ key: TaskFilterKey; label: string }> = [
-  { key: "allitems", label: "所有" },
-  { key: "today", label: "今日" },
-  { key: "tomorrow", label: "明日" },
-  { key: "next7", label: "未来七天" },
-  { key: "thisweek", label: "本周" },
-  { key: "future", label: "未来" },
-  { key: "overdue", label: "过期" },
-  { key: "past7", label: "过去七天" },
-  { key: "allincomplete", label: "所有未完成" },
-  { key: "nodate", label: "无日期" },
-  { key: "todaydone", label: "今日已完成" },
-  { key: "yesterdaydone", label: "昨日已完成" },
-  { key: "doneall", label: "已完成" },
-  { key: "cancelled", label: "作废" }
+  { key: "allitems", label: t("所有") },
+  { key: "today", label: t("今日") },
+  { key: "tomorrow", label: t("明日") },
+  { key: "next7", label: t("未来七天") },
+  { key: "thisweek", label: t("本周") },
+  { key: "future", label: t("未来") },
+  { key: "overdue", label: t("过期") },
+  { key: "past7", label: t("过去七天") },
+  { key: "allincomplete", label: t("所有未完成") },
+  { key: "nodate", label: t("无日期") },
+  { key: "todaydone", label: t("今日已完成") },
+  { key: "yesterdaydone", label: t("昨日已完成") },
+  { key: "doneall", label: t("已完成") },
+  { key: "cancelled", label: t("作废") }
 ];
 
 /** key → 文案（给「每项自带 match 函数」的任务视图 filters 用） */

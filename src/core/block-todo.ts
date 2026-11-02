@@ -34,6 +34,8 @@ import {
   statusFields,
   taskStateOfMarkdown
 } from "./task-state";
+import { t } from "./i18n";
+
 
 /** 文档里的任务块（内核 SQL 出来后已清洗） */
 export interface BlockTask {
@@ -108,7 +110,7 @@ export interface BlockSyncPlan {
 }
 
 /** 前缀默认值（设置里可改） */
-export const DEFAULT_BLOCK_PREFIX = "[文档]";
+export const DEFAULT_BLOCK_PREFIX = t("[文档]");
 
 /**
  * 块的原始 markdown → 勾选态。

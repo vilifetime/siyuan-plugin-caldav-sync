@@ -5,6 +5,8 @@
 import { addDays, dateStampOfMs, todayStamp } from "../core/date";
 import { calColorOf, escape, type ViewArgs } from "./view-common";
 import { holidayFor } from "../core/holiday-cn";
+import { t as _t } from "../core/i18n";
+
 
 const WEEK_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
 
@@ -48,20 +50,20 @@ export function renderYearView({ ctx, viewEl, occurrences }: ViewArgs): void {
       const badge = info && info.count > 1 ? `<span class="cal-year-count">${info.count}</span>` : "";
       // 中国日历：年视图迷你格只放一个节假日小圆点（休=绿 / 班=橙），不堆叠文字以免拥挤
       const hl = ctx.store.settings.showHolidaysCN ? holidayFor(day) : null;
-      const hlMark = hl ? `<span class="cal-year-hl ${hl.off ? "rest" : "work"}" title="${escape(hl.name)}${hl.off ? "（休）" : "（班）"}"></span>` : "";
+      const hlMark = hl ? `<span class="cal-year-hl ${hl.off ? "rest" : "work"}" title="${escape(hl.name)}${hl.off ? _t("（休）") : _t("（班）")}"></span>` : "";
       cells.push(`<div class="cal-year-cell ${inMonth ? "" : "is-out"} ${isToday ? "is-today" : ""}" data-day="${day}">
         <span class="cal-year-num">${+day.slice(8, 10)}</span>${hlMark}${dot}${badge}
       </div>`);
     }
     months.push(`<div class="cal-year-month">
-      <div class="cal-year-month-head" data-month="${y}-${pad2(m + 1)}" title="跳转到 ${m + 1} 月">${m + 1} 月</div>
+      <div class="cal-year-month-head" data-month="${y}-${pad2(m + 1)}" title="${_t("跳转到")} ${m + 1} ${_t("月")}">${m + 1} ${_t("月")}</div>
       <div class="cal-year-weeks">${WEEK_LABELS.map((w) => `<span>${w}</span>`).join("")}</div>
       <div class="cal-year-grid">${cells.join("")}</div>
     </div>`);
   }
 
   viewEl.innerHTML = `<div class="cal-year">
-    <div class="cal-year-head">${y} 年 · 共 ${total} 项日程 / 任务</div>
+    <div class="cal-year-head">${y} ${_t("年")} · ${_t("共")} ${total} ${_t("项日程")} / ${_t("任务")}</div>
     <div class="cal-year-months">${months.join("")}</div>
   </div>`;
 

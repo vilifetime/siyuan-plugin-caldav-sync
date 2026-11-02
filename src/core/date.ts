@@ -1,4 +1,6 @@
 import { pad2, type LocalStamp } from "./types";
+import { t } from "./i18n";
+
 
 /** 本地时区某个 UTC 毫秒的墙上时间字段 */
 interface WallFields {
@@ -106,12 +108,12 @@ export function diffDays(a: LocalStamp, b: LocalStamp): number {
 }
 
 export function fmtTime(stamp: LocalStamp): string {
-  if (isDateOnly(stamp)) return "全天";
+  if (isDateOnly(stamp)) return t("全天");
   return stamp.slice(11, 16);
 }
 
 export function fmtDateCn(stamp: LocalStamp): string {
-  return `${+stamp.slice(5, 7)}月${+stamp.slice(8, 10)}日`;
+  return `${+stamp.slice(5, 7)}${t("月")}${+stamp.slice(8, 10)}${t("日")}`;
 }
 
 /**

@@ -32,6 +32,8 @@ import { confirmBlockChanges } from "@/ui/change-alert-dialog";
 import type { KernelCaller } from "@/core/block-api";
 import { getTaskBlockById, getBlockRootId, setBlockSkip, listNotebooks, getBlockDetail, BLOCK_SKIP_ATTR } from "@/core/block-api";
 import { runBlockSync, convertBlock, unsyncBlock, clearBlockSync } from "@/core/block-sync";
+import { setI18n, t as _t } from "./core/i18n";
+
 
 /**
  * 从思源 protyle 实例里取它所属的文档（root）ID。
@@ -73,7 +75,7 @@ const STALE_DATA_FILES = ["caldav-data.json"];
  * diarySpanOf），所以匹配旧小节时必须用**实际要写的那一行**，不能用本常量
  * 硬匹配 —— 否则跨日范围永远命中不了，每次点击都追加一个重复小节。
  */
-const DIARY_SECTION_BASE = "日程与待办";
+const DIARY_SECTION_BASE = _t("日程与待办");
 
 const ICONS = `<symbol id="iconCalDavSync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></symbol>`;
 
@@ -159,7 +161,7 @@ export default class CalDavPlugin extends Plugin {
         try {
           data = JSON.parse(r.body);
         } catch (e) {
-          return { ok: false, error: "JSON 解析失败：" + (e as Error).message };
+          return { ok: false, error: _t("JSON 解析失败：{0}", (e as Error).message) };
         }
         return { ok: true, data };
       } catch (e) {
@@ -188,6 +190,9 @@ export default class CalDavPlugin extends Plugin {
     }
     this.sync = new SyncEngine(this.store, () => "auto");
     this.mainCtx = this.createCtx();
+    // i18n：把思源按 window.siyuan.config.lang 自动加载的 plugin.i18n 喂给全局单例，
+    // 之后任何模块（含 core）都能用 t(key) 取文案。必须在 createCtx 之后、首次渲染前完成。
+    setI18n(this.i18n as unknown as Record<string, string> | undefined);
 
     // 设置变更 / 同步落盘后：重算提醒开关并重新排程
     this.store.onChange(() => {
@@ -201,7 +206,7 @@ export default class CalDavPlugin extends Plugin {
         position: "LeftBottom",
         size: { width: 240, height: 0 },
         icon: "iconCalDavSync",
-        title: "日历任务管理",
+        title: _t("日历任务管理"),
         hotkey: "⌥⇧C"
       },
       data: { key: "dock" },
@@ -253,7 +258,7 @@ export default class CalDavPlugin extends Plugin {
     // 监听视图切换，同步更新已打开页签的标题
     this.viewChangeHandler = (e: Event) => {
       const mode = (e as CustomEvent).detail as ViewMode;
-      const title = mode === "task" ? "任务" : "日历";
+      const title = mode === "task" ? _t("任务") : _t("日历");
       if (self.tab) {
         self.tab.updateTitle(title);
       }
@@ -272,26 +277,26 @@ export default class CalDavPlugin extends Plugin {
     // 命令（可在「设置 → 快捷键」中绑定）
     this.addCommand({
       langKey: "syncNow",
-      langText: "立即同步 CalDAV",
+      langText: _t("立即同步 CalDAV"),
       hotkey: "",
       callback: () => void this.runSync(true)
     });
     this.addCommand({
       langKey: "addTask",
-      langText: "新建待办",
+      langText: _t("新建待办"),
       hotkey: "",
       callback: () => openEditor(this.mainCtx, { kind: "todo" })
     });
     this.addCommand({
       langKey: "openPanel",
-      langText: "打开日历与任务",
+      langText: _t("打开日历与任务"),
       hotkey: "",
       callback: () => this.openPanelTab()
     });
     this.addCommand({
       langKey: "insertToday",
       // 不再写死「今日」：点了会先问范围（当日/本周/本月/所有）
-      langText: "把日程与待办插入日记",
+      langText: _t("把日程与待办插入日记"),
       hotkey: "",
       callback: () => this.askInsertDiary()
     });
@@ -302,7 +307,7 @@ export default class CalDavPlugin extends Plugin {
     if (isMobile()) {
       this.addTopBar({
         icon: "iconCalDavSync",
-        title: "CalDAV日历任务",
+        title: _t("CalDAV日历任务"),
         position: "right",
         callback: () => this.openPanelTab()
       });
@@ -415,12 +420,12 @@ export default class CalDavPlugin extends Plugin {
     const fixed = [
       {
         icon: "iconCalDavSync",
-        label: "扫描任务块（当前文档）",
+        label: _t("扫描任务块（当前文档）"),
         click: () => void this.scanBlockDoc(nodeId),
       },
       {
         icon: "iconCalDavSync",
-        label: "扫描任务块（全部）",
+        label: _t("扫描任务块（全部）"),
         click: () => void this.scanBlockAll(),
       }
     ];
@@ -432,19 +437,19 @@ export default class CalDavPlugin extends Plugin {
         sep,
         {
           icon: "iconCalDavSync",
-          label: "查看对应 VTODO",
+          label: _t("查看对应 VTODO"),
           click: () => this.showVtodoDetail(mapped),
         },
         {
           icon: "iconCalDavSync",
-          label: "取消同步（删除对应的 CalDAV 待办）",
+          label: _t("取消同步（删除对应的 CalDAV 待办）"),
           click: () => {
             void unsyncBlock({ store: this.store, sync: this.sync, caller }, mapped).then(
               () => {
                 this.refreshPanels();
-                showMessage("已取消同步，该块后续不会再被扫描", 4000);
+                showMessage(_t("已取消同步，该块后续不会再被扫描"), 4000);
               },
-              (err) => showMessage(`取消同步失败：${String((err as Error)?.message || err)}`, 6000)
+              (err) => showMessage(`${_t("取消同步失败：")}${String((err as Error)?.message || err)}`, 6000)
             );
           }
         }
@@ -456,12 +461,12 @@ export default class CalDavPlugin extends Plugin {
       sep,
       {
         icon: "iconCalDavSync",
-        label: skipped ? "重新同步到 CalDAV" : "同步此任务到 CalDAV",
+        label: skipped ? _t("重新同步到 CalDAV") : _t("同步此任务到 CalDAV"),
         click: () => {
           void (async () => {
             const block = await getTaskBlockById(caller, nodeId, s.blockSyncPrefix);
             if (!block) {
-              showMessage("没读到这个任务块（可能已被删除）", 4000);
+              showMessage(_t("没读到这个任务块（可能已被删除）"), 4000);
               return;
             }
             if (skipped) {
@@ -471,9 +476,9 @@ export default class CalDavPlugin extends Plugin {
               await convertBlock({ store: this.store, sync: this.sync, caller }, block);
             }
             this.refreshPanels();
-            showMessage("已同步到 CalDAV", 4000);
+            showMessage(_t("已同步到 CalDAV"), 4000);
           })().catch((err) =>
-            showMessage(`同步失败：${String((err as Error)?.message || err)}`, 6000)
+            showMessage(`${_t("同步失败：")}${String((err as Error)?.message || err)}`, 6000)
           );
         }
       }
@@ -488,16 +493,16 @@ export default class CalDavPlugin extends Plugin {
   private showVtodoDetail(item: any): void {
     const settings = this.store.settings;
     const cal = findCalendarByUrl(settings, item.calendarUrl);
-    const calName = cal?.displayName || item.calendarUrl || "未知日历";
+    const calName = cal?.displayName || item.calendarUrl || _t("未知日历");
     const statusText: Record<string, string> = {
-      "needs-action": "未完成（未开始）",
-      "in-process": "进行中",
-      "completed": "已完成",
+      "needs-action": _t("未完成（未开始）"),
+      "in-process": _t("进行中"),
+      "completed": _t("已完成"),
     };
-    const status = item.status ? (statusText[item.status] || item.status) : "未完成（未开始）";
-    const dateCn = (stamp: string): string => (stamp ? `${stamp.slice(0, 4)}年${fmtDateCn(stamp)}` : "—");
+    const status = item.status ? (statusText[item.status] || item.status) : _t("未完成（未开始）");
+    const dateCn = (stamp: string): string => (stamp ? `${stamp.slice(0, 4)}${_t("年")}${fmtDateCn(stamp)}` : _t("—"));
     const full = (stamp: string, allDay: boolean): string => {
-      if (!stamp) return "—";
+      if (!stamp) return _t("—");
       const dp = dateCn(stamp);
       return allDay ? dp : `${dp} ${fmtTime(stamp)}`;
     };
@@ -505,20 +510,20 @@ export default class CalDavPlugin extends Plugin {
       t.replace(/[&<>"']/g, (c) => (({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }) as Record<string, string>)[c]);
     const rows: [string, string][] = [
       ["日历名称", calName],
-      ["待办名称", item.summary || "—"],
+      ["待办名称", item.summary || _t("—")],
       ["开始日期", full(item.start, item.allDay)],
-      ["结束日期", item.end ? full(item.end, item.allDay) : "无（仅开始日期）"],
+      ["结束日期", item.end ? full(item.end, item.allDay) : _t("无（仅开始日期）")],
       ["当前状态", status],
-      ["UID", item.uid || "—"],
+      ["UID", item.uid || _t("—")],
     ];
     const body = rows
       .map(([k, v]) => `<div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`)
       .join("");
     newDialog({
-      title: "对应 VTODO 详情",
+      title: _t("对应 VTODO 详情"),
       content:
         `<style>.caldav-vtodo-detail{padding:4px 2px;font-size:14px}.caldav-vtodo-detail .row{display:flex;justify-content:space-between;gap:18px;padding:7px 2px;border-bottom:1px solid var(--b3-border-color)}.caldav-vtodo-detail .k{color:var(--b3-theme-on-surface-light);flex:0 0 auto}.caldav-vtodo-detail .v{text-align:right;word-break:break-all}.caldav-vtodo-detail .tip{margin-top:10px;font-size:12px;color:var(--b3-theme-on-surface-light);opacity:.7}</style>` +
-        `<div class="caldav-vtodo-detail">${body}<div class="tip">数据来自上次同步后的本地缓存</div></div>`,
+        `<div class="caldav-vtodo-detail">${body}<div class="tip">${_t("数据来自上次同步后的本地缓存")}</div></div>`,
       width: "440px",
     });
   }
@@ -592,7 +597,7 @@ export default class CalDavPlugin extends Plugin {
     const item = {
       id: "caldavBlockSync",
       icon: "iconCalDavSync",
-      label: "任务块 ⇄ VTODO",
+      label: _t("任务块 ⇄ VTODO"),
       type: "submenu",
       submenu: this.buildBlockSyncMenuItems(nodeId, el, s),
     };
@@ -830,7 +835,7 @@ export default class CalDavPlugin extends Plugin {
     // 页签是单例、标题要跟内容一致。没传 mode 时（命令面板的「打开日历与任务」）
     // 按 mainCtx 里当前生效的视图定标题 —— 面板渲染的就是那个视图。
     const effective = mode ?? this.mainCtx.viewMode;
-    const title = effective === "task" ? "任务" : "日历";
+    const title = effective === "task" ? _t("任务") : _t("日历");
     const tabPromise = openTab({
       app: this.app,
       custom: {
@@ -938,7 +943,7 @@ export default class CalDavPlugin extends Plugin {
   }
 
   private mobileTitle(): string {
-    return this.mainCtx.viewMode === "task" ? "任务" : "日历";
+    return this.mainCtx.viewMode === "task" ? _t("任务") : _t("日历");
   }
 
   /** 打开 Dock 面板（聚焦已开面板） */
@@ -1007,10 +1012,10 @@ export default class CalDavPlugin extends Plugin {
     try {
       await this.saveData(DATA_FILE, legacy);
     } catch (e) {
-      console.warn(`[caldav] 数据迁移到 ${DATA_FILE} 失败，保留旧文件 ${LEGACY_DATA_FILE}，本次仍用旧数据`, e);
+      console.warn(`[caldav] ${_t("数据迁移到")} ${DATA_FILE} ${_t("失败，保留旧文件")} ${LEGACY_DATA_FILE}${_t("，本次仍用旧数据")}`, e);
       return legacy;
     }
-    console.info(`[caldav] 数据文件已迁移：${LEGACY_DATA_FILE} → ${DATA_FILE}`);
+    console.info(`[caldav] ${_t("数据文件已迁移：")}${LEGACY_DATA_FILE} → ${DATA_FILE}`);
     // 新文件已落地，旧文件与空壳都可以收了（删不掉也无所谓，下次启动再清）
     await this.removeDataSafe([LEGACY_DATA_FILE, ...STALE_DATA_FILES]);
     return legacy;
@@ -1103,23 +1108,23 @@ export default class CalDavPlugin extends Plugin {
       }
       if (manual) {
         // 冲突策略已下沉到账户；提示只做概括文案，取第一个启用账户的口径
-        const strategyLabel = enabledAccounts(this.store.settings)[0]?.conflict === "local" ? "本地优先" : "服务端优先";
+        const strategyLabel = enabledAccounts(this.store.settings)[0]?.conflict === "local" ? _t("本地优先") : _t("服务端优先");
         if (report.errors.length > 0) {
-          this.notify(`同步完成，但有 ${report.errors.length} 处出错：${report.errors[0] ?? ""}`, "error");
+          this.notify(`${_t("同步完成，但有")} ${report.errors.length} ${_t("处出错：")}${report.errors[0] ?? ""}`, "error");
         } else if (report.conflicts.length > 0) {
           this.notify(
-            `同步完成，但有 ${report.conflicts.length} 处冲突（按「${strategyLabel}」策略处理）：${report.conflicts[0] ?? ""}`,
+            `${_t("同步完成，但有")} ${report.conflicts.length} ${_t("处冲突（按「")}${strategyLabel}${_t("」策略处理）：")}${report.conflicts[0] ?? ""}`,
             "info"
           );
         } else {
           this.notify(
-            `同步完成：拉取 ${report.fetched} 条，上传 ${report.uploaded} 条，删除 ${report.deleted} 条（${report.elapsedMs}ms）`
+            `${_t("同步完成：拉取")} ${report.fetched} ${_t("条，上传")} ${report.uploaded} ${_t("条，删除")} ${report.deleted} ${_t("条（")}${report.elapsedMs}ms${_t("）")}`
           );
         }
       }
       return report;
     } catch (e) {
-      this.notify(`同步失败：${String((e as Error)?.message || e)}`, "error");
+      this.notify(`${_t("同步失败：")}${String((e as Error)?.message || e)}`, "error");
       return undefined;
     }
   }
@@ -1194,26 +1199,26 @@ export default class CalDavPlugin extends Plugin {
       // 改动数量告警：超过设置里的「一次同步改动数量告警值」先弹窗让用户确认
       confirm: (info) => confirmBlockChanges(info)
     });
-    if (res.cancelled) return { text: res.message || "已取消本轮任务块同步" };
+    if (res.cancelled) return { text: res.message || _t("已取消本轮任务块同步") };
     if (!res.scanned && !res.created && !res.updated && !res.written && !res.deleted) {
       return res.errors.length ? { text: res.errors[0] } : undefined;
     }
-    const mode = res.mode === "incremental" ? "增量" : "全量";
-    const parts = [`扫到 ${res.scanned} 个任务块（${mode}）`];
-    if (res.created) parts.push(`新建 ${res.created}`);
-    if (res.updated) parts.push(`更新 ${res.updated}`);
-    if (res.written) parts.push(`回写 ${res.written}`);
-    if (res.deleted) parts.push(`删除 ${res.deleted}`);
-    const text = `文档任务块同步：${parts.join("，")}` + (res.errors.length ? `（${res.errors.length} 处出错：${res.errors[0]}）` : "");
+    const mode = res.mode === "incremental" ? _t("增量") : _t("全量");
+    const parts = [`${_t("扫到")} ${res.scanned} ${_t("个任务块（")}${mode}${_t("）")}`];
+    if (res.created) parts.push(`${_t("新建")} ${res.created}`);
+    if (res.updated) parts.push(`${_t("更新")} ${res.updated}`);
+    if (res.written) parts.push(`${_t("回写")} ${res.written}`);
+    if (res.deleted) parts.push(`${_t("删除")} ${res.deleted}`);
+    const text = `${_t("文档任务块同步：")}${parts.join(_t("，"))}` + (res.errors.length ? `${_t("（")}${res.errors.length} ${_t("处出错：")}${res.errors[0]}${_t("）")}` : "");
     return { text };
   }
 
   /** 设置区「立即扫描」按钮（用户主动要求「扫一遍」→ 走全量，不受增量水位线限制） */
   private async scanBlocksNow(): Promise<string> {
-    if (!this.store.settings.blockSyncEnabled) return "文档任务块识别与映射未启用（先在上方打开开关）";
+    if (!this.store.settings.blockSyncEnabled) return _t("文档任务块识别与映射未启用（先在上方打开开关）");
     const r = await this.blockSyncPass(undefined, { full: true });
     this.refreshPanels();
-    return r?.text || "扫描完成，没有需要同步的任务块";
+    return r?.text || _t("扫描完成，没有需要同步的任务块");
   }
 
   /** 设置区「一键清理」：删掉全部块来源 VTODO（文档里的块不动） */
@@ -1224,8 +1229,8 @@ export default class CalDavPlugin extends Plugin {
       caller: this.kernelCaller()
     });
     this.refreshPanels();
-    if (res.errors.length) return `清理完成 ${res.deleted} 条，${res.errors.length} 处出错：${res.errors[0]}`;
-    return res.deleted ? `已清理 ${res.deleted} 条文档任务块转来的待办` : "没有可清理的条目";
+    if (res.errors.length) return `${_t("清理完成")} ${res.deleted} ${_t("条，")}${res.errors.length} ${_t("处出错：")}${res.errors[0]}`;
+    return res.deleted ? `${_t("已清理")} ${res.deleted} ${_t("条文档任务块转来的待办")}` : _t("没有可清理的条目");
   }
 
   /**
@@ -1255,15 +1260,15 @@ export default class CalDavPlugin extends Plugin {
     if (!s.blockSyncEnabled) return;
     const rootId = await getBlockRootId(this.kernelCaller(), nodeId);
     if (!rootId) {
-      showMessage("没读到这个任务块所属的文档（可能已被删除）", 4000);
+      showMessage(_t("没读到这个任务块所属的文档（可能已被删除）"), 4000);
       return;
     }
     try {
       const r = await this.blockSyncPass([rootId]);
       this.refreshPanels();
-      showMessage(r?.text || "已扫描当前文档的任务块", 4000, "info");
+      showMessage(r?.text || _t("已扫描当前文档的任务块"), 4000, "info");
     } catch (err) {
-      showMessage(`扫描失败：${String((err as Error)?.message || err)}`, 6000);
+      showMessage(`${_t("扫描失败：")}${String((err as Error)?.message || err)}`, 6000);
     }
   }
 
@@ -1274,18 +1279,18 @@ export default class CalDavPlugin extends Plugin {
     try {
       const r = await this.blockSyncPass(undefined, { full: true });
       this.refreshPanels();
-      showMessage(r?.text || "已扫描全部文档的任务块", 4000, "info");
+      showMessage(r?.text || _t("已扫描全部文档的任务块"), 4000, "info");
     } catch (err) {
-      showMessage(`扫描失败：${String((err as Error)?.message || err)}`, 6000);
+      showMessage(`${_t("扫描失败：")}${String((err as Error)?.message || err)}`, 6000);
     }
   }
 
   /** 提醒状态摘要：让用户能区分「数据侧没设提醒」与「投递通道不通」 */
   private reminderStatus(): string {
-    if (isMobile()) return "移动端不启用系统通知";
-    if (!this.store.settings.enableReminders) return "未开启提醒";
-    if (!this.reminder) return "提醒引擎未运行（重新勾选保存可重启）";
-    return `已排程 ${this.reminder.count()} 条 · 带提醒时间的条目 ${this.reminder.armedCount()} 个`;
+    if (isMobile()) return _t("移动端不启用系统通知");
+    if (!this.store.settings.enableReminders) return _t("未开启提醒");
+    if (!this.reminder) return _t("提醒引擎未运行（重新勾选保存可重启）");
+    return `${_t("已排程")} ${this.reminder.count()} ${_t("条")} · ${_t("带提醒时间的条目")} ${this.reminder.armedCount()} ${_t("个")}`;
   }
 
   /** 设置入口 */
@@ -1351,11 +1356,11 @@ export default class CalDavPlugin extends Plugin {
   private reminderText(item: CalItem, anchorISO: string, alarmMin: number): { title: string; body: string } {
     const cal = findCalendarByUrl(this.store.settings, item.calendarUrl);
     const when = item.allDay
-      ? `全天 · ${fmtDateCn(anchorISO)}`
+      ? `${_t("全天")} · ${fmtDateCn(anchorISO)}`
       : `${fmtDateCn(anchorISO)} ${fmtTime(anchorISO)}`;
-    const lead = alarmMin > 0 ? `（提前 ${alarmMin} 分钟）` : "";
+    const lead = alarmMin > 0 ? `${_t("（提前")} ${alarmMin} ${_t("分钟）")}` : "";
     return {
-      title: item.summary || (item.kind === "todo" ? "待办提醒" : "日程提醒"),
+      title: item.summary || (item.kind === "todo" ? _t("待办提醒") : _t("日程提醒")),
       body: `${when}${cal?.displayName ? " · " + cal.displayName : ""}${lead}`
     };
   }
@@ -1379,7 +1384,7 @@ export default class CalDavPlugin extends Plugin {
     });
     this.notifySystem(title, body, open);
 
-    const text = `⏰ ${title}　${body}`;
+    const text = `⏰ ${title}${_t("　")}${body}`;
     try {
       showMessage(text, 8000, "info", "caldav-reminder");
     } catch {
@@ -1447,12 +1452,12 @@ export default class CalDavPlugin extends Plugin {
       kind: "event",
       calendarUrl: resolveDefaultCalendar(this.store.settings)?.url || "",
       href: "",
-      summary: "提醒功能测试",
+      summary: _t("提醒功能测试"),
       allDay: false,
       start: when
     };
     this.fireReminder(demo, when, 0);
-    return "已发出测试提醒：应出现应用内提醒卡片（系统通知视运行环境而定）";
+    return _t("已发出测试提醒：应出现应用内提醒卡片（系统通知视运行环境而定）");
   }
 
   /**
@@ -1480,7 +1485,7 @@ export default class CalDavPlugin extends Plugin {
       const endMs = parseLocalStamp(span.toExclusive + "T00:00:00").getTime();
       // 目标日记：默认今天，选「本周/本月 + 区间首日」时才换成周一 / 1 号
       const targetStamp = diaryTargetStamp(range, target, today);
-      const targetLabel = (targetOptionsOf(range, today).find((o) => o.key === target) || { short: "今天" }).short;
+      const targetLabel = (targetOptionsOf(range, today).find((o) => o.key === target) || { short: _t("今天") }).short;
       const enabled = new Set(enabledCalendars(this.store.settings).map((c) => c.url));
 
       const rows: { ms: number; line: string }[] = [];
@@ -1507,7 +1512,7 @@ export default class CalDavPlugin extends Plugin {
           const timed = !it.allDay && /T\d{1,2}:\d{2}/.test(occ);
           const mark = it.kind === "todo" ? "☑️" : "📅";
           const when = diaryWhenLabel(occ, timed, crossDay);
-          rows.push({ ms, line: `- ${mark} ${when} ${it.summary || "(无标题)"}` });
+          rows.push({ ms, line: `- ${mark} ${when} ${it.summary || _t("(无标题)")}` });
           inRange = true;
         }
         // 逾期待办：仅当开关开启、且本条没落在范围内（避免「所有」范围重复计入）时，按 DUE 收集到最前面
@@ -1515,24 +1520,24 @@ export default class CalDavPlugin extends Plugin {
           const dueMs = parseLocalStamp(it.end).getTime();
           if (Number.isFinite(dueMs) && dueMs < todayMidnight) {
             const dueTimed = !it.allDay && /T\d{1,2}:\d{2}/.test(it.end);
-            const dueLabel = dueTimed ? it.end.slice(11, 16) : "全天";
+            const dueLabel = dueTimed ? it.end.slice(11, 16) : _t("全天");
             overdueRows.push({
               ms: dueMs,
-              line: `- ⏰ ${it.end.slice(0, 10)} ${dueLabel} ${it.summary || "(无标题)"}`
+              line: `- ⏰ ${it.end.slice(0, 10)} ${dueLabel} ${it.summary || _t("(无标题)")}`
             });
           }
         }
       }
       rows.sort((a, b) => a.ms - b.ms);
       overdueRows.sort((a, b) => a.ms - b.ms); // 逾期最久（DUE 最早）排最前
-      if (!rows.length && !overdueRows.length) return this.notify(`${span.label}没有日程或待办`);
+      if (!rows.length && !overdueRows.length) return this.notify(`${span.label}${_t("没有日程或待办")}`);
 
       const overdueMd = overdueRows.length
-        ? `### 逾期待办\n${overdueRows.map((r) => r.line).join("\n")}\n`
+        ? `### ${_t("逾期待办")}\n${overdueRows.map((r) => r.line).join("\n")}\n`
         : "";
       const md = `## ${span.sectionTitle}\n${overdueMd}${rows.map((r) => r.line).join("\n")}\n`;
       const docId = await this.resolveDailyNoteId(targetStamp);
-      if (!docId) return this.notify("没有打开的笔记本，无法创建日记", "error");
+      if (!docId) return this.notify(_t("没有打开的笔记本，无法创建日记"), "error");
 
       // 上一次写过就整段替换：重复点击是「刷新」而不是无限追加。
       // ⚠️ 必须用实际要写的标题（跨日范围带区间后缀），不能用固定常量匹配。
@@ -1544,16 +1549,16 @@ export default class CalDavPlugin extends Plugin {
       })
         .then((r) => r.json())
         .catch(() => ({}) as any);
-      if (ins?.code) return this.notify(`写入日记失败：${ins.msg || ins.code}`, "error");
+      if (ins?.code) return this.notify(`${_t("写入日记失败：")}${ins.msg || ins.code}`, "error");
 
       this.openDocAsActive(docId);
       const total = rows.length + overdueRows.length;
       return this.notify(
-        `已${replaced ? "更新" : "写入"}${targetLabel}的日记「${span.sectionTitle}」${total} 条`
+        `${_t("已")}${replaced ? _t("更新") : _t("写入")}${targetLabel}${_t("的日记「")}${span.sectionTitle}${_t("」")}${total} ${_t("条")}`
       );
     } catch (e) {
       // 任何异常都要有反馈：静默失败会让用户以为没执行而重复点击
-      return this.notify(`插入日记失败：${(e as Error)?.message || e}`, "error");
+      return this.notify(`${_t("插入日记失败：")}${(e as Error)?.message || e}`, "error");
     }
   }
 

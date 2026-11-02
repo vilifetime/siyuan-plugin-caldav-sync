@@ -14,6 +14,8 @@ import { escape } from "./view-common";
 import { icons } from "./icons";
 import { enableDialogResize } from "./dialog-resize";
 import { openCategoryManager } from "./category-manager";
+import { t as _t } from "../core/i18n";
+
 
 /** 超过这个大小的文件，上传前要先跟用户确认（字节）。内联进 ICS 后体积涨 1/3，且每次编辑都重传 */
 export const ATTACH_SIZE_WARN = 800 * 1024;
@@ -49,7 +51,7 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
   const kind: CalKind = editing ? editing.kind : preset.kind || "event";
   const cals = editorCalendars(ctx, editing?.calendarUrl || preset.calendarUrl);
   if (!cals.length) {
-    alert("请先在设置中配置并发现 CalDAV 日历");
+    alert(_t("请先在设置中配置并发现 CalDAV 日历"));
     return;
   }
   // 附件行为按**所属账户**的服务器类型分叉（iCloud 托管 vs 内联 base64）
@@ -97,7 +99,7 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
   const mobile = isMobile();
 
   const dialog = newDialog({
-    title: isNew ? (isTodo ? "新建待办" : "新建日程") : "编辑" + (isTodo ? "待办" : "日程"),
+    title: isNew ? (isTodo ? _t("新建待办") : _t("新建日程")) : _t("编辑{0}", (isTodo ? "待办" : "日程")),
     content: `<div class="caldav-editor">${editorHtml(
       it,
       cals,
@@ -145,31 +147,31 @@ function inputToInputValue(stamp: string, allDay: boolean): string {
 }
 
 function computeDurationLabel(start: string, end: string | undefined, allDay: boolean): string {
-  if (!end) return allDay ? "1 天" : "60 分钟";
+  if (!end) return allDay ? _t("1 天") : _t("60 分钟");
   const s = parseLocalStamp(start).getTime();
   const e = parseLocalStamp(end).getTime();
-  if (Number.isNaN(s) || Number.isNaN(e)) return "—";
+  if (Number.isNaN(s) || Number.isNaN(e)) return _t("—");
   if (allDay) {
     const days = Math.round((e - s) / 86400000);
-    return `${Math.max(1, days)} 天`;
+    return `${Math.max(1, days)} ${_t("天")}`;
   }
   const mins = Math.max(0, Math.round((e - s) / 60000));
   if (mins >= 60) {
     const h = Math.floor(mins / 60);
     const m = mins % 60;
-    return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`;
+    return m ? `${h} ${_t("小时")} ${m} ${_t("分钟")}` : `${h} ${_t("小时")}`;
   }
-  return `${mins} 分钟`;
+  return `${mins} ${_t("分钟")}`;
 }
 
 function repeatSummary(r: Recurrence | undefined): string {
-  if (!r) return "不重复";
-  const freqText: Record<string, string> = { DAILY: "每天", WEEKLY: "每周", MONTHLY: "每月", YEARLY: "每年" };
+  if (!r) return _t("不重复");
+  const freqText: Record<string, string> = { DAILY: _t("每天"), WEEKLY: _t("每周"), MONTHLY: _t("每月"), YEARLY: _t("每年") };
   const base = freqText[r.freq] || r.freq;
-  const interval = r.interval && r.interval > 1 ? `每 ${r.interval} ${r.freq === "DAILY" ? "天" : r.freq === "WEEKLY" ? "周" : r.freq === "MONTHLY" ? "月" : "年"}` : base;
+  const interval = r.interval && r.interval > 1 ? `${_t("每")} ${r.interval} ${r.freq === "DAILY" ? _t("天") : r.freq === "WEEKLY" ? _t("周") : r.freq === "MONTHLY" ? _t("月") : _t("年")}` : base;
   let end = "";
-  if (r.count) end = `，共 ${r.count} 次`;
-  if (r.until) end = `，至 ${r.until.slice(0, 10)}`;
+  if (r.count) end = `${_t("，共")} ${r.count} ${_t("次")}`;
+  if (r.until) end = `${_t("，至")} ${r.until.slice(0, 10)}`;
   return interval + end;
 }
 
@@ -179,10 +181,10 @@ const ALARM_CHOICES = [0, 5, 10, 15, 30, 60, 1440];
 const MAX_ALARMS = 8;
 
 function alarmLabel(m: number): string {
-  if (m === 0) return "到点时";
-  if (m === 1440) return "提前 1 天";
-  if (m === 60) return "提前 1 小时";
-  return `提前 ${m} 分钟`;
+  if (m === 0) return _t("到点时");
+  if (m === 1440) return _t("提前 1 天");
+  if (m === 60) return _t("提前 1 小时");
+  return `${_t("提前")} ${m} ${_t("分钟")}`;
 }
 
 /** 单个提醒行：下拉（沿用输入框包裹层，外观与其它字段一致）+ 行尾删除 */
@@ -198,15 +200,15 @@ function alarmRowHtml(m: number): string {
           <span class="caldav-input-suffix">${icons.chevron}</span>
         </div>
       </div>
-      <button type="button" class="caldav-alarm-del" data-action="del-alarm" title="删除这个提醒">${icons.trash}</button>
+      <button type="button" class="caldav-alarm-del" data-action="del-alarm" title="${_t("删除这个提醒")}">${icons.trash}</button>
     </div>`;
 }
 
 /** 常用组合：点一下整组加入（已存在的自动跳过） */
 const ALARM_PRESETS: { label: string; values: number[] }[] = [
-  { label: "提前 1 天 + 提前 1 小时 + 到点时", values: [1440, 60, 0] },
-  { label: "提前 15 分钟 + 到点时", values: [15, 0] },
-  { label: "提前 1 天 + 提前 30 分钟", values: [1440, 30] }
+  { label: _t("提前 1 天 + 提前 1 小时 + 到点时"), values: [1440, 60, 0] },
+  { label: _t("提前 15 分钟 + 到点时"), values: [15, 0] },
+  { label: _t("提前 1 天 + 提前 30 分钟"), values: [1440, 30] }
 ];
 
 /**
@@ -241,7 +243,7 @@ function wireAlarms(el: HTMLElement, errEl: HTMLElement): void {
   };
   const appendRow = (m: number): boolean => {
     if (list.children.length >= MAX_ALARMS) {
-      flashError(`最多添加 ${MAX_ALARMS} 个提醒`);
+      flashError(`${_t("最多添加")} ${MAX_ALARMS} ${_t("个提醒")}`);
       return false;
     }
     list.insertAdjacentHTML("beforeend", alarmRowHtml(m));
@@ -289,7 +291,7 @@ function wireAlarms(el: HTMLElement, errEl: HTMLElement): void {
 /** 从 URI 取文件名（附件行显示用；与 ics.ts 的 attachmentName 同口径） */
 function nameOfUri(uri: string): string {
   const last = uri.split(/[?#]/)[0].split("/").filter(Boolean).pop();
-  return last ? decodeURIComponent(last) : "附件";
+  return last ? decodeURIComponent(last) : _t("附件");
 }
 
 /** base64 载荷的原始字节数（用于界面显示大小；不含折行空白） */
@@ -334,7 +336,7 @@ function base64ToBytes(b64: string): Uint8Array {
  *  附件名可能来自服务端任意客户端（甚至手改过的 ICS），带 "/" 时 a.download
  *  在部分平台上直接保存失败（2026-10-19 加，任务视图那版漏了这层）。 */
 function safeAttachName(name: string): string {
-  return (name || "附件").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "附件";
+  return (name || _t("附件")).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || _t("附件");
 }
 
 /** 把内联二进制附件下载回本地文件（2026-10-19 雄哥报「编辑待办里附件没法下载」）。
@@ -394,21 +396,21 @@ function downloadBytes(bytes: Uint8Array, a: CalAttachment): void {
  * 放进 attribute 会让整个编辑器 DOM 变得难以为继；base64 只活在 `atts` 里。
  */
 function attachRowHtml(a: CalAttachment, i: number): string {
-  const del = `<button type="button" class="caldav-btn caldav-btn--sm caldav-btn--danger" data-attach-del title="删除该附件">${icons.trash} 删除</button>`;
+  const del = `<button type="button" class="caldav-btn caldav-btn--sm caldav-btn--danger" data-attach-del title="${_t("删除该附件")}">${icons.trash} ${_t("删除")}</button>`;
   if (a.b64) {
-    const dl = `<button type="button" class="caldav-btn caldav-btn--sm" data-attach-dl title="下载该附件到本地">${icons.download} 下载</button>`;
+    const dl = `<button type="button" class="caldav-btn caldav-btn--sm" data-attach-dl title="${_t("下载该附件到本地")}">${icons.download} ${_t("下载")}</button>`;
     return `<div class="caldav-attach-row caldav-attach-row--bin" data-attach-i="${i}">
-      <span class="caldav-attach-bin">${icons.paperclip}<span class="caldav-attach-bin-name">${escape(a.name || "附件")}</span><span class="caldav-attach-bin-size">${escape(sizeText(b64Bytes(a.b64)))}</span></span>
+      <span class="caldav-attach-bin">${icons.paperclip}<span class="caldav-attach-bin-name">${escape(a.name || _t("附件"))}</span><span class="caldav-attach-bin-size">${escape(sizeText(b64Bytes(a.b64)))}</span></span>
       ${dl}${del}
     </div>`;
   }
   return `<div class="caldav-attach-row" data-attach-i="${i}">
-      <input class="caldav-input caldav-attach-input" data-attach-uri value="${escape(a.uri || "")}" placeholder="https://…" />
+      <input class="caldav-input caldav-attach-input" data-attach-uri value="${escape(a.uri || "")}" placeholder="https://${_t("…")}" />
       ${
-        // 托管附件（iCloud，带 MANAGED-ID）：文件在服务端托管存储里，插件能取回
-        // 字节下载；纯外链没有可下载的内容，用户自己复制链接打开。
+        // ${_t("托管附件（")}iCloud${_t("，带")} MANAGED-ID${_t("）：文件在服务端托管存储里，插件能取回")}
+        // ${_t("字节下载；纯外链没有可下载的内容，用户自己复制链接打开。")}
         a.managedId
-          ? `<button type="button" class="caldav-btn caldav-btn--sm" data-attach-dl title="下载该附件到本地">${icons.download} 下载</button>`
+          ? `<button type="button" class="caldav-btn caldav-btn--sm" data-attach-dl title="${_t("下载该附件到本地")}">${icons.download} ${_t("下载")}</button>`
           : ""
       }${del}
     </div>`;
@@ -416,7 +418,7 @@ function attachRowHtml(a: CalAttachment, i: number): string {
 
 function attachRowsHtml(list: CalAttachment[]): string {
   if (!list.length) {
-    return `<div class="caldav-attach-empty">暂无附件</div>`;
+    return `<div class="caldav-attach-empty">${_t("暂无附件")}</div>`;
   }
   return list.map(attachRowHtml).join("");
 }
@@ -430,14 +432,14 @@ function attachRowsHtml(list: CalAttachment[]): string {
 function attachHintHtml(maxBytes: number, isIcloud?: boolean): string {
   if (isIcloud) {
     return (
-      `上传的文件会存进 iCloud 的托管附件空间（苹果官方附件机制，iPhone/iPad 的提醒事项同样走它），` +
-      `待办里只记托管链接，不再内联进日历；也可直接粘贴外链。` +
-      `单个文件上限 ${sizeText(maxBytes)}（上限可在设置里调整），超过 ${sizeText(ATTACH_SIZE_WARN)} 会先跟你确认。`
+      `${_t("上传的文件会存进")} iCloud ${_t("的托管附件空间（苹果官方附件机制，")}iPhone/iPad ${_t("的提醒事项同样走它），")}` +
+      `${_t("待办里只记托管链接，不再内联进日历；也可直接粘贴外链。")}` +
+      `${_t("单个文件上限")} ${sizeText(maxBytes)}${_t("（上限可在设置里调整），超过")} ${sizeText(ATTACH_SIZE_WARN)} ${_t("会先跟你确认。")}`
     );
   }
   return (
-    `上传的文件会转成 base64 内联进待办、随日历一起同步（RFC 5545 标准形式，任何客户端都能读）；也可直接粘贴外链。` +
-    `单个文件上限 ${sizeText(maxBytes)}（再大服务器会拒收，上限可在设置里调整），超过 ${sizeText(ATTACH_SIZE_WARN)} 会先跟你确认。`
+    `${_t("上传的文件会转成")} base64 ${_t("内联进待办、随日历一起同步（")}RFC 5545 ${_t("标准形式，任何客户端都能读）；也可直接粘贴外链。")}` +
+    `${_t("单个文件上限")} ${sizeText(maxBytes)}${_t("（再大服务器会拒收，上限可在设置里调整），超过")} ${sizeText(ATTACH_SIZE_WARN)} ${_t("会先跟你确认。")}`
   );
 }
 
@@ -469,19 +471,19 @@ function confirmLargeFile(host: HTMLElement, file: File, isIcloud = false): Prom
     // iCloud 托管上传没有「内联涨 1/3、每次编辑重传」的问题（文件在托管存储里，
     // ICS 只记链接），确认文案按实际行为写，不制造不存在的担忧。
     text.textContent = isIcloud
-      ? `「${file.name}」当前为 ${sizeText(file.size)}，附件建议不超过 ${sizeText(ATTACH_SIZE_WARN)}。仍要上传到 iCloud 吗？`
-      : `「${file.name}」当前为 ${sizeText(file.size)}，附件建议不超过 ${sizeText(ATTACH_SIZE_WARN)}。` +
-        `内联进日历后体积会涨约 1/3，每次编辑这个待办都会重传一遍。仍要内联吗？`;
+      ? `${_t("「")}${file.name}${_t("」当前为")} ${sizeText(file.size)}${_t("，附件建议不超过")} ${sizeText(ATTACH_SIZE_WARN)}${_t("。仍要上传到")} iCloud ${_t("吗？")}`
+      : `${_t("「")}${file.name}${_t("」当前为")} ${sizeText(file.size)}${_t("，附件建议不超过")} ${sizeText(ATTACH_SIZE_WARN)}${_t("。")}` +
+        `${_t("内联进日历后体积会涨约")} 1/3${_t("，每次编辑这个待办都会重传一遍。仍要内联吗？")}`;
     const ok = document.createElement("button");
     ok.type = "button";
     ok.className = "caldav-btn caldav-btn--sm caldav-btn--primary";
     ok.setAttribute("data-attach-confirm-ok", "");
-    ok.textContent = "确定上传";
+    ok.textContent = _t("确定上传");
     const no = document.createElement("button");
     no.type = "button";
     no.className = "caldav-btn caldav-btn--sm";
     no.setAttribute("data-attach-confirm-no", "");
-    no.textContent = "取消";
+    no.textContent = _t("取消");
     bar.append(text, ok, no);
     const done = (r: ConfirmLargeFileResult): void => {
       cancelPendingConfirm = null;
@@ -517,12 +519,12 @@ function editorHtml(
   return `
 <div class="caldav-editor-head">
   <div class="caldav-tabs">
-    <button class="caldav-tab is-active" data-tab="basic">${isTodo ? "任务设置" : "日程设置"}</button>
-    <button class="caldav-tab" data-tab="note">${isTodo ? "备注附件" : "日程备注"}</button>
+    <button class="caldav-tab is-active" data-tab="basic">${isTodo ? _t("任务设置") : _t("日程设置")}</button>
+    <button class="caldav-tab" data-tab="note">${isTodo ? _t("备注附件") : _t("日程备注")}</button>
     ${
-      // 「文档任务块信息」页签：**只有**由文档任务块映射来的待办才显示（判据 = item.blockId）。
-      // 普通待办没有 Block ID，多一个空页签只会让人以为同步坏了。
-      isTodo && it.blockId ? `<button class="caldav-tab" data-tab="block">文档任务块信息</button>` : ""
+      // ${_t("「文档任务块信息」页签：")}**${_t("只有")}**${_t("由文档任务块映射来的待办才显示（判据")} = item.blockId${_t("）。")}
+      // ${_t("普通待办没有")} Block ID${_t("，多一个空页签只会让人以为同步坏了。")}
+      isTodo && it.blockId ? `<button class="caldav-tab" data-tab="block">${_t("文档任务块信息")}</button>` : ""
     }
   </div>
 </div>
@@ -531,16 +533,16 @@ function editorHtml(
   <div class="caldav-tab-panel" data-panel="basic">
     <div class="caldav-section">
       <div class="caldav-title-head">
-        <label class="caldav-field-label caldav-title-label">${isTodo ? "待办标题" : "事件标题"}</label>
+        <label class="caldav-field-label caldav-title-label">${isTodo ? _t("待办标题") : _t("事件标题")}</label>
         <label class="caldav-switch-line caldav-title-aiparse">
-          <span class="caldav-switch-label">粘贴自动识别日期</span>
+          <span class="caldav-switch-label">${_t("粘贴自动识别日期")}</span>
           <span class="caldav-switch">
             <input type="checkbox" data-f="aiParse" ${it.aiParse === false ? "" : "checked"}/>
             <span class="caldav-switch-track"></span>
           </span>
         </label>
         <div class="caldav-title-cal">
-          <span class="caldav-title-cal-label">日历</span>
+          <span class="caldav-title-cal-label">${_t("日历")}</span>
           <div class="caldav-input-wrap caldav-cal-wrap" style="--cal-color:${escape(calColorOf(cals, it.calendarUrl))}">
             <span class="caldav-input-icon caldav-input-icon--static caldav-cal-icon">${icons.calendar}</span>
             <input type="hidden" data-f="calendar" value="${escape(it.calendarUrl)}"/>
@@ -561,39 +563,39 @@ function editorHtml(
       </div>
       <div class="caldav-title-row">
         <div class="caldav-input-wrap caldav-title-wrap">
-          <input class="caldav-input caldav-title-input" data-f="summary" placeholder="${isTodo ? "请输入待办标题" : "请输入事件标题"}" value="${escape(it.summary)}"/>
-          <button type="button" class="caldav-input-suffix caldav-title-action" data-action="ai-parse" title="自动识别标题中的日期时间">${icons.sparkle}</button>
+          <input class="caldav-input caldav-title-input" data-f="summary" placeholder="${isTodo ? _t("请输入待办标题") : _t("请输入事件标题")}" value="${escape(it.summary)}"/>
+          <button type="button" class="caldav-input-suffix caldav-title-action" data-action="ai-parse" title="${_t("自动识别标题中的日期时间")}">${icons.sparkle}</button>
         </div>
       </div>
     </div>
 
     <div class="caldav-section caldav-section--card">
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.clock}</span>日期时间</div>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.clock}</span>${_t("日期时间")}</div>
       <div class="caldav-all-day-row">
         <label class="caldav-switch-line caldav-all-day-switch">
-          <span class="caldav-switch-label">全天</span>
+          <span class="caldav-switch-label">${_t("全天")}</span>
           <span class="caldav-switch">
             <input type="checkbox" data-f="allDay" ${it.allDay ? "checked" : ""}/>
             <span class="caldav-switch-track"></span>
           </span>
         </label>
-        <button type="button" class="caldav-all-day-clear" data-clear-datetime title="清除日期时间">
-          ${icons.trash}<span>清除日期时间</span>
+        <button type="button" class="caldav-all-day-clear" data-clear-datetime title="${_t("清除日期时间")}">
+          ${icons.trash}<span>${_t("清除日期时间")}</span>
         </button>
         <div class="caldav-duration-row caldav-duration-row--inline" ${isTodo || it.allDay ? 'style="display:none"' : ""}>
-          <span class="caldav-datetime-label">持续</span>
+          <span class="caldav-datetime-label">${_t("持续")}</span>
           <span class="caldav-duration-val" data-duration>${initialDuration}</span>
         </div>
       </div>
 
       <div class="caldav-datetime-row">
-        <span class="caldav-datetime-label">开始</span>
+        <span class="caldav-datetime-label">${_t("开始")}</span>
         <div class="caldav-datetime-inputs">
           <div class="caldav-input-wrap caldav-input-wrap--date">
             <span class="caldav-input-icon">${icons.calendar}</span>
             <input class="caldav-input caldav-date-input" data-f="startDate" type="date" value="${startDate}"/>
           </div>
-          <button type="button" class="caldav-input-clear" data-clear="startDate" title="清除日期">${icons.trash}</button>
+          <button type="button" class="caldav-input-clear" data-clear="startDate" title="${_t("清除日期")}">${icons.trash}</button>
           <div class="caldav-input-wrap caldav-input-wrap--time" ${it.allDay ? 'style="display:none"' : ""}>
             <input type="hidden" data-f="startTime" value="${startTime}"/>
             <button type="button" class="caldav-input caldav-time-trigger" data-time="startTime">
@@ -602,18 +604,18 @@ function editorHtml(
             </button>
             <div class="caldav-time-pop" data-time-pop="startTime" hidden></div>
           </div>
-          <button class="caldav-input-clear caldav-input-clear--time" data-clear="startTime" title="清除时间" ${it.allDay ? 'style="display:none"' : ""}>${icons.trash}</button>
+          <button class="caldav-input-clear caldav-input-clear--time" data-clear="startTime" title="${_t("清除时间")}" ${it.allDay ? 'style="display:none"' : ""}>${icons.trash}</button>
         </div>
       </div>
 
       <div class="caldav-datetime-row">
-        <span class="caldav-datetime-label">结束</span>
+        <span class="caldav-datetime-label">${_t("结束")}</span>
         <div class="caldav-datetime-inputs">
           <div class="caldav-input-wrap caldav-input-wrap--date">
             <span class="caldav-input-icon">${icons.calendar}</span>
             <input class="caldav-input caldav-date-input" data-f="endDate" type="date" value="${endDate}"/>
           </div>
-          <button type="button" class="caldav-input-clear" data-clear="endDate" title="清除日期">${icons.trash}</button>
+          <button type="button" class="caldav-input-clear" data-clear="endDate" title="${_t("清除日期")}">${icons.trash}</button>
           <div class="caldav-input-wrap caldav-input-wrap--time" ${it.allDay ? 'style="display:none"' : ""}>
             <input type="hidden" data-f="endTime" value="${endTime}"/>
             <button type="button" class="caldav-input caldav-time-trigger" data-time="endTime">
@@ -622,37 +624,37 @@ function editorHtml(
             </button>
             <div class="caldav-time-pop" data-time-pop="endTime" hidden></div>
           </div>
-          <button class="caldav-input-clear caldav-input-clear--time" data-clear="endTime" title="清除时间" ${it.allDay ? 'style="display:none"' : ""}>${icons.trash}</button>
+          <button class="caldav-input-clear caldav-input-clear--time" data-clear="endTime" title="${_t("清除时间")}" ${it.allDay ? 'style="display:none"' : ""}>${icons.trash}</button>
         </div>
       </div>
     </div>
 
     <div class="caldav-section caldav-section--card">
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.bell}</span>提醒设置</div>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.bell}</span>${_t("提醒设置")}</div>
       <div class="caldav-alarm-list" data-alarm-list>${alarmRows}</div>
-      <div class="caldav-alarm-empty" data-alarm-empty ${alarmRows ? "hidden" : ""}>未设置提醒时间（到点时不会提醒）</div>
+      <div class="caldav-alarm-empty" data-alarm-empty ${alarmRows ? "hidden" : ""}>${_t("未设置提醒时间（到点时不会提醒）")}</div>
       <div class="caldav-alarm-actions">
-        <button type="button" class="caldav-add-btn" data-action="add-alarm">${icons.plus} 添加提醒时间</button>
-        <button type="button" class="caldav-add-btn" data-action="add-preset">${icons.layers} 添加预设</button>
+        <button type="button" class="caldav-add-btn" data-action="add-alarm">${icons.plus} ${_t("添加提醒时间")}</button>
+        <button type="button" class="caldav-add-btn" data-action="add-preset">${icons.layers} ${_t("添加预设")}</button>
         <div class="caldav-alarm-presets" data-alarm-presets hidden>
-          <div class="caldav-alarm-presets-hint">常用组合，点一下整组加入</div>
+          <div class="caldav-alarm-presets-hint">${_t("常用组合，点一下整组加入")}</div>
           ${ALARM_PRESETS.map(
             (p, i) =>
-              `<button type="button" class="caldav-alarm-preset" data-preset="${i}">${escape(p.label)}<span>加 ${p.values.length} 个</span></button>`
+              `<button type="button" class="caldav-alarm-preset" data-preset="${i}">${escape(p.label)}<span>${_t("加")} ${p.values.length} ${_t("个")}</span></button>`
           ).join("")}
         </div>
       </div>
     </div>
 
     <div class="caldav-section caldav-section--card">
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.repeat}</span>重复设置</div>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.repeat}</span>${_t("重复设置")}</div>
       <button type="button" class="caldav-row-btn" data-action="toggle-repeat-detail">
         <span class="caldav-row-btn-text">${repeatSummary(r)}</span>
         <span class="caldav-row-btn-arrow">${icons.chevron}</span>
       </button>
       <div class="caldav-row-detail" data-detail="repeat" style="display:${r ? "block" : "none"}">
         <label class="caldav-switch-line caldav-switch-line--inline">
-          <span class="caldav-switch-label">启用重复</span>
+          <span class="caldav-switch-label">${_t("启用重复")}</span>
           <span class="caldav-switch">
             <input type="checkbox" data-f="repeatOn" ${r ? "checked" : ""}/>
             <span class="caldav-switch-track"></span>
@@ -660,12 +662,12 @@ function editorHtml(
         </label>
         <div class="caldav-repeat-fields" style="display:${r ? "flex" : "none"}">
           <select class="caldav-input" data-f="freq">
-            <option value="DAILY" ${r?.freq === "DAILY" ? "selected" : ""}>每天</option>
-            <option value="WEEKLY" ${r?.freq === "WEEKLY" || !r ? "selected" : ""}>每周</option>
-            <option value="MONTHLY" ${r?.freq === "MONTHLY" ? "selected" : ""}>每月</option>
-            <option value="YEARLY" ${r?.freq === "YEARLY" ? "selected" : ""}>每年</option>
+            <option value="DAILY" ${r?.freq === "DAILY" ? "selected" : ""}>${_t("每天")}</option>
+            <option value="WEEKLY" ${r?.freq === "WEEKLY" || !r ? "selected" : ""}>${_t("每周")}</option>
+            <option value="MONTHLY" ${r?.freq === "MONTHLY" ? "selected" : ""}>${_t("每月")}</option>
+            <option value="YEARLY" ${r?.freq === "YEARLY" ? "selected" : ""}>${_t("每年")}</option>
           </select>
-          <input class="caldav-input caldav-num" data-f="interval" type="number" min="1" value="${r?.interval || 1}" title="间隔"/>
+          <input class="caldav-input caldav-num" data-f="interval" type="number" min="1" value="${r?.interval || 1}" title="${_t("间隔")}"/>
           <div class="caldav-weekdays">${["一", "二", "三", "四", "五", "六", "日"]
             .map((l, i) => {
               const code = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"][i];
@@ -673,9 +675,9 @@ function editorHtml(
             })
             .join("")}</div>
           <select class="caldav-input" data-f="endMode">
-            <option value="never" ${!r?.count && !r?.until ? "selected" : ""}>永不结束</option>
-            <option value="count" ${r?.count ? "selected" : ""}>次数</option>
-            <option value="until" ${r?.until ? "selected" : ""}>日期</option>
+            <option value="never" ${!r?.count && !r?.until ? "selected" : ""}>${_t("永不结束")}</option>
+            <option value="count" ${r?.count ? "selected" : ""}>${_t("次数")}</option>
+            <option value="until" ${r?.until ? "selected" : ""}>${_t("日期")}</option>
           </select>
           <input class="caldav-input caldav-num" data-f="count" type="number" min="1" value="${r?.count || 10}" style="display:${r?.count ? "" : "none"}"/>
           <input class="caldav-input" data-f="until" type="date" value="${r?.until ? r.until.slice(0, 10) : ""}" style="display:${r?.until ? "" : "none"}"/>
@@ -684,33 +686,33 @@ function editorHtml(
     </div>
 
     <div class="caldav-section caldav-section--card">
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.layers}</span>更多信息</div>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.layers}</span>${_t("更多信息")}</div>
       <div class="caldav-field caldav-field-icon">
-        <label class="caldav-field-label">${icons.pin} 地点</label>
+        <label class="caldav-field-label">${icons.pin} ${_t("地点")}</label>
         <div class="caldav-input-wrap">
           <span class="caldav-input-icon">${icons.pin}</span>
-          <input class="caldav-input" data-f="location" value="${escape(it.location || "")}" placeholder="可选"/>
+          <input class="caldav-input" data-f="location" value="${escape(it.location || "")}" placeholder="${_t("可选")}"/>
         </div>
       </div>
       ${
         isTodo
           ? `<div class="caldav-field-row">
         <div class="caldav-field caldav-field-icon">
-          <label class="caldav-field-label">${icons.flag} 优先级</label>
+          <label class="caldav-field-label">${icons.flag} ${_t("优先级")}</label>
           <div class="caldav-input-wrap">
             <span class="caldav-input-icon">${icons.flag}</span>
             <select class="caldav-input" data-f="priority">
-              <option value="0" ${!it.priority ? "selected" : ""}>无</option>
-              <option value="9" ${it.priority === 9 ? "selected" : ""}>低</option>
-              <option value="5" ${it.priority === 5 ? "selected" : ""}>中</option>
-              <option value="3" ${it.priority === 3 ? "selected" : ""}>高</option>
-              <option value="1" ${it.priority === 1 ? "selected" : ""}>紧急</option>
+              <option value="0" ${!it.priority ? "selected" : ""}>${_t("无")}</option>
+              <option value="9" ${it.priority === 9 ? "selected" : ""}>${_t("低")}</option>
+              <option value="5" ${it.priority === 5 ? "selected" : ""}>${_t("中")}</option>
+              <option value="3" ${it.priority === 3 ? "selected" : ""}>${_t("高")}</option>
+              <option value="1" ${it.priority === 1 ? "selected" : ""}>${_t("紧急")}</option>
             </select>
             <span class="caldav-input-suffix">${icons.chevron}</span>
           </div>
         </div>
         <div class="caldav-field">
-          <label class="caldav-field-label">进度</label>
+          <label class="caldav-field-label">${_t("进度")}</label>
           <div class="caldav-progress-row">
             <input type="range" data-f="percent" min="0" max="100" step="10" value="${it.percent ?? 0}"/>
             <span class="caldav-progress-val">${it.percent ?? 0}%</span>
@@ -721,20 +723,20 @@ function editorHtml(
       }
       <div class="caldav-field">
         <div class="caldav-cat-head">
-          <label class="caldav-field-label">${icons.tag} 任务分类</label>
-          <button type="button" class="caldav-cat-manage" data-action="cat-manage" title="管理分类">${icons.gear}</button>
-          <label class="caldav-cat-multi" title="允许多选">
+          <label class="caldav-field-label">${icons.tag} ${_t("任务分类")}</label>
+          <button type="button" class="caldav-cat-manage" data-action="cat-manage" title="${_t("管理分类")}">${icons.gear}</button>
+          <label class="caldav-cat-multi" title="${_t("允许多选")}">
             <span class="caldav-switch">
               <input type="checkbox" data-f="catMulti" ${catMulti ? "checked" : ""}/>
               <span class="caldav-switch-track"></span>
             </span>
-            多选
+            ${_t("多选")}
           </label>
         </div>
         <input type="hidden" data-f="categories" value="${escape((it.categories || []).join(","))}"/>
         <div class="caldav-cat-pills" data-cat-pills>
           <button type="button" class="caldav-cat-pill caldav-cat-pill--none" data-cat="">
-            <span class="caldav-cat-check">${icons.check}</span>无分类
+            <span class="caldav-cat-check">${icons.check}</span>${_t("无分类")}
           </button>
           ${cats
             .map(
@@ -749,20 +751,20 @@ function editorHtml(
 
   <div class="caldav-tab-panel" data-panel="note" style="display:none">
     <div class="caldav-section caldav-section--card">
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>备注</div>
-      <textarea class="caldav-input caldav-textarea" data-f="description" rows="8" placeholder="添加备注...">${escape(it.description || "")}</textarea>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>${_t("备注")}</div>
+      <textarea class="caldav-input caldav-textarea" data-f="description" rows="8" placeholder="${_t("添加备注")}...">${escape(it.description || "")}</textarea>
     </div>
     ${
       isTodo
         ? `<div class="caldav-section caldav-section--card caldav-attach" data-attach>
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.paperclip}</span>附件</div>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.paperclip}</span>${_t("附件")}</div>
       <div class="caldav-attach-rows" data-attach-rows>
         ${attachRowsHtml(it.attachments || [])}
       </div>
       <div class="caldav-attach-actions">
         <input type="file" data-attach-file hidden />
-        <button type="button" class="caldav-btn caldav-btn--sm" data-attach-upload>${icons.paperclip} 上传文件</button>
-        <button type="button" class="caldav-btn caldav-btn--sm" data-attach-add>${icons.plus} 添加链接</button>
+        <button type="button" class="caldav-btn caldav-btn--sm" data-attach-upload>${icons.paperclip} ${_t("上传文件")}</button>
+        <button type="button" class="caldav-btn caldav-btn--sm" data-attach-add>${icons.plus} ${_t("添加链接")}</button>
       </div>
       <div class="caldav-attach-hint" data-attach-hint>${attachHintHtml(attachMaxBytes, isIcloud)}</div>
       <div class="caldav-attach-msg" data-attach-msg></div>
@@ -774,14 +776,14 @@ function editorHtml(
     isTodo && it.blockId
       ? `<div class="caldav-tab-panel" data-panel="block" style="display:none">
     <div class="caldav-section caldav-section--card">
-      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>文档任务块信息</div>
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>${_t("文档任务块信息")}</div>
       <div class="caldav-blkinfo" data-block-detail>
-        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">笔记本名称</span><span class="caldav-blkinfo-v" data-bk="nb">读取中…</span></div>
-        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">文档名称</span><span class="caldav-blkinfo-v" data-bk="doc">读取中…</span></div>
-        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">任务块名称</span><span class="caldav-blkinfo-v" data-bk="text">读取中…</span></div>
-        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">任务块 ID</span><span class="caldav-blkinfo-v caldav-blkinfo-v--mono" data-bk="id">${escape(it.blockId)}</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">${_t("笔记本名称")}</span><span class="caldav-blkinfo-v" data-bk="nb">${_t("读取中…")}</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">${_t("文档名称")}</span><span class="caldav-blkinfo-v" data-bk="doc">${_t("读取中…")}</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">${_t("任务块名称")}</span><span class="caldav-blkinfo-v" data-bk="text">${_t("读取中…")}</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">${_t("任务块")} ID</span><span class="caldav-blkinfo-v caldav-blkinfo-v--mono" data-bk="id">${escape(it.blockId)}</span></div>
       </div>
-      <p class="caldav-set-hint" data-block-detail-hint>只读，改内容请回文档里改；下一轮同步会把改动带到服务端。</p>
+      <p class="caldav-set-hint" data-block-detail-hint>${_t("只读，改内容请回文档里改；下一轮同步会把改动带到服务端。")}</p>
     </div>
   </div>`
       : ""
@@ -790,12 +792,12 @@ function editorHtml(
 
 <div class="caldav-editor-foot">
   <div class="caldav-editor-error" data-error></div>
-  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--danger" data-action="delete">${icons.trash} 删除</button>` : ""}
-  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--void" data-action="void" title="标记为已作废（CANCELLED 状态）">${icons.ban} 作废</button>` : ""}
-  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--convert" data-action="convert" title="转换为${it.kind === "todo" ? "日程" : "待办"}">${it.kind === "todo" ? icons.calendar + " 转日程" : icons.tasks + " 转待办"}</button>` : ""}
+  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--danger" data-action="delete">${icons.trash} ${_t("删除")}</button>` : ""}
+  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--void" data-action="void" title="${_t("标记为已作废（")}CANCELLED ${_t("状态）")}">${icons.ban} ${_t("作废")}</button>` : ""}
+  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--convert" data-action="convert" title="${_t("转换为")}${it.kind === "todo" ? _t("日程") : _t("待办")}">${it.kind === "todo" ? _t("{0} 转日程", icons.calendar) : _t("{0} 转待办", icons.tasks)}</button>` : ""}
   <span class="caldav-flex"></span>
-  <button type="button" class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} 取消</button>
-  <button type="button" class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} 保存</button>
+  <button type="button" class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} ${_t("取消")}</button>
+  <button type="button" class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} ${_t("保存")}</button>
 </div>
 </div>`;
 }
@@ -828,12 +830,12 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       if (n) n.textContent = val;
     };
     const done = (d?: { notebookName?: string; docTitle?: string; text?: string; id?: string }): void => {
-      setVal("nb", d?.notebookName || "—");
-      setVal("doc", d?.docTitle || "—");
+      setVal("nb", d?.notebookName || _t("—"));
+      setVal("doc", d?.docTitle || _t("—"));
       // 块文字取不到时退回同步时缓存的 blockText，别留空白让人以为坏了
-      setVal("text", d?.text || it.blockText || "—");
+      setVal("text", d?.text || it.blockText || _t("—"));
       if (!d && hintEl) {
-        hintEl.textContent = "读不到这个块了 —— 它可能已被删除（或不在可访问范围内）。";
+        hintEl.textContent = _t("读不到这个块了 —— 它可能已被删除（或不在可访问范围内）。");
         detailEl.classList.add("is-missing");
       }
     };
@@ -905,16 +907,16 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
         if (a?.b64) {
           try {
             downloadAttachment(a);
-            setMsg(`已开始下载「${a.name || "附件"}」`);
+            setMsg(`${_t("已开始下载「")}${a.name || _t("附件")}${_t("」")}`);
           } catch (err) {
             setMsg(err instanceof Error ? err.message : String(err), true);
           }
         } else if (a?.uri) {
           try {
-            setMsg(`正在从服务器取回「${a.name || "附件"}」…`);
+            setMsg(`${_t("正在从服务器取回「")}${a.name || _t("附件")}${_t("」…")}`);
             const bytes = await ctx.sync.fetchAttachmentBytes(a.uri);
             downloadBytes(bytes, a);
-            setMsg(`已开始下载「${a.name || "附件"}」`);
+            setMsg(`${_t("已开始下载「")}${a.name || _t("附件")}${_t("」")}`);
           } catch (err) {
             setMsg(err instanceof Error ? err.message : String(err), true);
           }
@@ -933,7 +935,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
 
     // 手工加一行空链接（服务端已有链接、或用户想贴外链）
     el.querySelector("[data-attach-add]")?.addEventListener("click", () => {
-      atts.push({ uri: "", name: "附件" });
+      atts.push({ uri: "", name: _t("附件") });
       redraw();
       const last = attachRows.querySelectorAll<HTMLInputElement>("[data-attach-uri]");
       last[last.length - 1]?.focus();
@@ -958,7 +960,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       refreshHint();
       if (file.size > maxBytes) {
         setMsg(
-          `「${file.name}」${sizeText(file.size)}，超过单文件上限 ${sizeText(maxBytes)}，服务器会拒绝接收。请压缩后重试，或改用「添加链接」引用外部地址。`,
+          `${_t("「")}${file.name}${_t("」")}${sizeText(file.size)}${_t("，超过单文件上限")} ${sizeText(maxBytes)}${_t("，服务器会拒绝接收。请压缩后重试，或改用「添加链接」引用外部地址。")}`,
           true
         );
         return;
@@ -972,15 +974,15 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
         setMsg(""); // 上一条提示别和确认栏同时在场
         const host = attachRows.closest<HTMLElement>(".caldav-attach") || attachRows;
         const r = await confirmLargeFile(host, file, isIcloud);
-        if (r === "cancel") setMsg("已取消上传");
+        if (r === "cancel") setMsg(_t("已取消上传"));
         if (r !== "ok") return;
       }
-      setMsg(`正在读取「${file.name}」…`);
+      setMsg(`${_t("正在读取「")}${file.name}${_t("」…")}`);
       try {
         const b64 = await arrayBufferToBase64(await file.arrayBuffer());
         atts.push({ b64, name: file.name, fmttype: file.type || undefined });
         redraw();
-        setMsg(`已添加「${file.name}」，保存后生效`);
+        setMsg(`${_t("已添加「")}${file.name}${_t("」，保存后生效")}`);
       } catch (err) {
         setMsg(err instanceof Error ? err.message : String(err), true);
       }
@@ -1251,7 +1253,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
   f("repeatOn").addEventListener("change", () => {
     const on = f("repeatOn").checked;
     repeatFields.style.display = on ? "flex" : "none";
-    repeatBtnText.textContent = on ? repeatSummary(collectRepeat(el)) : "不重复";
+    repeatBtnText.textContent = on ? repeatSummary(collectRepeat(el)) : _t("不重复");
   });
 
   // 星期选择
@@ -1303,7 +1305,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
   el.querySelector('[data-action="ai-parse"]')?.addEventListener("click", () => {
     const p = parseDateTimeFromText(f("summary").value);
     if (!p) {
-      errEl.textContent = "未在标题中识别到日期时间。";
+      errEl.textContent = _t("未在标题中识别到日期时间。");
       setTimeout(() => (errEl.textContent = ""), 2500);
       return;
     }
@@ -1332,14 +1334,14 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
     delBtn.addEventListener("click", async () => {
       if (!armed) {
         armed = true;
-        delBtn.innerHTML = `${icons.trash} 再点一次确认删除`;
+        delBtn.innerHTML = `${icons.trash} ${_t("再点一次确认删除")}`;
         delBtn.classList.add("is-armed");
         armTimer = setTimeout(disarm, 4000);
         return;
       }
       disarm();
       delBtn.disabled = true;
-      delBtn.innerHTML = "删除中…";
+      delBtn.innerHTML = _t("删除中…");
       // 与保存同理：本地已标记删除并入队后台上传，不等网络往返就关窗。
       // 服务端删除失败时条目留在本地（deleted+dirty），下次同步自动重试，
       // 结果看页脚状态条 —— 好过把窗口冻在「删除中…」一分钟（2026-10-15 实测）。
@@ -1381,7 +1383,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       if (!accepted(cur)) {
         const dest = cals.find((c) => accepted(c));
         if (!dest) {
-          errEl.textContent = `没有支持${target === "event" ? "日程" : "待办"}的日历（当前日历只收${target === "event" ? "待办" : "日程"}），请先到设置里启用一个`;
+          errEl.textContent = `${_t("没有支持")}${target === "event" ? _t("日程") : _t("待办")}${_t("的日历（当前日历只收")}${target === "event" ? _t("待办") : _t("日程")}${_t("），请先到设置里启用一个")}`;
           return;
         }
         collected.movedFrom = { href: collected.href, calendarUrl: collected.calendarUrl, etag: collected.etag };
@@ -1389,7 +1391,7 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
         collected.href = dest.url.replace(/\/+$/, "") + "/" + collected.uid + ".ics";
         collected.etag = undefined;
         showMessage(
-          `当前日历不支持${target === "event" ? "日程" : "待办"}，已切换到「${dest.displayName}」；保存后原日历里那一份会被删除`,
+          `${_t("当前日历不支持")}${target === "event" ? _t("日程") : _t("待办")}${_t("，已切换到「")}${dest.displayName}${_t("」；保存后原日历里那一份会被删除")}`,
           8000,
           "info"
         );
@@ -1445,7 +1447,7 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
   const v = (name: string) => f(name).value.trim();
 
   it.summary = v("summary");
-  if (!it.summary) throw new Error("标题不能为空");
+  if (!it.summary) throw new Error(_t("标题不能为空"));
   it.calendarUrl = v("calendar");
   const cal = findCalendarByUrl(ctx.store.settings, it.calendarUrl);
   // 更换日历 = 移动资源
@@ -1467,19 +1469,19 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
     it.start = stampOf(startDate, startTime);
     it.end = stampOf(endDate, endTime);
     if (it.start && it.end && parseLocalStamp(it.end).getTime() < parseLocalStamp(it.start).getTime()) {
-      throw new Error("结束时间不能早于开始时间");
+      throw new Error(_t("结束时间不能早于开始时间"));
     }
   } else if (it.allDay) {
-    if (!startDate) throw new Error("请填写开始日期");
+    if (!startDate) throw new Error(_t("请填写开始日期"));
     it.start = startDate;
     it.end = endDate || addDays(startDate, 1);
   } else {
-    if (!startDate) throw new Error("请填写开始日期");
-    if (!startTime) throw new Error("请填写开始时间");
+    if (!startDate) throw new Error(_t("请填写开始日期"));
+    if (!startTime) throw new Error(_t("请填写开始时间"));
     it.start = `${startDate}T${startTime}:00`;
-    if (!endDate || !endTime) throw new Error("请填写结束日期和时间");
+    if (!endDate || !endTime) throw new Error(_t("请填写结束日期和时间"));
     it.end = `${endDate}T${endTime}:00`;
-    if (parseLocalStamp(it.end).getTime() <= parseLocalStamp(it.start).getTime()) throw new Error("结束时间需晚于开始时间");
+    if (parseLocalStamp(it.end).getTime() <= parseLocalStamp(it.start).getTime()) throw new Error(_t("结束时间需晚于开始时间"));
   }
   // 重复
   if (f("repeatOn").checked) {
@@ -1532,11 +1534,11 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
   if (icsBytes > icsMax) {
     const bigNames = (it.attachments || [])
       .filter((a) => a.b64)
-      .map((a) => `「${a.name}」`)
-      .join("、");
+      .map((a) => `${_t("「")}${a.name}${_t("」")}`)
+      .join(_t("、"));
     throw new Error(
-      `附件总体积过大（ICS 约 ${sizeText(icsBytes)}）：${bigNames}。` +
-        `CalDAV服务器默认 ${sizeText(icsMax)}，请删掉大附件或改用外链。`
+      `${_t("附件总体积过大（")}ICS ${_t("约")} ${sizeText(icsBytes)}${_t("）：")}${bigNames}${_t("。")}` +
+        `CalDAV${_t("服务器默认")} ${sizeText(icsMax)}${_t("，请删掉大附件或改用外链。")}`
     );
   }
   if (it.kind === "todo") {

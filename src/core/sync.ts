@@ -23,6 +23,8 @@ import { httpRequest } from "./http";
 import { itemToEditedICS, itemToNewICS, base64ToBytes } from "./ics";
 import { dateStampOfMs, stampOfMs } from "./date";
 import type { Channel } from "./http";
+import { t } from "./i18n";
+
 
 export interface SyncReport {
   ok: boolean;
@@ -78,11 +80,11 @@ export function staleCalendarNames(
 function explainError(e: any): string {
   const msg = e?.message || String(e);
   if (/Failed to fetch|NetworkError|Load failed|ERR_/i.test(msg)) {
-    return "网络请求失败（服务不可达，或直连被跨域拦截，建议把请求通道改为「内核代理」）";
+    return t("网络请求失败（服务不可达，或直连被跨域拦截，建议把请求通道改为「内核代理」）");
   }
-  if (/timeout|aborted|abort/i.test(msg)) return "请求超时";
-  if (/401/.test(msg)) return "认证失败（401）：用户名或密码错误";
-  if (/403/.test(msg)) return "无权限（403）";
+  if (/timeout|aborted|abort/i.test(msg)) return t("请求超时");
+  if (/401/.test(msg)) return t("认证失败（401）：用户名或密码错误");
+  if (/403/.test(msg)) return t("无权限（403）");
   return msg;
 }
 
@@ -216,8 +218,8 @@ export class SyncEngine {
       const accounts = enabledAccounts(this.store.settings);
       if (!accounts.length) {
         report.ok = false;
-        report.errors.push("没有启用的账户");
-        this.store.lastError = "没有启用的账户";
+        report.errors.push(t("没有启用的账户"));
+        this.store.lastError = t("没有启用的账户");
         return report;
       }
       let anyCals = false;
@@ -229,7 +231,7 @@ export class SyncEngine {
         const credErr = this.accountCredentialError(acc);
         if (credErr) {
           report.ok = false;
-          report.errors.push(`账户「${acc.name}」：${credErr}`);
+          report.errors.push(`${t("账户「")}${acc.name}${t("」：")}${credErr}`);
           continue;
         }
         // 服务器地址改过、但日历地址没跟着更新 → 该账户明确报错。
@@ -238,7 +240,7 @@ export class SyncEngine {
         if (stale.length) {
           report.ok = false;
           report.errors.push(
-            `账户「${acc.name}」服务器地址已变更，以下日历仍指向旧地址，请到设置里重新「发现日历」：${stale.join("、")}`
+            `${t("账户「")}${acc.name}${t("」服务器地址已变更，以下日历仍指向旧地址，请到设置里重新「发现日历」：")}${stale.join(t("、"))}`
           );
           continue;
         }
@@ -318,14 +320,14 @@ export class SyncEngine {
             await this.reconcile(cal, acc, report);
           } catch (e: any) {
             report.ok = false;
-            report.errors.push(`账户「${acc.name}」/ ${cal.displayName}: ${explainError(e)}`);
+            report.errors.push(`${t("账户「")}${acc.name}${t("」")}/ ${cal.displayName}: ${explainError(e)}`);
           }
         }
       }
       if (!anyCals) {
         report.ok = false;
-        report.errors.push("没有启用的日历");
-        this.store.lastError = "没有启用的日历";
+        report.errors.push(t("没有启用的日历"));
+        this.store.lastError = t("没有启用的日历");
         return report;
       }
 
@@ -352,8 +354,8 @@ export class SyncEngine {
       // Dock 状态栏显示「同步失败」、面板挂红色报错横幅，把一次成功同步报成失败）。
       // 「本地凭空少了 N 条」仍要让用户看得见，故走独立的中性提示通道。
       const notes: string[] = [...(report.notes || [])];
-      if (report.reconciled) notes.push(`对账：已清理 ${report.reconciled} 条服务端不存在的本地条目`);
-      if (report.requeued) notes.push(`对账：${report.requeued} 条本地条目在服务端已丢失，已重新上传`);
+      if (report.reconciled) notes.push(`${t("对账：已清理")} ${report.reconciled} ${t("条服务端不存在的本地条目")}`);
+      if (report.requeued) notes.push(`${t("对账：")}${report.requeued} ${t("条本地条目在服务端已丢失，已重新上传")}`);
       this.store.lastNote = [...notes, ...report.conflicts].join("; ") || undefined;
       this.store.lastError = report.errors.join("; ") || undefined;
     } catch (e: any) {
@@ -377,11 +379,11 @@ export class SyncEngine {
 
   /** 单个账户的凭据不可用提示（密码为空/解密失败），避免静默 401 */
   private accountCredentialError(acc: CalAccount): string | undefined {
-    if (!acc.serverUrl) return "未配置服务器地址";
-    if (!acc.username) return "未填写用户名";
-    if (this.store.pendingUnlock) return "密码待解密（密钥尚未就绪），稍后会自动重试";
-    if (this.store.secretBroken) return "密码解不开（密文可能来自另一台设备），请在设置中重新输入密码";
-    if (!acc.password) return "未填写密码，请在设置中填写";
+    if (!acc.serverUrl) return t("未配置服务器地址");
+    if (!acc.username) return t("未填写用户名");
+    if (this.store.pendingUnlock) return t("密码待解密（密钥尚未就绪），稍后会自动重试");
+    if (this.store.secretBroken) return t("密码解不开（密文可能来自另一台设备），请在设置中重新输入密码");
+    if (!acc.password) return t("未填写密码，请在设置中填写");
     return undefined;
   }
 
@@ -442,7 +444,7 @@ export class SyncEngine {
     try {
       names = await listResourceNames(cal, this.channelOf(acc), this.authOf(acc));
     } catch (e: any) {
-      console.warn(`[caldav] ${cal.displayName}: 资源清单对账跳过（${explainError(e)}）`);
+      console.warn(`[caldav] ${cal.displayName}: ${t("资源清单对账跳过（")}${explainError(e)}${t("）")}`);
       return;
     }
     const onServer = new Set(names);
@@ -451,7 +453,7 @@ export class SyncEngine {
       .filter((it) => it.calendarUrl === cal.url && !it.deleted && !it.dirty && !!it.href);
     // 服务端一条都没有、本地却有一堆 —— 大概率是查询打到了错地方，别据此清空本地
     if (!onServer.size && candidates.length) {
-      console.warn(`[caldav] ${cal.displayName}: 服务端清单为空但本地有 ${candidates.length} 条，跳过对账`);
+      console.warn(`[caldav] ${cal.displayName}: ${t("服务端清单为空但本地有")} ${candidates.length} ${t("条，跳过对账")}`);
       return;
     }
     const ghosts = candidates.filter((it) => !onServer.has(fileNameOf(it.href)));
@@ -462,7 +464,7 @@ export class SyncEngine {
         it.dirty = true;
         report.requeued++;
       }
-      console.warn(`[caldav] ${cal.displayName}: ${ghosts.length} 条本地条目在服务端已不存在，将重新上传`);
+      console.warn(`[caldav] ${cal.displayName}: ${ghosts.length} ${t("条本地条目在服务端已不存在，将重新上传")}`);
       return;
     }
     // 服务端优先：跟随服务端删除（与用户在设置里选的口径一致）
@@ -473,7 +475,7 @@ export class SyncEngine {
       // 否则用户在另一端删除后同步，本地条目消失了却报「删除 0 条」。
       report.deleted++;
     }
-    console.warn(`[caldav] ${cal.displayName}: 已清理 ${ghosts.length} 条服务端不存在的本地条目`);
+    console.warn(`[caldav] ${cal.displayName}: ${t("已清理")} ${ghosts.length} ${t("条服务端不存在的本地条目")}`);
   }
 
   /**
@@ -518,7 +520,7 @@ export class SyncEngine {
         await deleteItem({ ...item, href: from.href, etag: undefined }, this.channelOf(acc), this.authOf(acc));
       } catch {
         report.notes = report.notes || [];
-        report.notes.push(`「${item.summary}」已保存到新位置，原位置的那份未能删除，请到服务端手动清理`);
+        report.notes.push(`${t("「")}${item.summary}${t("」已保存到新位置，原位置的那份未能删除，请到服务端手动清理")}`);
       }
     }
   }
@@ -560,7 +562,7 @@ export class SyncEngine {
               await this.deleteMovedFrom(item, report);
               continue;
             } catch (e2: any) {
-              report.errors.push(`覆盖 ${item.summary}: ${explainError(e2)}`);
+              report.errors.push(`${t("覆盖")} ${item.summary}: ${explainError(e2)}`);
             }
           } else {
             // 服务端优先：丢弃本地改动。**必须同时清 etag** —— 上面只清了 dirty、
@@ -571,7 +573,7 @@ export class SyncEngine {
             // 打勾完成即报「服务端已变更，本地改动已按策略丢弃」，且界面上的勾是假的）。
             item.dirty = false;
             item.etag = undefined;
-            report.conflicts.push(`「${item.summary}」服务端已变更，本地改动已按策略丢弃`);
+            report.conflicts.push(`${t("「")}${item.summary}${t("」服务端已变更，本地改动已按策略丢弃")}`);
           }
         } else if (e?.status === 400) {
           // body 畸形类 400（iCloud 实测：裸组件 / 缺 VCALENDAR 信封）。根因已修
@@ -580,7 +582,7 @@ export class SyncEngine {
           // 雄哥实测刷屏），故按服务端优先清 etag+dirty，下轮 pull 用服务端版本覆盖本地。
           item.dirty = false;
           item.etag = undefined;
-          report.errors.push(`「${item.summary}」上传被服务端拒绝（HTTP 400，疑似本地数据损坏），已按策略用服务端版本覆盖本地`);
+          report.errors.push(`${t("「")}${item.summary}${t("」上传被服务端拒绝（")}HTTP 400${t("，疑似本地数据损坏），已按策略用服务端版本覆盖本地")}`);
         } else if (e?.status === 403) {
           // 先看是不是「集合根本不接受这个组件类型」——iCloud 的日历只收 VEVENT、
           // 提醒事项只收 VTODO（RFC 4791 §5.2.3 要求必须拒绝）。这种情形换地址重试
@@ -604,8 +606,8 @@ export class SyncEngine {
           if (!targetSupported) {
             report.ok = false;
             report.errors.push(
-              `「${item.summary}」所在日历不支持${item.kind === "event" ? "日程" : "待办"}，` +
-                `服务端拒绝保存（403）。请在编辑器里把它换到支持该类型的日历再保存`
+              `${t("「")}${item.summary}${t("」所在日历不支持")}${item.kind === "event" ? t("日程") : t("待办")}${t("，")}` +
+                `${t("服务端拒绝保存（")}403${t("）。请在编辑器里把它换到支持该类型的日历再保存")}`
             );
             continue;
           }
@@ -631,17 +633,17 @@ export class SyncEngine {
               await deleteItem({ ...item, href: oldHref }, this.channelOf(acc), this.authOf(acc));
             } catch {
               report.notes = report.notes || [];
-              report.notes.push(`「${item.summary}」已保存到新地址，旧地址的那份未能删除，请到服务端手动清理`);
+              report.notes.push(`${t("「")}${item.summary}${t("」已保存到新地址，旧地址的那份未能删除，请到服务端手动清理")}`);
             }
             // 换地址重试成功同样要清搬家残留（换日历场景 movedFrom 还指着原日历那份）
             await this.deleteMovedFrom(item, report);
           } catch (e2: any) {
             report.ok = false;
-            report.errors.push(`上传 ${item.summary}: ${explainError(e2)}`);
+            report.errors.push(`${t("上传")} ${item.summary}: ${explainError(e2)}`);
           }
         } else {
           report.ok = false;
-          report.errors.push(`上传 ${item.summary}: ${explainError(e)}`);
+          report.errors.push(`${t("上传")} ${item.summary}: ${explainError(e)}`);
         }
       }
     }
@@ -670,7 +672,7 @@ export class SyncEngine {
               this.store.remove(keyOf(item));
               continue;
             } catch (e2: any) {
-              report.errors.push(`删除 ${item.summary}: ${explainError(e2)}`);
+              report.errors.push(`${t("删除")} ${item.summary}: ${explainError(e2)}`);
             }
           } else {
             // 服务端优先：撤销本地删除，按服务端版本留档。清 etag + dirty，
@@ -679,12 +681,12 @@ export class SyncEngine {
             item.dirty = false;
             item.etag = undefined;
             report.conflicts.push(
-              `「${item.summary}」服务端已变更，删除未执行，已按策略恢复服务端版本（如仍要删除，把冲突策略改为「本地优先」后重试）`
+              `${t("「")}${item.summary}${t("」服务端已变更，删除未执行，已按策略恢复服务端版本（如仍要删除，把冲突策略改为「本地优先」后重试）")}`
             );
           }
         } else {
           report.ok = false;
-          report.errors.push(`删除 ${item.summary}: ${explainError(e)}`);
+          report.errors.push(`${t("删除")} ${item.summary}: ${explainError(e)}`);
         }
       }
     }
@@ -774,7 +776,7 @@ export class SyncEngine {
       this.channelOf(acc),
       crossHost ? undefined : this.authOf(acc)
     );
-    if (res.status >= 400) throw new Error(`下载附件失败: HTTP ${res.status}`);
+    if (res.status >= 400) throw new Error(`${t("下载附件失败")}: HTTP ${res.status}`);
     if (res.bytes && res.bytes.length) return res.bytes;
     return new TextEncoder().encode(res.body); // 兜底（纯文本类附件）
   }
@@ -860,8 +862,8 @@ export class SyncEngine {
       for (const k of report.deletedKeys ?? []) this.store.markDeleted(k);
       // 立刻给一次反馈：用户点完保存/删除要看得到「已经上云了」
       const pushed: string[] = [];
-      if (report.uploaded) pushed.push(`已同步到服务端：上传 ${report.uploaded} 条`);
-      if (report.deleted) pushed.push(`已同步到服务端：删除 ${report.deleted} 条`);
+      if (report.uploaded) pushed.push(`${t("已同步到服务端：上传")} ${report.uploaded} ${t("条")}`);
+      if (report.deleted) pushed.push(`${t("已同步到服务端：删除")} ${report.deleted} ${t("条")}`);
       const noteParts = [...pushed, ...report.conflicts];
       if (noteParts.length) this.store.lastNote = noteParts.join("; ");
       this.store.lastError = report.errors.length ? report.errors.join("; ") : this.store.lastError;

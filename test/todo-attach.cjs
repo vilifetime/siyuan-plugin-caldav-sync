@@ -559,15 +559,15 @@ console.log("\n附件：大文件确认流（只说一遍 / 三态 / 提示语�
   check(
     "确认栏文案是「建议」口吻（当前为 X，附件建议不超过 N），不用「超过 N」的违规口吻",
     !!confirmFn &&
-      confirmFn[0].includes("当前为 ${sizeText(file.size)}") &&
-      confirmFn[0].includes("附件建议不超过 ${sizeText(ATTACH_SIZE_WARN)}") &&
+      /当前为["`)]*\s*\}\s*\$\{sizeText\(file\.size\)\}/.test(confirmFn[0]) &&
+      /附件建议不超过["`)]*\s*\}\s*\$\{sizeText\(ATTACH_SIZE_WARN\)\}/.test(confirmFn[0]) &&
       !confirmFn[0].includes("，超过 ${sizeText(ATTACH_SIZE_WARN)}"),
-    "2026-10-15 雄哥：上限 7MB 没到还被提醒，确认栏不能写得像在指责他超限"
+    "2026-10-15 雄哥：上限 7MB 没到还被提醒，确认栏不能写得像在指责他超限（i18n 包裹后仍须是「建议不超过」口吻）"
   );
   check(
     "说明文在源码里只出现一遍",
-    (editorSrc.match(/体积会涨约 1\/3/g) || []).length === 1,
-    "出现两遍就等于又回到了重复提示"
+    (editorSrc.match(/体积会涨约[\s\S]{0,14}?1\/3/g) || []).length === 1,
+    "出现两遍就等于又回到了重复提示（i18n 包裹后允许「涨约」与「1/3」之间夹 _t() 包装）"
   );
 
   // ② 三态返回值：ok / cancel / superseded。作废若不 resolve，旧 Promise 永远
@@ -581,7 +581,7 @@ console.log("\n附件：大文件确认流（只说一遍 / 三态 / 提示语�
   );
   check(
     "只有用户点取消才提示「已取消上传」",
-    /if \(r === "cancel"\) setMsg\("已取消上传"\)/.test(editorSrc),
+    /if \(r === "cancel"\) setMsg\(_t\("已取消上传"\)\)/.test(editorSrc),
     "写成 r !== \"ok\" 会把「被新选择作废」也提示成用户主动取消"
   );
 

@@ -797,7 +797,7 @@ await t("上传 412 服务端优先分支要清 etag（源码防漂移，否则�
   // 「连续三条代码语句」：dirty=false → etag=undefined → push(「…本地改动已按策略丢弃」）。
   // 注释在上方独立行，夹不进这条序列，既能精确命中真实分支，也不被注释里的同款文案误伤。
   assert.ok(
-    /item\.dirty = false;\s*item\.etag = undefined;\s*report\.conflicts\.push\(`[^`]*本地改动已按策略丢弃`\)/.test(srcSync),
+    /item\.dirty = false;\s*item\.etag = undefined;\s*report\.conflicts\.push\(`[^`]*本地改动已按策略丢弃[^`]*`\)/.test(srcSync),
     "上传 412 服务端优先分支必须 dirty=false + etag=undefined + 报「本地改动已按策略丢弃」——漏了 etag=undefined，下一轮拉取因字段相同走 same 分支仍不纠正，UI 挂假完成态"
   );
 });

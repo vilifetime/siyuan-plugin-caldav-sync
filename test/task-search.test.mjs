@@ -205,7 +205,7 @@ assert.ok(!/\.cal-task-search\s*\{[^}]*padding-left/.test(cssNoDual),
 console.log("  ✓ 放大镜 padding-left 走双类特异性（不再被 .caldav-input 覆盖）");
 
 // ③ 占位文案
-assert.ok(/placeholder="搜索\.\.\."/.test(viewTask), "中文占位应为「搜索...」（雄哥指定）");
+assert.ok(/placeholder="[\s\S]*?搜索[\s\S]*?\.\.\."/.test(viewTask), "中文占位应为「搜索...」（雄哥指定，i18n 包裹后仍须保留「搜索...」文案）");
 console.log("  ✓ 占位文案 =「搜索...」");
 
 rmrf(OUT);

@@ -10,6 +10,8 @@
  */
 import { addDays, dateStampOfMs, parseLocalStamp, startOfWeek, todayStamp } from "../core/date";
 import type { LocalStamp } from "../core/types";
+import { t } from "../core/i18n";
+
 
 /** 范围种类 */
 export type DiaryRange = "day" | "week" | "month" | "all";
@@ -46,7 +48,7 @@ export interface DiaryTargetOption {
 }
 
 /** 小节标题的基础部分：范围不同才追加区间后缀 */
-const SECTION_BASE = "日程与待办";
+const SECTION_BASE = t("日程与待办");
 
 /** 把日期字符串当成「当日零点」的毫秒值 */
 function midnightMs(stamp: string): number {
@@ -81,7 +83,7 @@ export function diarySpanOf(range: DiaryRange, today: LocalStamp = todayStamp())
       return {
         from: today,
         toExclusive: nextDay(today),
-        label: "当日",
+        label: t("当日"),
         sectionTitle: SECTION_BASE,
       };
 
@@ -92,9 +94,9 @@ export function diarySpanOf(range: DiaryRange, today: LocalStamp = todayStamp())
       return {
         from,
         toExclusive: to,
-        label: "本周",
+        label: t("本周"),
         // 跨日的范围必须标出区间，否则读者不知道这段覆盖哪天
-        sectionTitle: `${SECTION_BASE}（${from} ~ ${addDays(to, -1)}）`,
+        sectionTitle: `${SECTION_BASE}${t("（")}${from} ~ ${addDays(to, -1)}${t("）")}`,
       };
     }
 
@@ -103,8 +105,8 @@ export function diarySpanOf(range: DiaryRange, today: LocalStamp = todayStamp())
       return {
         from,
         toExclusive: nextMonth(from),
-        label: "本月",
-        sectionTitle: `${SECTION_BASE}（${from.slice(0, 7)}）`,
+        label: t("本月"),
+        sectionTitle: `${SECTION_BASE}${t("（")}${from.slice(0, 7)}${t("）")}`,
       };
     }
 
@@ -113,7 +115,7 @@ export function diarySpanOf(range: DiaryRange, today: LocalStamp = todayStamp())
       return {
         from: "1900-01-01",
         toExclusive: addDays(today, 36500),
-        label: "所有",
+        label: t("所有"),
         sectionTitle: SECTION_BASE,
       };
     }
@@ -134,14 +136,14 @@ export function spanContains(span: DiarySpan, ms: number): boolean {
  * 顺序即显示顺序，第一项（今天）是默认项 —— 与旧行为「直接插今日」一致。
  */
 export function targetOptionsOf(range: DiaryRange, today: LocalStamp = todayStamp()): DiaryTargetOption[] {
-  const todayOpt: DiaryTargetOption = { key: "today", compact: "今天的日记", short: "今天" };
+  const todayOpt: DiaryTargetOption = { key: "today", compact: t("今天的日记"), short: t("今天") };
   if (range === "week") {
     const mon = startOfWeek(today);
-    return [todayOpt, { key: "spanStart", compact: `本周一的日记（${mon}）`, short: `本周一（${mon}）` }];
+    return [todayOpt, { key: "spanStart", compact: `${t("本周一的日记（")}${mon}${t("）")}`, short: `${t("本周一（")}${mon}${t("）")}` }];
   }
   if (range === "month") {
     const first = monthFirst(today);
-    return [todayOpt, { key: "spanStart", compact: `本月 1 日的日记（${first}）`, short: `本月 1 日（${first}）` }];
+    return [todayOpt, { key: "spanStart", compact: `${t("本月")} 1 ${t("日的日记（")}${first}${t("）")}`, short: `${t("本月")} 1 ${t("日（")}${first}${t("）")}` }];
   }
   // day：首日就是今天；all：首日是哨兵 —— 都只有「今天」有意义
   return [todayOpt];

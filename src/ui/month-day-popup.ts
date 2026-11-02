@@ -20,6 +20,8 @@ import { toggleTodoDone } from "./panel";
 import { openEditor } from "./editor";
 import { monthChipHtml, calColorOf, keyOfItem } from "./view-common";
 import type { CalItem } from "../core/types";
+import { t as _t } from "../core/i18n";
+
 
 export interface MonthDayEntry {
   it: CalItem;
@@ -171,8 +173,8 @@ export function openMonthDayPopup(
   const [, m, d] = day.split("-");
   pop.innerHTML = `
     <div class="caldav-month-pop-head">
-      <span class="caldav-month-pop-title">${+m}月${+d}日</span>
-      <span class="caldav-month-pop-count">${entries.length} 项</span>
+      <span class="caldav-month-pop-title">${+m}${_t("月")}${+d}${_t("日")}</span>
+      <span class="caldav-month-pop-count">${entries.length} ${_t("项")}</span>
     </div>
     <div class="caldav-month-pop-list">
       ${entries.map(({ it, occ }) => monthChipHtml(it, occ, calColorOf(ctx, it))).join("")}

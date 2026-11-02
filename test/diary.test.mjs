@@ -542,8 +542,8 @@ assert.ok(
 assert.ok(/return \[todayOpt\];/.test(RANGE_SRC), "targetOptionsOf 对 day/all 应只回一项");
 // 子选项文案要紧凑：长句（「插入到今天的日记」）在范围行右侧放不下
 assert.ok(
-  /compact: "今天的日记"/.test(RANGE_SRC),
-  "targetOptionsOf 必须给紧凑文案（compact），供范围行右侧内联显示"
+  /compact:[^;]*今天的日记/.test(RANGE_SRC),
+  "targetOptionsOf 必须给紧凑文案（compact），供范围行右侧内联显示（i18n 包裹后仍须保留「今天的日记」）"
 );
 const DIALOG_SRC = fs.readFileSync(path.join(ROOT, "src", "ui", "diary-range-dialog.ts"), "utf8");
 assert.ok(

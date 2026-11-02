@@ -29,6 +29,8 @@ import {
 import { scanTaskBlocks, scanTaskBlocksByIds, blocksExistById, setBlockState, setBlockSkip, blockStampOf } from "./block-api";
 import type { BlockTask } from "./block-todo";
 import { stampOfMs, todayStamp } from "./date";
+import { t } from "./i18n";
+
 
 /** 全量校准间隔：超过这么久就强制做一次全量扫描（兜底，防水位线漏块） */
 export const BLOCK_FULL_SCAN_INTERVAL_MS = 24 * 3600 * 1000;
@@ -185,7 +187,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
 
   const cal = resolveBlockCalendar(s);
   if (!cal) {
-    res.errors.push("没有可用的日历（账户未配置或日历全部停用）");
+    res.errors.push(t("没有可用的日历（账户未配置或日历全部停用）"));
     return res;
   }
 
@@ -221,7 +223,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
   const scanned = await scanTaskBlocks(deps.caller, { ...scanOpts, since });
   res.scanned = scanned.blocks.length;
   if (scanned.truncated) {
-    res.errors.push("扫描结果被内核截断（任务块过多），本轮未推进增量水位线");
+    res.errors.push(t("扫描结果被内核截断（任务块过多），本轮未推进增量水位线"));
   }
 
   // ── 服务端漂移：服务端改了、块没动的条目 ──
@@ -234,7 +236,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
   const drift = driftIds.length
     ? await scanTaskBlocksByIds(deps.caller, driftIds, scanOpts)
     : { blocks: [] as BlockTask[], truncated: false };
-  if (drift.truncated) res.errors.push("按 ID 取块的结果被内核截断");
+  if (drift.truncated) res.errors.push(t("按 ID 取块的结果被内核截断"));
 
   // 合并（扫描到的优先）：同一个块既在增量结果又在漂移结果里，只算一次
   const blocks: BlockTask[] = [...scanned.blocks];
@@ -276,7 +278,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
     // ⚠️ 查询失败/被截断 → 判生死不可靠 → **本轮一个都不删**（宁可留着旧的，也别删用户的）。
     //    「查失败」若被当成「全都查到了没有」→ 全库映射被判成孤儿 → 一次性删光（与上面同类的灾难）。
     if (r.failed || r.truncated) {
-      res.errors.push("查块存在性失败/被截断，本轮未删除任何条目（保守）");
+      res.errors.push(t("查块存在性失败/被截断，本轮未删除任何条目（保守）"));
       existing = new Set(missing); // 全部当作「还活着」→ 白名单拉满 → 不删
     }
   }
@@ -311,7 +313,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
       const ok = await deps.confirm({ total, written, created, updated, deleted, threshold });
       if (!ok) {
         res.cancelled = true;
-        res.message = `已取消本轮任务块同步：改动 ${total} 条，超过告警值 ${threshold}（一条都没改）`;
+        res.message = `${t("已取消本轮任务块同步：改动")} ${total} ${t("条，超过告警值")} ${threshold}${t("（一条都没改）")}`;
         return res; // ⚠️ 连水位线也不推进 —— 本轮等于没跑
       }
     }
@@ -328,7 +330,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
       markdown: w.block.markdown || ""
     });
     if (ok) res.written++;
-    else res.errors.push(`回写块失败：${w.block.text}`);
+    else res.errors.push(`${t("回写块失败：")}${w.block.text}`);
   }
   // 2) 新建
   for (const c of plan.creates) {
@@ -336,7 +338,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
       await deps.sync.createItem(blockToItem(c.block, cal, s));
       res.created++;
     } catch (e) {
-      res.errors.push(`新建失败「${c.block.text}」：${(e as Error)?.message || e}`);
+      res.errors.push(`${t("新建失败「")}${c.block.text}${t("」：")}${(e as Error)?.message || e}`);
     }
   }
   // 3) 推送（文字/完成态/缓存）
@@ -345,7 +347,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
       await deps.sync.updateItem(p.item);
       res.updated++;
     } catch (e) {
-      res.errors.push(`更新失败「${p.item.summary}」：${(e as Error)?.message || e}`);
+      res.errors.push(`${t("更新失败「")}${p.item.summary}${t("」：")}${(e as Error)?.message || e}`);
     }
   }
   // 4) 删除（块没了）
@@ -354,7 +356,7 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
       await deps.sync.removeItem(it);
       res.deleted++;
     } catch (e) {
-      res.errors.push(`删除失败「${it.summary}」：${(e as Error)?.message || e}`);
+      res.errors.push(`${t("删除失败「")}${it.summary}${t("」：")}${(e as Error)?.message || e}`);
     }
   }
 
@@ -395,7 +397,7 @@ export function blockChangeAlertThreshold(s: CalSettings): number | undefined {
 export async function convertBlock(deps: BlockSyncDeps, block: BlockTask): Promise<boolean> {
   const s = deps.store.settings;
   const cal = resolveBlockCalendar(s);
-  if (!cal) throw new Error("没有可用的日历（账户未配置或日历全部停用）");
+  if (!cal) throw new Error(t("没有可用的日历（账户未配置或日历全部停用）"));
   await deps.sync.createItem(blockToItem(block, cal, s));
   return true;
 }
@@ -431,7 +433,7 @@ export async function clearBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResu
       await deps.sync.removeItem(it);
       res.deleted++;
     } catch (e) {
-      res.errors.push(`删除失败「${it.summary}」：${(e as Error)?.message || e}`);
+      res.errors.push(`${t("删除失败「")}${it.summary}${t("」：")}${(e as Error)?.message || e}`);
     }
   }
   return res;

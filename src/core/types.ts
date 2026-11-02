@@ -1,4 +1,6 @@
 import type { TaskState } from "./task-state";
+import { t } from "./i18n";
+
 
 /** 条目种类 */
 export type CalKind = "event" | "todo";
@@ -230,9 +232,9 @@ export interface CategoryDef {
 }
 
 export const DEFAULT_CATEGORIES: CategoryDef[] = [
-  { id: "work", name: "工作", color: "#e05a4c", icon: "🎯" },
-  { id: "study", name: "学习", color: "#3d82d6", icon: "📖" },
-  { id: "life", name: "生活", color: "#43a05c", icon: "🍀" }
+  { id: "work", name: t("工作"), color: "#e05a4c", icon: "🎯" },
+  { id: "study", name: t("学习"), color: "#3d82d6", icon: "📖" },
+  { id: "life", name: t("生活"), color: "#43a05c", icon: "🍀" }
 ];
 
 /**
@@ -321,7 +323,7 @@ export function migrateToAccounts(s: any): void {
     s.accounts = [
       {
         id: newAccountId(),
-        name: s.serverType === "icloud" ? "iCloud 账户" : "CalDAV 账户",
+        name: s.serverType === "icloud" ? t("iCloud 账户") : t("CalDAV 账户"),
         enabled: true,
         serverUrl: s.serverUrl || "",
         username: s.username || "",
@@ -707,7 +709,7 @@ export const DEFAULT_SETTINGS: CalSettings = {
   blockSyncScope: "all",
   blockSyncNotebooks: [],
   blockSyncMarks: ["badge"],
-  blockSyncPrefix: "[文档]",
+  blockSyncPrefix: t("[文档]"),
   // 三种触发时机：启动扫 / 手动同步扫 默认开；关闭文档时扫 默认关（保守，避免关文档静默联网）
   blockSyncOnStartup: true,
   blockSyncOnManualSync: true,

@@ -251,8 +251,8 @@ check("设置区标题标「（测试版）」，且卡头不再挂小字摘要�
 check("停用态有常驻提示（点开关/标题即可展开，不改变「关掉就隐藏」设计）", () => {
   assert.match(settingsSrc, /caldav-blk-hint/);
   assert.match(settingsSrc, /未启用/);
-  // 启用时提示带 hidden（不显示），停用时不带
-  assert.match(settingsSrc, /caldav-blk-hint"[^>]*>\s*未启用/);
+  // 启用时提示带 hidden（不显示），停用时不带（i18n 包裹后文案在 ${_t("未启用...")} 里）
+  assert.match(settingsSrc, /caldav-blk-hint"[^>]*>\s*\$\{_t\("未启用/);
 });
 check("收起卡头有「未启用」状态标签（停用可见、启用隐藏），且只收起开关以下", () => {
   // 收起卡头带未启用标签；body 才带 hidden，head/开关本身不带 → 验证「以下收起，不是全部」
@@ -315,8 +315,9 @@ check("笔记本多选：复选框必须带 value=id（保存读的是 input.val
   assert.match(settingsSrc, nbLine, "应有笔记本复选框");
   const line = settingsSrc.split("\n").find((l) => nbLine.test(l)) || "";
   assert.match(line, /value="\$\{escape\(n\.id\)\}"/, '复选框缺 value="${escape(n.id)}"');
-  // 保存侧：取 .value，不能取 dataset
-  assert.match(settingsSrc, /input\[data-blocksync-nb\]"\)\)\s*[\s\S]{0,200}\.map\(\(i\) => \(i as HTMLInputElement\)\.value\)/);
+  // 保存侧：取 .value，不能取 dataset（querySelectorAll<HTMLInputElement> 已定型，无需再 cast；
+  // 两个 ) 分属 querySelectorAll 与 Array.from，不在同一行，故用 \s* 容错）
+  assert.match(settingsSrc, /input\[data-blocksync-nb\][^"]*"\s*\)\s*\)[\s\S]{0,40}\.map\(\(i\) => i\.value\)/);
 });
 check("范围含四项（打开的文档 / 仅日记 / 笔记本 / 全部文档）", () => {
   for (const v of ['value="open"', 'value="daily"', 'value="notebooks"', 'value="all"']) {

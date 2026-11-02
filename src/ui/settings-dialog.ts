@@ -31,6 +31,8 @@ import { escape } from "./view-common";
 import { enableDialogResize } from "./dialog-resize";
 import { icons } from "./icons";
 import { adoptMobileLayer, isDialogAlive } from "./mobile-layers";
+import { t as _t } from "../core/i18n";
+
 
 /**
  * 当前打开的设置弹层（单例）。
@@ -46,7 +48,7 @@ let activeSettings: Dialog | null = null;
 function blankAccount(seq: number): CalAccount {
   return {
     id: newAccountId(),
-    name: `新账户 ${seq}`,
+    name: `${_t("新账户")} ${seq}`,
     enabled: true,
     serverUrl: "",
     username: "",
@@ -77,7 +79,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     // 移动端竖屏放不下 640px 定宽弹窗，改为占满视口
     const mobile = isMobile();
     const dialog = newDialog({
-      title: "CalDAV 同步设置",
+      title: _t("CalDAV 同步设置"),
       content: `<div class="caldav-settings"></div>`,
       width: mobile ? "100vw" : "640px",
       height: mobile ? "100vh" : "86vh",
@@ -267,8 +269,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
             ctx.refreshPanels?.();
             showMessage(
               purged
-                ? `已删除账户「${acc.name}」，并清理其 ${purged} 条本地条目（已备份，可恢复）`
-                : `已删除账户「${acc.name}」（本地条目保留，可重新添加账户后恢复显示）`,
+                ? `${_t("已删除账户「")}${acc.name}${_t("」，并清理其")} ${purged} ${_t("条本地条目（已备份，可恢复）")}`
+                : `${_t("已删除账户「")}${acc.name}${_t("」（本地条目保留，可重新添加账户后恢复显示）")}`,
               6000,
               "info"
             );
@@ -306,14 +308,14 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const msgEl = activeCard()?.querySelector<HTMLElement>("[data-acc-msg]") ?? null;
         if (!server) {
           if (msgEl) {
-            msgEl.textContent = "服务器地址不能为空";
+            msgEl.textContent = _t("服务器地址不能为空");
             msgEl.classList.remove("is-ok");
             msgEl.classList.add("is-err");
           }
           return;
         }
         if (msgEl) {
-          msgEl.textContent = "正在测试连接…";
+          msgEl.textContent = _t("正在测试连接…");
           msgEl.classList.remove("is-ok", "is-err");
         }
         void testConnection(server, channel, { username, password: password || acc?.password || "" }).then((r) => {
@@ -337,7 +339,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const path = $acc("input[data-s='path']")?.value.trim() || "";
         const msgEl = activeCard()?.querySelector<HTMLElement>("[data-acc-msg]") ?? null;
         if (msgEl) {
-          msgEl.textContent = "正在发现日历…";
+          msgEl.textContent = _t("正在发现日历…");
           msgEl.classList.remove("is-ok", "is-err");
         }
         try {
@@ -349,12 +351,12 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           rerender();
           const msg2 = activeCard()?.querySelector<HTMLElement>("[data-acc-msg]") ?? null;
           if (msg2) {
-            msg2.textContent = `发现 ${r.calendars.length} 个日历，请勾选后保存`;
+            msg2.textContent = `${_t("发现")} ${r.calendars.length} ${_t("个日历，请勾选后保存")}`;
             msg2.classList.add("is-ok");
           }
         } catch (e: any) {
           if (msgEl) {
-            msgEl.textContent = "发现失败: " + describeNetworkError(e, channel);
+            msgEl.textContent = _t("发现失败: {0}", describeNetworkError(e, channel));
             msgEl.classList.add("is-err");
           }
         }
@@ -371,16 +373,16 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       refreshRemindStatus();
       remindBtn?.addEventListener("click", async () => {
         if (!ctx.testReminder) {
-          if (remindMsg) remindMsg.textContent = "当前环境不支持测试提醒";
+          if (remindMsg) remindMsg.textContent = _t("当前环境不支持测试提醒");
           return;
         }
         remindBtn.disabled = true;
-        if (remindMsg) remindMsg.textContent = "正在发送测试提醒…";
+        if (remindMsg) remindMsg.textContent = _t("正在发送测试提醒…");
         try {
           const r = await ctx.testReminder();
           if (remindMsg) remindMsg.textContent = r;
         } catch (e: any) {
-          if (remindMsg) remindMsg.textContent = "测试失败：" + (e?.message || e);
+          if (remindMsg) remindMsg.textContent = _t("测试失败：{0}", (e?.message || e));
         } finally {
           remindBtn.disabled = false;
           // 稍后回到排程状态，让「已排程 N 条」能被看到
@@ -407,15 +409,15 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           const parts: string[] = [];
           parts.push(
             orphans.length
-              ? `当前有 ${orphans.length} 条不属于任何已配置账户的本地条目`
+              ? `${_t("当前有")} ${orphans.length} ${_t("条不属于任何已配置账户的本地条目")}`
               : ctx.store.activeServerOrigins().size
-                ? "当前没有其他服务器的本地条目"
-                : "尚未启用任何日历（无法判定哪些条目属于其他服务器）"
+                ? _t("当前没有其他服务器的本地条目")
+                : _t("尚未启用任何日历（无法判定哪些条目属于其他服务器）")
           );
           if (bk) {
-            parts.push(`上次清理于 ${formatTimeText(bk.at)}，共 ${bk.count} 条${bk.removedServers ? `（来自 ${bk.removedServers}）` : ""}`);
+            parts.push(`${_t("上次清理于")} ${formatTimeText(bk.at)}${_t("，共")} ${bk.count} ${_t("条")}${bk.removedServers ? `${_t("（来自")} ${bk.removedServers}${_t("）")}` : ""}`);
           }
-          purgeInfo.textContent = parts.join("；");
+          purgeInfo.textContent = parts.join(_t("；"));
         }
         if (purgeRestoreBtn) {
           // 没有备份就禁用并隐藏（点下去无事可做只会让人困惑）
@@ -423,15 +425,15 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           purgeRestoreBtn.disabled = !bk || !bk.items.length;
           if (purgeRestoreLabel) {
             purgeRestoreLabel.textContent = bk && bk.items.length
-              ? `恢复上次清理的 ${bk.count} 条`
-              : "恢复上次清理的条目";
+              ? `${_t("恢复上次清理的")} ${bk.count} ${_t("条")}`
+              : _t("恢复上次清理的条目");
           }
         }
         if (purgeNowBtn) {
           purgeNowBtn.disabled = !orphans.length;
           // 只改文字节点，图标（SVG）原样保留
           if (purgeNowLabel) {
-            purgeNowLabel.textContent = orphans.length ? `清理 ${orphans.length} 条其他服务器的本地条目` : "立即清理其他服务器的本地条目";
+            purgeNowLabel.textContent = orphans.length ? `${_t("清理")} ${orphans.length} ${_t("条其他服务器的本地条目")}` : _t("立即清理其他服务器的本地条目");
           }
         }
       };
@@ -443,7 +445,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const orphans = ctx.store.orphanItems();
         if (!orphans.length) {
           if (purgeMsg) {
-            purgeMsg.textContent = "没有需要清理的其他服务器条目";
+            purgeMsg.textContent = _t("没有需要清理的其他服务器条目");
             purgeMsg.classList.remove("is-ok");
             purgeMsg.classList.add("is-err");
           }
@@ -451,7 +453,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         }
         if (!purgeArmed) {
           purgeArmed = true;
-          if (purgeNowLabel) purgeNowLabel.textContent = `再点一次确认清理 ${orphans.length} 条`;
+          if (purgeNowLabel) purgeNowLabel.textContent = `${_t("再点一次确认清理")} ${orphans.length} ${_t("条")}`;
           if (purgeArmTimer) clearTimeout(purgeArmTimer);
           purgeArmTimer = setTimeout(() => {
             purgeArmed = false;
@@ -464,7 +466,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         // 手动清理**即时生效** —— 用户点了就是明确意图
         const n = await ctx.store.purgeOrphanItems();
         if (purgeMsg) {
-          purgeMsg.textContent = n ? `已清理 ${n} 条其他服务器的本地条目（已备份，可恢复）` : "没有需要清理的条目";
+          purgeMsg.textContent = n ? `${_t("已清理")} ${n} ${_t("条其他服务器的本地条目（已备份，可恢复）")}` : _t("没有需要清理的条目");
           purgeMsg.classList.toggle("is-ok", n > 0);
           purgeMsg.classList.remove("is-err");
         }
@@ -475,7 +477,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       purgeRestoreBtn?.addEventListener("click", async () => {
         const n = await ctx.store.restorePurgedItems();
         if (purgeMsg) {
-          purgeMsg.textContent = n ? `已恢复 ${n} 条条目` : "没有可恢复的条目";
+          purgeMsg.textContent = n ? `${_t("已恢复")} ${n} ${_t("条条目")}` : _t("没有可恢复的条目");
           purgeMsg.classList.toggle("is-ok", n > 0);
           purgeMsg.classList.remove("is-err");
         }
@@ -547,7 +549,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         if (($("input[data-s='blockSyncMarkBadge']") as HTMLInputElement | null)?.checked) marks.push("badge");
         if (($("input[data-s='blockSyncMarkPrefix']") as HTMLInputElement | null)?.checked) marks.push("prefix");
         s.blockSyncMarks = marks;
-        s.blockSyncPrefix = ($("input[data-s='blockSyncPrefix']")?.value || "").trim() || "[文档]";
+        s.blockSyncPrefix = ($("input[data-s='blockSyncPrefix']")?.value || "").trim() || _t("[文档]");
         // 默认账户/日历：两级选择（「自动」= 空串）。选中的日历被停用/删掉时
         // resolveDefaultCalendar() 会回退默认账户 → 第一个启用账户的第一个启用日历
         const daSel = $("select[data-s='defaultAcc']")?.value || "";
@@ -573,9 +575,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
             // 首次开启提醒：立刻发一条测试提醒，让用户当场看到效果（同时验证投递通道）
             // 注意桌面端 Electron 不会有系统授权弹窗，这一点已写在设置页说明里。
             void ctx.testReminder?.();
-            showMessage("提醒已开启，并已发送一条测试提醒", 6000, "info");
+            showMessage(_t("提醒已开启，并已发送一条测试提醒"), 6000, "info");
           } else {
-            showMessage("提醒已关闭", 4000, "info");
+            showMessage(_t("提醒已关闭"), 4000, "info");
           }
         }
         if (msgEl) msgEl.textContent = "";
@@ -616,25 +618,25 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           holidayCnCustomUrl: ($("input[data-s='holidayCnCustomUrl']")?.value || "").trim()
         };
         if (custom && !tmp.holidayCnCustomUrl) {
-          if (msg) msg.textContent = "请先填写自定义 URL";
+          if (msg) msg.textContent = _t("请先填写自定义 URL");
           return;
         }
         const y = new Date().getFullYear();
-        if (msg) msg.textContent = "检查中…";
+        if (msg) msg.textContent = _t("检查中…");
         btn.setAttribute("disabled", "true");
         try {
           const ok = await forceRefreshChinaCalendar(tmp, [y, y + 1]);
           if (msg) {
-            if (ok) { msg.textContent = "已更新（重新打开日历视图即可见）"; msg.style.color = ""; }
+            if (ok) { msg.textContent = _t("已更新（重新打开日历视图即可见）"); msg.style.color = ""; }
             else {
               const err = getLastHolidayError();
-              msg.textContent = "拉取失败：" + (err || "未知原因");
+              msg.textContent = _t("拉取失败：{0}", (err || "未知原因"));
               msg.style.color = "var(--caldav-danger, #d23f3f)";
             }
           }
           ctx.refreshPanels?.();
         } catch {
-          if (msg) msg.textContent = "拉取失败（请检查网络或数据源 URL）";
+          if (msg) msg.textContent = _t("拉取失败（请检查网络或数据源 URL）");
         } finally {
           btn.removeAttribute("disabled");
         }
@@ -720,7 +722,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           txtEl.textContent = names.join("; ");
           txtEl.classList.remove("is-placeholder");
         } else {
-          txtEl.textContent = "未选择";
+          txtEl.textContent = _t("未选择");
           txtEl.classList.add("is-placeholder");
         }
       };
@@ -744,11 +746,11 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       const loadNotebooks = async (): Promise<void> => {
         const pop = ensureNbPop();
         if (pop.dataset.loaded) return;
-        pop.innerHTML = `<p class="caldav-set-hint">加载中…</p>`;
+        pop.innerHTML = `<p class="caldav-set-hint">${_t("加载中…")}</p>`;
         const list = (await ctx.listNotebooks?.()) || [];
         pop.dataset.loaded = "1";
         if (!list.length) {
-          pop.innerHTML = `<p class="caldav-set-hint">没读到笔记本（请确认思源已打开工作区）</p>`;
+          pop.innerHTML = `<p class="caldav-set-hint">${_t("没读到笔记本（请确认思源已打开工作区）")}</p>`;
           updateNbText();
           return;
         }
@@ -841,12 +843,12 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       // 立即扫描：功能没启用就明确告知（**绝不静默什么都不做**）
       el.querySelector("[data-action='blocks-scan']")?.addEventListener("click", async () => {
         const label = el.querySelector<HTMLElement>("[data-blocksync-scan-label]");
-        if (label) label.textContent = "扫描中…";
+        if (label) label.textContent = _t("扫描中…");
         try {
-          const text = (await ctx.scanBlocksNow?.()) || "当前入口不可用";
+          const text = (await ctx.scanBlocksNow?.()) || _t("当前入口不可用");
           setMsg(text, !/失败|未启用/.test(text));
         } finally {
-          if (label) label.textContent = "立即扫描";
+          if (label) label.textContent = _t("立即扫描");
         }
       });
 
@@ -857,22 +859,22 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const label = el.querySelector<HTMLElement>("[data-blocksync-clear-label]");
         if (!armed) {
           armed = true;
-          if (label) label.textContent = "再点一次确认清理";
+          if (label) label.textContent = _t("再点一次确认清理");
           if (armTimer) clearTimeout(armTimer);
           armTimer = setTimeout(() => {
             armed = false;
-            if (label) label.textContent = "一键清理";
+            if (label) label.textContent = _t("一键清理");
           }, 5000);
           return;
         }
         armed = false;
         if (armTimer) clearTimeout(armTimer);
-        if (label) label.textContent = "清理中…";
+        if (label) label.textContent = _t("清理中…");
         try {
-          const text = (await ctx.clearBlockItems?.()) || "当前入口不可用";
+          const text = (await ctx.clearBlockItems?.()) || _t("当前入口不可用");
           setMsg(text, !/失败/.test(text));
         } finally {
-          if (label) label.textContent = "一键清理";
+          if (label) label.textContent = _t("一键清理");
         }
       });
     }
@@ -888,7 +890,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         // 原默认日历若仍在新账户的列表里就保持选中，否则回落「自动」
         const keep = !!s.defaultCalendarUrl && cals.some((c) => c.url === s.defaultCalendarUrl);
         calSel.innerHTML =
-          `<option value="" ${keep ? "" : "selected"}>自动（所选账户的第一个启用日历）</option>` +
+          `<option value="" ${keep ? "" : "selected"}>${_t("自动（所选账户的第一个启用日历）")}</option>` +
           cals
             .map(
               (c) =>
@@ -901,9 +903,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
     if (ctx.store.secretBroken) {
       // 密码密文是「另一台设备用另一把密钥」写的 —— 多端共用同一份数据，密钥却各不同。
       // 说清楚原因，用户才知道为什么要重输，而不是以为密码被吞了。
-      showMessage("密码解不开：这段密文由另一台设备写入。请在本机重新输入一次密码并保存，之后各端都会一致", 8000, "error");
+      showMessage(_t("密码解不开：这段密文由另一台设备写入。请在本机重新输入一次密码并保存，之后各端都会一致"), 8000, "error");
     } else if (ctx.store.pendingUnlock) {
-      showMessage("密码待解密（密钥尚未就绪），稍后自动重试；若长时间未恢复，请重新输入密码并保存", 8000, "error");
+      showMessage(_t("密码待解密（密钥尚未就绪），稍后自动重试；若长时间未恢复，请重新输入密码并保存"), 8000, "error");
     }
 
     rerender();
@@ -917,7 +919,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
  */
 function formatTimeText(iso: string): string {
   const ms = Date.parse(iso || "");
-  if (Number.isNaN(ms)) return iso || "某个时间";
+  if (Number.isNaN(ms)) return iso || _t("某个时间");
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -930,29 +932,29 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
   const accounts = s.accounts;
   const accList = accounts.length
     ? accounts.map((a) => accountCardHtml(a, mobile, expandedId)).join("")
-    : `<div class="caldav-set-hint">还没有添加任何日历账户。点击下方「添加账户」接入 iCloud、Baïkal、Radicale 等 CalDAV 服务器，可同时添加多个。</div>`;
+    : `<div class="caldav-set-hint">${_t("还没有添加任何日历账户。点击下方「添加账户」接入")} iCloud${_t("、")}Baïkal${_t("、")}Radicale ${_t("等")} CalDAV ${_t("服务器，可同时添加多个。")}</div>`;
   return `
 <div class="caldav-settings-form">
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.server}</span>日历账户</div>
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.server}</span>${_t("日历账户")}</div>
     <div class="caldav-acc-list">${accList}</div>
     <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" type="button" data-action="acc-add">${icons.plus} 添加账户</button>
+      <button class="caldav-btn caldav-btn--sm" type="button" data-action="acc-add">${icons.plus} ${_t("添加账户")}</button>
     </div>
   </div>
 
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.sync}</span>同步</div>
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.sync}</span>${_t("同步")}</div>
     <div class="caldav-field">
-      <label class="caldav-field-label">自动同步间隔（分钟，0 关闭；全局一个周期，会同步所有启用账户）</label>
+      <label class="caldav-field-label">${_t("自动同步间隔（分钟，")}0 ${_t("关闭；全局一个周期，会同步所有启用账户）")}</label>
       <input class="caldav-input" type="number" min="0" data-s="interval" value="${s.syncIntervalMin}"/>
     </div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">新建条目的默认账户</label>
+        <label class="caldav-field-label">${_t("新建条目的默认账户")}</label>
         <div class="caldav-input-wrap">
           <select class="caldav-input" data-s="defaultAcc">
-            <option value="" ${!s.defaultAccountId ? "selected" : ""}>自动（第一个启用账户）</option>
+            <option value="" ${!s.defaultAccountId ? "selected" : ""}>${_t("自动（第一个启用账户）")}</option>
             ${enabledAccounts(s)
               .map(
                 (a) =>
@@ -964,10 +966,10 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         </div>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">新建条目的默认日历</label>
+        <label class="caldav-field-label">${_t("新建条目的默认日历")}</label>
         <div class="caldav-input-wrap">
           <select class="caldav-input" data-s="defaultCal">
-            <option value="" ${!s.defaultCalendarUrl ? "selected" : ""}>自动（所选账户的第一个启用日历）</option>
+            <option value="" ${!s.defaultCalendarUrl ? "selected" : ""}>${_t("自动（所选账户的第一个启用日历）")}</option>
             ${defaultCalOptions(s)}
           </select>
           <span class="caldav-input-suffix">${icons.chevron}</span>
@@ -977,74 +979,74 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
   </div>
 
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.bell}</span>提醒</div>
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.bell}</span>${_t("提醒")}</div>
     <label class="caldav-check-row">
       <input type="checkbox" data-s="reminders" ${s.enableReminders ? "checked" : ""}/>
-      <span>启用提醒通知（仅对设置了提醒时间的日程/待办生效；过点 5 分钟内仍会补发一次）</span>
+      <span>${_t("启用提醒通知（仅对设置了提醒时间的日程")}/${_t("待办生效；过点")} 5 ${_t("分钟内仍会补发一次）")}</span>
     </label>
     <div class="caldav-remind-row">
-      <button class="caldav-btn" type="button" data-action="test-remind">${icons.bell} 测试提醒</button>
+      <button class="caldav-btn" type="button" data-action="test-remind">${icons.bell} ${_t("测试提醒")}</button>
       <span class="caldav-set-hint" data-remind-status></span>
     </div>
     <p class="caldav-set-hint caldav-remind-note">
-      到点提醒以「应用内提醒卡片」为准。系统通知能否弹出取决于运行环境：桌面端 Electron
-      不提供授权窗口（不会弹窗，内核默认放行），Windows 便携版思源还会因缺少开始菜单快捷方式
-      被系统丢弃系统通知 —— 两者都属于已知限制，不影响应用内提醒卡片。
+      ${_t("到点提醒以「应用内提醒卡片」为准。系统通知能否弹出取决于运行环境：桌面端")} Electron
+      ${_t("不提供授权窗口（不会弹窗，内核默认放行），")}Windows ${_t("便携版思源还会因缺少开始菜单快捷方式")}
+      ${_t("被系统丢弃系统通知")} ${_t("——")} ${_t("两者都属于已知限制，不影响应用内提醒卡片。")}
     </p>
   </div>
 
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>日记</div>
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>${_t("日记")}</div>
     <label class="caldav-check-row">
       <input type="checkbox" data-s="includeOverdue" ${s.includeOverdueTodos ? "checked" : ""}/>
-      <span>插入日记时包含逾期待办（默认只写当日 / 本周 / 本月范围内的条目，逾期任务不写）</span>
+      <span>${_t("插入日记时包含逾期待办（默认只写当日")} / ${_t("本周")} / ${_t("本月范围内的条目，逾期任务不写）")}</span>
     </label>
   </div>
 
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.flag}</span>中国日历</div>
-    <p class="caldav-set-hint">在月 / 周 / 日视图的日期数字栏上叠加显示节假日、农历与节气。纯展示，不写入 CalDAV、不参与同步。</p>
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.flag}</span>${_t("中国日历")}</div>
+    <p class="caldav-set-hint">${_t("在月")} / ${_t("周")} / ${_t("日视图的日期数字栏上叠加显示节假日、农历与节气。纯展示，不写入")} CalDAV${_t("、不参与同步。")}</p>
     <label class="caldav-check-row">
       <input type="checkbox" data-s="showHolidaysCN" ${s.showHolidaysCN ? "checked" : ""}/>
-      <span>显示节假日（国务院每年公布，联网拉取；调休补班标「班」）</span>
+      <span>${_t("显示节假日（国务院每年公布，联网拉取；调休补班标「班」）")}</span>
     </label>
     <label class="caldav-check-row">
       <input type="checkbox" data-s="showLunarCN" ${s.showLunarCN ? "checked" : ""}/>
-      <span>显示农历（内置算法，无需联网）</span>
+      <span>${_t("显示农历（内置算法，无需联网）")}</span>
     </label>
     <label class="caldav-check-row">
       <input type="checkbox" data-s="showTermCN" ${s.showTermCN ? "checked" : ""}/>
-      <span>显示节气（内置算法，无需联网）</span>
+      <span>${_t("显示节气（内置算法，无需联网）")}</span>
     </label>
     <div class="caldav-field">
-      <label class="caldav-field-label">节假日数据源</label>
+      <label class="caldav-field-label">${_t("节假日数据源")}</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="holidayCnSource">
-          <option value="timor" ${(s.holidayCnSource || "holiday-cn") === "timor" ? "selected" : ""}>timor.tech（国内部署，推荐）</option>
-          <option value="holiday-cn" ${(s.holidayCnSource || "holiday-cn") === "holiday-cn" ? "selected" : ""}>NateScarlet/holiday-cn（jsdelivr，国内常受限）</option>
+          <option value="timor" ${(s.holidayCnSource || "holiday-cn") === "timor" ? "selected" : ""}>timor.tech${_t("（国内部署，推荐）")}</option>
+          <option value="holiday-cn" ${(s.holidayCnSource || "holiday-cn") === "holiday-cn" ? "selected" : ""}>NateScarlet/holiday-cn${_t("（")}jsdelivr${_t("，国内常受限）")}</option>
           <option value="chinese-days" ${s.holidayCnSource === "chinese-days" ? "selected" : ""}>vsme/chinese-days</option>
-          <option value="custom" ${s.holidayCnSource === "custom" ? "selected" : ""}>自定义 URL…</option>
+          <option value="custom" ${s.holidayCnSource === "custom" ? "selected" : ""}>${_t("自定义")} URL${_t("…")}</option>
         </select>
         <span class="caldav-input-suffix">${icons.chevron}</span>
       </div>
     </div>
     <div class="caldav-field" id="caldav-cn-custom" style="${s.holidayCnSource === "custom" ? "" : "display:none"}">
-      <label class="caldav-field-label">自定义数据源 URL（支持 {year} 占位；返回 NateScarlet 的 [{date,name,isOffDay}] 或 timor 的 {holiday:{...}} 均可）</label>
+      <label class="caldav-field-label">${_t("自定义数据源")} URL${_t("（支持")} {year} ${_t("占位；返回")} NateScarlet ${_t("的")} [{date,name,isOffDay}] ${_t("或")} timor ${_t("的")} {holiday:{...}} ${_t("均可）")}</label>
       <input class="caldav-input" type="text" data-s="holidayCnCustomUrl" value="${escape(s.holidayCnCustomUrl || "")}" placeholder="https://your-mirror/{year}.json"/>
     </div>
     <div class="caldav-field">
-      <label class="caldav-field-label">更新频率</label>
+      <label class="caldav-field-label">${_t("更新频率")}</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="holidayCnUpdateFreq">
-          <option value="weekly" ${(s.holidayCnUpdateFreq || "weekly") === "weekly" ? "selected" : ""}>每周静默复查一次</option>
-          <option value="daily" ${s.holidayCnUpdateFreq === "daily" ? "selected" : ""}>每天静默复查一次</option>
-          <option value="manual" ${s.holidayCnUpdateFreq === "manual" ? "selected" : ""}>仅手动（不自动）</option>
+          <option value="weekly" ${(s.holidayCnUpdateFreq || "weekly") === "weekly" ? "selected" : ""}>${_t("每周静默复查一次")}</option>
+          <option value="daily" ${s.holidayCnUpdateFreq === "daily" ? "selected" : ""}>${_t("每天静默复查一次")}</option>
+          <option value="manual" ${s.holidayCnUpdateFreq === "manual" ? "selected" : ""}>${_t("仅手动（不自动）")}</option>
         </select>
         <span class="caldav-input-suffix">${icons.chevron}</span>
       </div>
     </div>
     <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" type="button" data-action="cn-refresh">${icons.refreshThin} 立即检查更新</button>
+      <button class="caldav-btn caldav-btn--sm" type="button" data-action="cn-refresh">${icons.refreshThin} ${_t("立即检查更新")}</button>
       <span class="caldav-set-msg" data-cn-msg></span>
     </div>
   </div>
@@ -1052,17 +1054,17 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
     <div class="caldav-section caldav-section--card">
     <div class="caldav-section-title"><span class="caldav-section-icon">${icons.filter}</span>MISC</div>
     <p class="caldav-set-hint">
-      下面两个下拉的**默认值** —— 也就是刚打开时自动选中哪一项。
-      默认都是「上次使用项」：记住你上次选的，下次打开直接回到它。
-      记录存在配置里，会随数据同步到其他设备（思源的端口每次启动都变，
-      浏览器存储按端口隔离，存那儿等于每次都丢）。
-      也可以固定成某一项，那样每次打开都用它。
+      ${_t("下面两个下拉的")}**${_t("默认值")}** ${_t("——")} ${_t("也就是刚打开时自动选中哪一项。")}
+      ${_t("默认都是「上次使用项」：记住你上次选的，下次打开直接回到它。")}
+      ${_t("记录存在配置里，会随数据同步到其他设备（思源的端口每次启动都变，")}
+      ${_t("浏览器存储按端口隔离，存那儿等于每次都丢）。")}
+      ${_t("也可以固定成某一项，那样每次打开都用它。")}
     </p>
     <div class="caldav-field">
-      <label class="caldav-field-label">左侧 Dock 区默认筛选</label>
+      <label class="caldav-field-label">${_t("左侧")} Dock ${_t("区默认筛选")}</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="defaultDockFilter">
-          <option value="last" ${(s.defaultDockFilter || "last") === "last" ? "selected" : ""}>上次使用项</option>
+          <option value="last" ${(s.defaultDockFilter || "last") === "last" ? "selected" : ""}>${_t("上次使用项")}</option>
           ${DOCK_FILTER_OPTIONS.map(
             (o) => `<option value="${o.key}" ${s.defaultDockFilter === o.key ? "selected" : ""}>${o.label}</option>`
           ).join("")}
@@ -1071,10 +1073,10 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       </div>
     </div>
     <div class="caldav-field">
-      <label class="caldav-field-label">任务视图默认筛选</label>
+      <label class="caldav-field-label">${_t("任务视图默认筛选")}</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="defaultTaskFilter">
-          <option value="last" ${(s.defaultTaskFilter || "last") === "last" ? "selected" : ""}>上次使用项</option>
+          <option value="last" ${(s.defaultTaskFilter || "last") === "last" ? "selected" : ""}>${_t("上次使用项")}</option>
           ${TASK_FILTER_OPTIONS.map(
             (o) => `<option value="${o.key}" ${s.defaultTaskFilter === o.key ? "selected" : ""}>${o.label}</option>`
           ).join("")}
@@ -1082,97 +1084,97 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         <span class="caldav-input-suffix">${icons.chevron}</span>
       </div>
     </div>
-    <p class="caldav-set-hint">「上次使用项」没有记录时，两处都回落到「所有未完成」。</p>
+    <p class="caldav-set-hint">${_t("「上次使用项」没有记录时，两处都回落到「所有未完成」。")}</p>
     <div class="caldav-field">
-      <label class="caldav-field-label">新建待办任务时默认结束时间</label>
+      <label class="caldav-field-label">${_t("新建待办任务时默认结束时间")}</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="todoDefaultEnd">
-          <option value="none" ${s.todoDefaultEnd === "none" ? "selected" : ""}>空（无截止时间）</option>
-          <option value="plus1h" ${s.todoDefaultEnd === "plus1h" ? "selected" : ""}>当前时间+1小时</option>
-          <option value="plus8h" ${(s.todoDefaultEnd || "plus8h") === "plus8h" ? "selected" : ""}>当前时间+8小时</option>
+          <option value="none" ${s.todoDefaultEnd === "none" ? "selected" : ""}>${_t("空（无截止时间）")}</option>
+          <option value="plus1h" ${s.todoDefaultEnd === "plus1h" ? "selected" : ""}>${_t("当前时间")}+1${_t("小时")}</option>
+          <option value="plus8h" ${(s.todoDefaultEnd || "plus8h") === "plus8h" ? "selected" : ""}>${_t("当前时间")}+8${_t("小时")}</option>
         </select>
         <span class="caldav-input-suffix">${icons.chevron}</span>
       </div>
-      <p class="caldav-set-hint">只影响**新建**待办；基准是开始时间（新建时开始默认为当前时刻的下一个整点）。全天待办仍默认次日。</p>
+      <p class="caldav-set-hint">${_t("只影响")}**${_t("新建")}**${_t("待办；基准是开始时间（新建时开始默认为当前时刻的下一个整点）。全天待办仍默认次日。")}</p>
     </div>
   </div>
 
   <div class="caldav-section caldav-section--card">
-    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.layers}</span>本地数据</div>
+    <div class="caldav-section-title"><span class="caldav-section-icon">${icons.layers}</span>${_t("本地数据")}</div>
     <p class="caldav-set-hint">
-      删除账户时可选「同时清理该账户的本地条目」（清理前自动备份，可随时恢复）；
-      下面这两个按钮用于手动清理**不属于任何已配置账户**的本地条目 ——
-      比如曾经连过、现已不在设置里的旧服务器数据。只清本地缓存，服务端不动。
+      ${_t("删除账户时可选「同时清理该账户的本地条目」（清理前自动备份，可随时恢复）；")}
+      ${_t("下面这两个按钮用于手动清理")}**${_t("不属于任何已配置账户")}**${_t("的本地条目")} ${_t("——")}
+      ${_t("比如曾经连过、现已不在设置里的旧服务器数据。只清本地缓存，服务端不动。")}
     </p>
     <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash}<span data-purge-now-label>立即清理其他服务器的本地条目</span></button>
-      <button class="caldav-btn caldav-btn--sm" data-action="purge-restore">${icons.reset}<span data-purge-restore-label>恢复上次清理的条目</span></button>
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-now">${icons.trash}<span data-purge-now-label>${_t("立即清理其他服务器的本地条目")}</span></button>
+      <button class="caldav-btn caldav-btn--sm" data-action="purge-restore">${icons.reset}<span data-purge-restore-label>${_t("恢复上次清理的条目")}</span></button>
       <span class="caldav-set-msg" data-purge-msg></span>
     </div>
     <p class="caldav-set-hint" data-purge-info></p>
   </div>
 
   <!--
-    思源任务块识别与映射（issue #2，2026-10-28）
-    文档里写的任务块（- [ ] 待办）⇄ CalDAV VTODO，身份锚点是 **Block ID**
-    （写进 VTODO 的 X-SIYUAN-BLOCK-ID），不是文本匹配 —— 改文字也不会对丢。
-    ⚠️ 总开关没打开就完全不启用：不自动扫描、块菜单不出现、不做状态同步，
-    「立即扫描」按钮点了也只提示功能未启用。
+    ${_t("思源任务块识别与映射（")}issue #2${_t("，")}2026-10-28${_t("）")}
+    ${_t("文档里写的任务块（")}- [ ] ${_t("待办）")}⇄ CalDAV VTODO${_t("，身份锚点是")} **Block ID**
+    ${_t("（写进")} VTODO ${_t("的")} X-SIYUAN-BLOCK-ID${_t("），不是文本匹配")} ${_t("——")} ${_t("改文字也不会对丢。")}
+    ⚠️ ${_t("总开关没打开就完全不启用：不自动扫描、块菜单不出现、不做状态同步，")}
+    ${_t("「立即扫描」按钮点了也只提示功能未启用。")}
   -->
   <!--
-    ⚠️ 类名**一律 caldav-blk-*，绝不复用 .caldav-acc / .caldav-acc-head / .caldav-acc-body**。
-    设置页到处是全局 .caldav-acc-head 选择器（bindAccounts 给账户卡挂展开收起）、
-    测试也按 .caldav-acc 数账户卡 —— 复用会让这张卡被当成一张账户卡：
-    点它的卡头会去走账户展开逻辑（activeAccId 被置空 → 整页 rerender），
-    账户计数也会平白多一张。外观在 index.css 里另写一份同样的规则。
+    ⚠️ ${_t("类名")}**${_t("一律")} caldav-blk-*${_t("，绝不复用")} .caldav-acc / .caldav-acc-head / .caldav-acc-body**${_t("。")}
+    ${_t("设置页到处是全局")} .caldav-acc-head ${_t("选择器（")}bindAccounts ${_t("给账户卡挂展开收起）、")}
+    ${_t("测试也按")} .caldav-acc ${_t("数账户卡")} ${_t("——")} ${_t("复用会让这张卡被当成一张账户卡：")}
+    ${_t("点它的卡头会去走账户展开逻辑（")}activeAccId ${_t("被置空")} → ${_t("整页")} rerender${_t("），")}
+    ${_t("账户计数也会平白多一张。外观在")} index.css ${_t("里另写一份同样的规则。")}
   -->
   <div class="caldav-blk-acc ${s.blockSyncEnabled ? "is-open" : ""}" data-blk-acc>
     <div class="caldav-blk-head" data-blk-head>
       <span class="caldav-blk-dot"></span>
-      <span class="caldav-blk-name">思源任务块识别与映射（测试版）</span>
-      <span class="caldav-blk-tag" ${s.blockSyncEnabled ? "hidden" : ""}>未启用</span>
-      <label class="caldav-blk-switch" title="启用 / 停用：开启后展开下方设置，关闭则完全停用（不扫描、无块菜单、不同步）">
+      <span class="caldav-blk-name">${_t("思源任务块识别与映射（测试版）")}</span>
+      <span class="caldav-blk-tag" ${s.blockSyncEnabled ? "hidden" : ""}>${_t("未启用")}</span>
+      <label class="caldav-blk-switch" title="${_t("启用")} / ${_t("停用：开启后展开下方设置，关闭则完全停用（不扫描、无块菜单、不同步）")}">
         <input type="checkbox" class="b3-switch" data-blk-enable ${s.blockSyncEnabled ? "checked" : ""}/>
       </label>
     </div>
     <div class="caldav-blk-body" ${s.blockSyncEnabled ? "" : "hidden"}>
       <p class="caldav-set-hint">
-        把文档里写的任务块（<code>- [ ] 待办</code>）同步成 CalDAV 待办，手机上完成，思源里的勾也跟着打上；
-        在思源里打勾，服务端的待办也标完成。块与待办用 Block ID 锚定，改文字也不会对丢。
+        ${_t("把文档里写的任务块（")}<code>- [ ] ${_t("待办")}</code>${_t("）同步成")} CalDAV ${_t("待办，手机上完成，思源里的勾也跟着打上；")}
+        ${_t("在思源里打勾，服务端的待办也标完成。块与待办用")} Block ID ${_t("锚定，改文字也不会对丢。")}
       </p>
 
-      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>扫描时机</div>
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>${_t("扫描时机")}</div>
       <label class="caldav-check-row">
         <input type="checkbox" data-s="blockSyncOnStartup" ${s.blockSyncOnStartup !== false ? "checked" : ""}/>
-        <span>插件启动后（约 3 秒）自动扫描任务块</span>
+        <span>${_t("插件启动后（约")} 3 ${_t("秒）自动扫描任务块")}</span>
       </label>
       <label class="caldav-check-row">
         <input type="checkbox" data-s="blockSyncOnManualSync" ${s.blockSyncOnManualSync !== false ? "checked" : ""}/>
-        <span>手动点「同步」时自动扫描任务块</span>
+        <span>${_t("手动点「同步」时自动扫描任务块")}</span>
       </label>
       <label class="caldav-check-row">
         <input type="checkbox" data-s="blockSyncOnDocClose" ${s.blockSyncOnDocClose ? "checked" : ""}/>
-        <span>关闭当前文档时扫描该文档的任务块（捕获刚关掉的文档里的改动 / 删除）</span>
+        <span>${_t("关闭当前文档时扫描该文档的任务块（捕获刚关掉的文档里的改动")} / ${_t("删除）")}</span>
       </label>
-      <p class="caldav-set-hint">「立即扫描」按钮与右键块的「扫描任务块」菜单属主动触发，不受上面三个开关限制。</p>
+      <p class="caldav-set-hint">${_t("「立即扫描」按钮与右键块的「扫描任务块」菜单属主动触发，不受上面三个开关限制。")}</p>
 
-      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>扫描方式</div>
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>${_t("扫描方式")}</div>
       <label class="caldav-check-row">
         <input type="checkbox" data-s="blockSyncIncremental" ${s.blockSyncIncremental !== false ? "checked" : ""}/>
-        <span>增量扫描（只查改动过的任务块，更快）</span>
+        <span>${_t("增量扫描（只查改动过的任务块，更快）")}</span>
       </label>
       <p class="caldav-set-hint">
-        增量扫描按思源任务块的「最后修改时间」定位改动，只把改过的块拉回来对账。
-        范围一变、或距上次全量超过 24 小时，都会自动改做一次全量校准；关掉则每次都全量扫描。
+        ${_t("增量扫描按思源任务块的「最后修改时间」定位改动，只把改过的块拉回来对账。")}
+        ${_t("范围一变、或距上次全量超过")} 24 ${_t("小时，都会自动改做一次全量校准；关掉则每次都全量扫描。")}
       </p>
-      <p class="caldav-set-hint">增量模式下如果执行了「一键清理」，按同步按钮只会同步上次同步时间之后的变动，如需立刻全量扫描，请使用文档中任务块的右键菜单项——扫描任务块（全部）。</p>
+      <p class="caldav-set-hint">${_t("增量模式下如果执行了「一键清理」，按同步按钮只会同步上次同步时间之后的变动，如需立刻全量扫描，请使用文档中任务块的右键菜单项——扫描任务块（全部）。")}</p>
 
       <div class="caldav-field-row">
         <div class="caldav-field">
-          <label class="caldav-field-label">文档任务块转 VTODO 的默认日历<span class="caldav-sub-sm">（建议另建日历）</span></label>
+          <label class="caldav-field-label">${_t("文档任务块转")} VTODO ${_t("的默认日历")}<span class="caldav-sub-sm">${_t("（建议另建日历）")}</span></label>
           <div class="caldav-input-wrap">
             <select class="caldav-input" data-s="blockSyncCal">
-              <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>使用新建条目的默认日历</option>
+              <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>${_t("使用新建条目的默认日历")}</option>
               ${blockCalOptions(s)}
             </select>
             <span class="caldav-input-suffix">${icons.chevron}</span>
@@ -1180,11 +1182,11 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         </div>
 
         <div class="caldav-field">
-          <label class="caldav-field-label">文档任务块转 VTODO 的默认结束时间</label>
+          <label class="caldav-field-label">${_t("文档任务块转")} VTODO ${_t("的默认结束时间")}</label>
           <div class="caldav-input-wrap">
             <select class="caldav-input" data-s="blockSyncEnd">
-              <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>与新建待办任务一致</option>
-              <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>空（即无日期任务）</option>
+              <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>${_t("与新建待办任务一致")}</option>
+              <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>${_t("空（即无日期任务）")}</option>
             </select>
             <span class="caldav-input-suffix">${icons.chevron}</span>
           </div>
@@ -1193,52 +1195,52 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
 
       <div class="caldav-field-row">
         <div class="caldav-field">
-          <label class="caldav-field-label">自动扫描文档任务块的范围</label>
+          <label class="caldav-field-label">${_t("自动扫描文档任务块的范围")}</label>
           <div class="caldav-input-wrap">
             <select class="caldav-input" data-s="blockSyncScope">
-              <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>打开的文档</option>
-              <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>仅日记</option>
-              <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>笔记本</option>
-              <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>全部文档</option>
+              <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>${_t("打开的文档")}</option>
+              <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>${_t("仅日记")}</option>
+              <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>${_t("笔记本")}</option>
+              <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>${_t("全部文档")}</option>
             </select>
             <span class="caldav-input-suffix">${icons.chevron}</span>
           </div>
-          <p class="caldav-set-hint" data-blocksync-nb-hint hidden>至少勾一个；一个都不勾 = 一个块也扫不到。</p>
+          <p class="caldav-set-hint" data-blocksync-nb-hint hidden>${_t("至少勾一个；一个都不勾")} = ${_t("一个块也扫不到。")}</p>
         </div>
 
         <div class="caldav-field" data-blocksync-nb-field hidden>
-          <label class="caldav-field-label">全部可用笔记本</label>
+          <label class="caldav-field-label">${_t("全部可用笔记本")}</label>
           <div class="caldav-input-wrap">
             <button type="button" class="caldav-input caldav-ms-trigger" data-blocksync-nb-trigger>
-              <span class="caldav-ms-text" data-blocksync-nb-text>未选择</span>
+              <span class="caldav-ms-text" data-blocksync-nb-text>${_t("未选择")}</span>
             </button>
             <span class="caldav-input-suffix">${icons.chevron}</span>
           </div>
         </div>
       </div>
 
-      <p class="caldav-set-hint">范围只决定**哪些新块会被识别**；已建立的映射照常双向同步，不受范围限制。</p>
+      <p class="caldav-set-hint">${_t("范围只决定")}**${_t("哪些新块会被识别")}**${_t("；已建立的映射照常双向同步，不受范围限制。")}</p>
 
       <div class="caldav-field">
-        <label class="caldav-field-label">文档任务块转 VTODO 的标记</label>
+        <label class="caldav-field-label">${_t("文档任务块转")} VTODO ${_t("的标记")}</label>
         <label class="caldav-check-row">
           <input type="checkbox" data-s="blockSyncMarkBadge" ${(s.blockSyncMarks || ["badge"]).includes("badge") ? "checked" : ""}/>
-          <span>加「文档」小角标（只在插件的任务视图 / 侧栏里显示，不动数据）</span>
+          <span>${_t("加「文档」小角标（只在插件的任务视图")} / ${_t("侧栏里显示，不动数据）")}</span>
         </label>
         <div class="caldav-check-row caldav-row-inline">
           <label class="caldav-check-inline">
             <input type="checkbox" data-s="blockSyncMarkPrefix" ${(s.blockSyncMarks || []).includes("prefix") ? "checked" : ""}/>
-            <span>自定义前缀（会写进待办标题，其他端也能看出来）</span>
+            <span>${_t("自定义前缀（会写进待办标题，其他端也能看出来）")}</span>
           </label>
           <div class="caldav-input-wrap caldav-blocksync-prefix caldav-inline-input" data-blocksync-prefix hidden>
-            <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || "[文档]")}" placeholder="[文档]"/>
+            <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || _t("[文档]"))}" placeholder="[${_t("文档")}]"/>
           </div>
         </div>
       </div>
 
-      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>安全提醒</div>
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>${_t("安全提醒")}</div>
       <div class="caldav-field caldav-field--inline">
-        <label class="caldav-field-label">一次同步改动数量告警值</label>
+        <label class="caldav-field-label">${_t("一次同步改动数量告警值")}</label>
         <div class="caldav-input-wrap caldav-inline-input">
           <input class="caldav-input" type="number" min="0" step="1" data-s="blockSyncChangeAlert"
                  value="${s.blockSyncChangeAlert === undefined || s.blockSyncChangeAlert === null ? "" : s.blockSyncChangeAlert}"
@@ -1246,36 +1248,36 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         </div>
       </div>
       <p class="caldav-set-hint">
-        一轮对账算出来的改动（回写任务块 + 新建 + 更新 + 删除）超过这个数，就先弹窗列出明细让你确认，
-        点「取消」则本轮一条都不改。填 <code>0</code> = 只要有改动就问；<b>留空 = 不提醒</b>。
-        留空后同步完全自动（默认 20，改之前建议先想清楚）。
+        ${_t("一轮对账算出来的改动（回写任务块")} + ${_t("新建")} + ${_t("更新")} + ${_t("删除）超过这个数，就先弹窗列出明细让你确认，")}
+        ${_t("点「取消」则本轮一条都不改。填")} <code>0</code> = ${_t("只要有改动就问；")}<b>${_t("留空")} = ${_t("不提醒")}</b>${_t("。")}
+        ${_t("留空后同步完全自动（默认")} 20${_t("，改之前建议先想清楚）。")}
       </p>
 
-      <!-- 「扫描清理」：段标题 + 两个动作按钮 -->
-      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.refreshThin}</span>扫描清理</div>
+      <!-- ${_t("「扫描清理」：段标题")} + ${_t("两个动作按钮")} -->
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.refreshThin}</span>${_t("扫描清理")}</div>
       <div class="caldav-actions-row">
-        <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>立即扫描</span></button>
-        <button class="caldav-btn caldav-btn--sm" data-action="blocks-clear">${icons.trash}<span data-blocksync-clear-label>一键清理</span></button>
+        <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>${_t("立即扫描")}</span></button>
+        <button class="caldav-btn caldav-btn--sm" data-action="blocks-clear">${icons.trash}<span data-blocksync-clear-label>${_t("一键清理")}</span></button>
         <span class="caldav-set-msg" data-blocksync-msg></span>
       </div>
       <p class="caldav-set-hint">
-        「立即扫描」当场扫一遍（不等下个同步周期）；同步时也会自动扫。
-        「一键清理」删掉全部由文档任务块转来的待办（文档里的块不动）——
-        后悔了就用它；若开关还开着、范围还覆盖着，下一轮又会重新建回来。
+        ${_t("「立即扫描」当场扫一遍（不等下个同步周期）；同步时也会自动扫。")}
+        ${_t("「一键清理」删掉全部由文档任务块转来的待办（文档里的块不动）——")}
+        ${_t("后悔了就用它；若开关还开着、范围还覆盖着，下一轮又会重新建回来。")}
       </p>
     </div>
     <p class="caldav-set-hint caldav-blk-hint" ${s.blockSyncEnabled ? "hidden" : ""}>
-      未启用：点击上方绿色开关（或本卡片标题）开启后，下方「扫描时机 / 默认日历 / 范围 / 标记 / 扫描按钮」等设置才会出现。
+      ${_t("未启用：点击上方绿色开关（或本卡片标题）开启后，下方「扫描时机")} / ${_t("默认日历")} / ${_t("范围")} / ${_t("标记")} / ${_t("扫描按钮」等设置才会出现。")}
     </p>
   </div>
 
 </div>
 
 <div class="caldav-editor-foot">
-  <span class="caldav-set-hint">密码保存在本机插件数据中，请勿在公共环境使用</span>
+  <span class="caldav-set-hint">${_t("密码保存在本机插件数据中，请勿在公共环境使用")}</span>
   <span class="caldav-flex"></span>
-  <button class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} 取消</button>
-  <button class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} 保存</button>
+  <button class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} ${_t("取消")}</button>
+  <button class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} ${_t("保存")}</button>
 </div>`;
 }
 
@@ -1314,8 +1316,8 @@ function defaultCalOptions(s: CalSettings): string {
 function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | null): string {
   const enabledCals = (a.calendars || []).filter((c) => c.enabled).length;
   const summary = a.serverUrl
-    ? `${a.serverUrl} · ${enabledCals}/${(a.calendars || []).length} 日历启用`
-    : "尚未填写服务器地址";
+    ? `${a.serverUrl} · ${enabledCals}/${(a.calendars || []).length} ${_t("日历启用")}`
+    : _t("尚未填写服务器地址");
   // 收起的卡片**不渲染 body**。曾经是「渲染 + hidden」，2026-10-25 雄哥实测因此丢数据：
   // 添加第二个账户填 iCloud，「测试连接」永远在读第一个账户、把结果写进它（隐藏着）的
   // 消息位（看着就是没反应），强行保存后新账户的服务器/用户名/密码全变成第一个账户的值。
@@ -1328,70 +1330,70 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
     <span class="caldav-acc-dot" style="background:${calEventColor(a.calendars?.[0])}"></span>
     <span class="caldav-acc-name">${escape(a.name)}</span>
     <span class="caldav-acc-sum" title="${escape(a.serverUrl)}">${escape(summary)}</span>
-    <label class="caldav-acc-switch" title="${a.enabled ? "停用该账户（其日历不再显示、不参与同步）" : "启用该账户"}">
+    <label class="caldav-acc-switch" title="${a.enabled ? _t("停用该账户（其日历不再显示、不参与同步）") : _t("启用该账户")}">
       <input type="checkbox" data-acc-toggle="${escape(a.id)}" ${a.enabled ? "checked" : ""}/>
     </label>
-    <button class="caldav-icon-btn" type="button" data-action="acc-del" data-acc-del="${escape(a.id)}" title="删除该账户">${icons.trash}</button>
+    <button class="caldav-icon-btn" type="button" data-action="acc-del" data-acc-del="${escape(a.id)}" title="${_t("删除该账户")}">${icons.trash}</button>
   </div>
   <div class="caldav-acc-delconf" data-acc-delconf hidden>
     <div class="caldav-set-hint">
-      删除账户「${escape(a.name)}」？该账户在本地共有 <b data-acc-deln>0</b> 条条目。
-      服务端数据不受影响，重新添加同名账户即可再次同步。
+      ${_t("删除账户「")}${escape(a.name)}${_t("」？该账户在本地共有")} <b data-acc-deln>0</b> ${_t("条条目。")}
+      ${_t("服务端数据不受影响，重新添加同名账户即可再次同步。")}
     </div>
     <label class="caldav-check-row">
       <input type="checkbox"/>
-      <span>同时清理该账户的本地条目（只清本地，清理前自动备份，可一键恢复）</span>
+      <span>${_t("同时清理该账户的本地条目（只清本地，清理前自动备份，可一键恢复）")}</span>
     </label>
     <div class="caldav-actions-row">
-      <button class="caldav-btn caldav-btn--sm" type="button" data-action="acc-del-ok">${icons.trash} 确认删除</button>
-      <button class="caldav-btn caldav-btn--sm caldav-btn--ghost" type="button" data-action="acc-del-cancel">取消</button>
+      <button class="caldav-btn caldav-btn--sm" type="button" data-action="acc-del-ok">${icons.trash} ${_t("确认删除")}</button>
+      <button class="caldav-btn caldav-btn--sm caldav-btn--ghost" type="button" data-action="acc-del-cancel">${_t("取消")}</button>
     </div>
   </div>
   ${expandedId === a.id
     ? `
   <div class="caldav-acc-body">
-    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.server}</span>服务器</div>
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.server}</span>${_t("服务器")}</div>
     <div class="caldav-field">
-      <label class="caldav-field-label">账户名称</label>
+      <label class="caldav-field-label">${_t("账户名称")}</label>
       <input class="caldav-input" data-s="accName" value="${escape(a.name)}"/>
     </div>
     <div class="caldav-field">
-      <label class="caldav-field-label">服务器类型</label>
+      <label class="caldav-field-label">${_t("服务器类型")}</label>
       <div class="caldav-input-wrap">
         <select class="caldav-input" data-s="serverType">
-          <option value="caldav" ${a.serverType !== "icloud" ? "selected" : ""}>CalDAV（标准服务器）</option>
+          <option value="caldav" ${a.serverType !== "icloud" ? "selected" : ""}>CalDAV${_t("（标准服务器）")}</option>
           <option value="icloud" ${a.serverType === "icloud" ? "selected" : ""}>iCloud</option>
         </select>
         <span class="caldav-input-suffix">${icons.chevron}</span>
       </div>
     </div>
-    <p class="caldav-set-hint">选「iCloud」时地址会自动填为 https://caldav.icloud.com，留空「日历路径」即可自动发现日历（iCloud 地址会跳转到节点主机，已做适配）；选「CalDAV」可连接任意标准服务器。</p>
+    <p class="caldav-set-hint">${_t("选「")}iCloud${_t("」时地址会自动填为")} https://caldav.icloud.com${_t("，留空「日历路径」即可自动发现日历（")}iCloud ${_t("地址会跳转到节点主机，已做适配）；选「")}CalDAV${_t("」可连接任意标准服务器。")}</p>
     <div class="caldav-field">
-      <label class="caldav-field-label">服务器地址</label>
-      <input class="caldav-input" data-s="server" placeholder="http://192.168.1.10:5232/ 或 https://dav.example.com/" value="${escape(a.serverUrl)}"/>
+      <label class="caldav-field-label">${_t("服务器地址")}</label>
+      <input class="caldav-input" data-s="server" placeholder="http://192.168.1.10:5232/ ${_t("或")} https://dav.example.com/" value="${escape(a.serverUrl)}"/>
     </div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">用户名</label>
+        <label class="caldav-field-label">${_t("用户名")}</label>
         <input class="caldav-input" data-s="username" value="${escape(a.username)}"/>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">密码</label>
-        <input class="caldav-input" type="password" data-s="password" value="${escape(a.password)}" placeholder="留空则保持不变" autocomplete="new-password"/>
+        <label class="caldav-field-label">${_t("密码")}</label>
+        <input class="caldav-input" type="password" data-s="password" value="${escape(a.password)}" placeholder="${_t("留空则保持不变")}" autocomplete="new-password"/>
       </div>
     </div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">日历路径（可选，留空自动发现）</label>
-        <input class="caldav-input" data-s="path" placeholder="如 http://host:5232/user/personal/" value="${escape(a.calendarPath)}"/>
+        <label class="caldav-field-label">${_t("日历路径（可选，留空自动发现）")}</label>
+        <input class="caldav-input" data-s="path" placeholder="${_t("如")} http://host:5232/user/personal/" value="${escape(a.calendarPath)}"/>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">请求通道</label>
+        <label class="caldav-field-label">${_t("请求通道")}</label>
         <div class="caldav-input-wrap">
           <select class="caldav-input" data-s="channel">
-            <option value="auto" ${a.channel === "auto" ? "selected" : ""}>自动（内核代理优先）</option>
-            <option value="proxy" ${a.channel === "proxy" ? "selected" : ""}>仅思源内核代理</option>
-            <option value="direct" ${a.channel === "direct" ? "selected" : ""}>仅浏览器直连</option>
+            <option value="auto" ${a.channel === "auto" ? "selected" : ""}>${_t("自动（内核代理优先）")}</option>
+            <option value="proxy" ${a.channel === "proxy" ? "selected" : ""}>${_t("仅思源内核代理")}</option>
+            <option value="direct" ${a.channel === "direct" ? "selected" : ""}>${_t("仅浏览器直连")}</option>
           </select>
           <span class="caldav-input-suffix">${icons.chevron}</span>
         </div>
@@ -1399,54 +1401,54 @@ function accountCardHtml(a: CalAccount, mobile: boolean, expandedId?: string | n
     </div>
     ${
       mobile
-        ? `<p class="caldav-set-hint caldav-net-note">移动端请保持「自动」：手机 WebView 会拦截明文 HTTP 的浏览器直连（报 Failed to fetch），
-      直连失败时插件会自动改走内核代理。</p>`
+        ? `<p class="caldav-set-hint caldav-net-note">${_t("移动端请保持「自动」：手机")} WebView ${_t("会拦截明文")} HTTP ${_t("的浏览器直连（报")} Failed to fetch${_t("），")}
+      ${_t("直连失败时插件会自动改走内核代理。")}</p>`
         : ""
     }
     <div class="caldav-actions-row">
-      <button class="caldav-foot-btn caldav-foot-btn--ghost" type="button" data-action="test">${icons.check} 测试连接</button>
-      <button class="caldav-foot-btn caldav-foot-btn--primary" type="button" data-action="discover">${icons.calendar} 发现日历</button>
+      <button class="caldav-foot-btn caldav-foot-btn--ghost" type="button" data-action="test">${icons.check} ${_t("测试连接")}</button>
+      <button class="caldav-foot-btn caldav-foot-btn--primary" type="button" data-action="discover">${icons.calendar} ${_t("发现日历")}</button>
       <span class="caldav-set-msg" data-acc-msg></span>
     </div>
 
-    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.calendar}</span>日历</div>
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.calendar}</span>${_t("日历")}</div>
     <div class="caldav-acc-cals" data-cals>${calChecksHtml(a.calendars || [])}</div>
 
-    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.sync}</span>策略</div>
+    <div class="caldav-section-title caldav-acc-subtitle"><span class="caldav-section-icon">${icons.sync}</span>${_t("策略")}</div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">冲突策略</label>
+        <label class="caldav-field-label">${_t("冲突策略")}</label>
         <div class="caldav-input-wrap">
           <select class="caldav-input" data-s="conflict">
-            <option value="server" ${a.conflict === "server" ? "selected" : ""}>服务端优先</option>
-            <option value="local" ${a.conflict === "local" ? "selected" : ""}>本地优先</option>
+            <option value="server" ${a.conflict === "server" ? "selected" : ""}>${_t("服务端优先")}</option>
+            <option value="local" ${a.conflict === "local" ? "selected" : ""}>${_t("本地优先")}</option>
           </select>
           <span class="caldav-input-suffix">${icons.chevron}</span>
         </div>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">同步过去（天）</label>
+        <label class="caldav-field-label">${_t("同步过去（天）")}</label>
         <input class="caldav-input" type="number" min="7" data-s="past" value="${a.pastDays}"/>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">同步未来（天）</label>
+        <label class="caldav-field-label">${_t("同步未来（天）")}</label>
         <input class="caldav-input" type="number" min="30" data-s="future" value="${a.futureDays}"/>
       </div>
     </div>
     <div class="caldav-field-row">
       <div class="caldav-field">
-        <label class="caldav-field-label">附件大小限制（MB）</label>
+        <label class="caldav-field-label">${_t("附件大小限制（")}MB${_t("）")}</label>
         <input class="caldav-input" type="number" min="1" data-s="attachMax" value="${a.attachSizeMaxMB ?? 5}"/>
       </div>
       <div class="caldav-field">
-        <label class="caldav-field-label">单个ICS文件限制（MB）</label>
+        <label class="caldav-field-label">${_t("单个")}ICS${_t("文件限制（")}MB${_t("）")}</label>
         <input class="caldav-input" type="number" min="1" data-s="icsMax" value="${a.icsSizeMaxMB ?? 10}"/>
       </div>
     </div>
     <p class="caldav-set-hint">
-      附件大小限制是单个文件的上限，超过直接在编辑时拒绝；单个 ICS 文件限制是整条日历数据（含全部附件）的上限，
-      超过服务器会拒绝（HTTP 413）。这两项是**服务器特性**（随账户走）：默认 5 / 10 对齐 Radicale 的默认上限，
-      iCloud / 自己的服务器上限更大就把数值调大。
+      ${_t("附件大小限制是单个文件的上限，超过直接在编辑时拒绝；单个")} ICS ${_t("文件限制是整条日历数据（含全部附件）的上限，")}
+      ${_t("超过服务器会拒绝（")}HTTP 413${_t("）。这两项是")}**${_t("服务器特性")}**${_t("（随账户走）：默认")} 5 / 10 ${_t("对齐")} Radicale ${_t("的默认上限，")}
+      iCloud / ${_t("自己的服务器上限更大就把数值调大。")}
     </p>
   </div>`
     : ""}
@@ -1458,7 +1460,7 @@ function calChecksHtml(cals: CalCalendar[]): string {
   // 老数据（只有单个 color）在这里就地升级：eventColor/todoColor 都继承原色，观感不变
   normalizeCalendarColors(cals);
   if (!cals.length) {
-    return `<div class="caldav-set-hint">尚未发现日历，请先填写服务器信息并点击「发现日历」</div>`;
+    return `<div class="caldav-set-hint">${_t("尚未发现日历，请先填写服务器信息并点击「发现日历」")}</div>`;
   }
   return cals
     .map(
@@ -1467,9 +1469,9 @@ function calChecksHtml(cals: CalCalendar[]): string {
       <input type="checkbox" ${c.enabled ? "checked" : ""}/>
       <input class="caldav-input" data-role="name" value="${escape(c.displayName)}" title="${escape(c.url)}"/>
       <span class="caldav-set-cal-tags">${
-        // 顺序固定为「日程」在前、「任务」在后；只给该日历支持的组件出药丸（不支持就没有对应色可配）
-        (c.supportsEvent ? colorPillHtml("eventColor", "日程", calEventColor(c)) : "") +
-        (c.supportsTodo ? colorPillHtml("todoColor", "任务", calTodoColor(c)) : "")
+        // ${_t("顺序固定为「日程」在前、「任务」在后；只给该日历支持的组件出药丸（不支持就没有对应色可配）")}
+        (c.supportsEvent ? colorPillHtml("eventColor", _t("日程"), calEventColor(c)) : "") +
+        (c.supportsTodo ? colorPillHtml("todoColor", _t("任务"), calTodoColor(c)) : "")
       }</span>
     </div>`
     )
@@ -1502,7 +1504,7 @@ function contrastText(hex: string): string {
 function colorPillHtml(role: "todoColor" | "eventColor", label: string, color: string): string {
   return `<label class="caldav-set-cal-tag" data-role-pill="${role}"
       style="--tag-color:${escape(color)};--tag-fg:${contrastText(color)}"
-      title="点击选择该日历「${label}」的默认颜色">
+      title="${_t("点击选择该日历「")}${label}${_t("」的默认颜色")}">
       <input type="color" data-role="${role}" value="${escape(color)}"/>
       <span>${label}</span>
     </label>`;

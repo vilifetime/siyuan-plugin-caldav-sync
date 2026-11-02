@@ -4,6 +4,8 @@
 import { addDays, dateStampOfMs, isDateOnly, parseLocalStamp, startOfWeek, todayStamp } from "../core/date";
 import { calColorOf, escape, keyOfItem, occComparator, repeatMark, chinaDayBarHTML, type ViewArgs } from "./view-common";
 import { openDateAddMenu } from "./date-add-menu";
+import { t } from "../core/i18n";
+
 
 const HOUR_H = 44; // 每小时像素
 // 顶部全天栏行高由 index.css 的 .cal-wk-allday-cells min/max-height 决定（44px），
@@ -105,7 +107,7 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
           const k = keyOfItem(it);
           const done = it.kind === "todo" && it.percent === 100;
           const check = it.kind === "todo" ? `<button class="cal-chip-check" data-toggle="${k}">✓</button>` : "";
-          return `<div class="cal-chip cal-chip-allday ${done ? "is-done" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColorOf(ctx, it)}">${check}<span class="cal-chip-title">${it.rrule ? "↻" : ""}${escape(it.summary || "(无标题)")}</span></div>`;
+          return `<div class="cal-chip cal-chip-allday ${done ? "is-done" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColorOf(ctx, it)}">${check}<span class="cal-chip-title">${it.rrule ? "↻" : ""}${escape(it.summary || t("(无标题)"))}</span></div>`;
         })
         .join("");
       return `<div class="cal-wk-allday-cell" data-day="${d}">${chips}</div>`;
@@ -137,11 +139,11 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
           const startLabel = `${String(b.startMin / 60 | 0).padStart(2, "0")}:${String(b.startMin % 60).padStart(2, "0")}`;
           const done = b.it.kind === "todo" && b.it.percent === 100;
           const check = b.it.kind === "todo"
-            ? `<button class="cal-chip-check" data-toggle="${k}" title="${done ? "标记未完成" : "标记完成"}">✓</button>`
+            ? `<button class="cal-chip-check" data-toggle="${k}" title="${done ? t("标记未完成") : t("标记完成")}">✓</button>`
             : "";
           return `<div class="cal-wk-block ${b.it.kind === "todo" ? "cal-wk-block-todo" : ""} ${done ? "is-done" : ""}${tierClassOf(height)}" data-open="${k}" data-kind="${b.it.kind}"
             style="--cal-color:${calColorOf(ctx, b.it)};top:${top}%;height:${height}%">
-            <div class="cal-wk-block-head">${check}<div class="cal-wk-block-title">${repeatMark(b.it)}${escape(b.it.summary || "(无标题)")}${b.it.location ? `<span class="cal-wk-block-loc-inline">📍 ${escape(b.it.location)}</span>` : ""}</div></div>
+            <div class="cal-wk-block-head">${check}<div class="cal-wk-block-title">${repeatMark(b.it)}${escape(b.it.summary || t("(无标题)"))}${b.it.location ? `<span class="cal-wk-block-loc-inline">📍 ${escape(b.it.location)}</span>` : ""}</div></div>
             <div class="cal-wk-block-time">${startLabel}</div>
             ${b.it.location ? `<div class="cal-wk-block-loc">📍 ${escape(b.it.location)}</div>` : ""}
           </div>`;
@@ -160,7 +162,7 @@ export function renderWeekView({ ctx, viewEl, occurrences }: ViewArgs, days: num
     <div class="cal-wk-days">${dayHead}</div>
   </div>
   <div class="cal-wk-allday${hasAllDay ? "" : " is-empty"}">
-    <div class="cal-wk-allday-label">全天</div>
+    <div class="cal-wk-allday-label">${t("全天")}</div>
     <div class="cal-wk-allday-cells">${allDayRow}</div>
   </div>
   <div class="cal-wk-main">

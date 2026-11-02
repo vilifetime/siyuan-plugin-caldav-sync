@@ -4,6 +4,8 @@
 import type { CalCalendar, CalItem } from "./types";
 import { httpRequest, HttpError, isNetworkLevelError, uploadTimeoutMs, type HttpResult, type Channel } from "./http";
 import { itemsFromICS, ICS_SIZE_MAX_MB, mbToBytes, parseAttachLine, icsFilenameParam } from "./ics";
+import { t } from "./i18n";
+
 
 export interface DavAuth {
   username: string;
@@ -95,8 +97,8 @@ export async function discoverCalendars(
       channel,
       auth
     );
-    if (res.status === 401) throw new HttpError(401, "认证失败（401），请检查用户名密码");
-    if (res.status >= 400) throw new HttpError(res.status, `发现 principal 失败: HTTP ${res.status}`);
+    if (res.status === 401) throw new HttpError(401, t("认证失败（401），请检查用户名密码"));
+    if (res.status >= 400) throw new HttpError(res.status, `${t("发现")} principal ${t("失败")}: HTTP ${res.status}`);
     const hrefs = pickHrefXml(res.body);
     const cur = /<(?:[A-Za-z0-9_-]+:)?current-user-principal[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_-]+:)?current-user-principal>/.exec(res.body);
     if (cur) {
@@ -105,7 +107,7 @@ export async function discoverCalendars(
     } else if (hrefs.length) {
       principal = hrefs[0];
     }
-    if (!principal) throw new HttpError(res.status, "无法定位 principal（服务器不标准），请手动填写日历路径");
+    if (!principal) throw new HttpError(res.status, t("无法定位 principal（服务器不标准），请手动填写日历路径"));
     home = toAbsolute(base, principal);
   }
 
@@ -136,7 +138,7 @@ export async function discoverCalendars(
     auth,
     "1"
   );
-  if (listRes.status >= 400) throw new HttpError(listRes.status, `枚举日历失败: HTTP ${listRes.status}`);
+  if (listRes.status >= 400) throw new HttpError(listRes.status, `${t("枚举日历失败")}: HTTP ${listRes.status}`);
 
   const calendars: CalCalendar[] = [];
   // 按 <response> 分块
@@ -159,7 +161,7 @@ export async function discoverCalendars(
     const desc = pickTextXml(chunk, "description")[0] || "";
     calendars.push({
       url,
-      displayName: name || "日历",
+      displayName: name || t("日历"),
       color, // 向下兼容镜像，恒等于 eventColor
       eventColor: color,
       todoColor: color,
@@ -251,7 +253,7 @@ export async function fetchCalendarItems(
   <c:filter><c:comp-filter name="VCALENDAR">${compFilter}</c:comp-filter></c:filter>
 </c:calendar-query>`;
     const res = await dav(cal.url, "REPORT", body, channel, auth, "1");
-    if (res.status >= 400) throw new HttpError(res.status, `拉取日历失败: HTTP ${res.status}`);
+    if (res.status >= 400) throw new HttpError(res.status, `${t("拉取日历失败")}: HTTP ${res.status}`);
     items.push(...parseMultistatus(res.body, cal));
   }
   return { items, syncToken: undefined };
@@ -295,7 +297,7 @@ export async function listResourceNames(cal: CalCalendar, channel: Channel, auth
     channel,
     auth
   );
-  if (res.status >= 400) throw new HttpError(res.status, `列出日历资源失败: HTTP ${res.status}`);
+  if (res.status >= 400) throw new HttpError(res.status, `${t("列出日历资源失败")}: HTTP ${res.status}`);
   return [...res.body.matchAll(/<(?:[A-Za-z0-9_-]+:)?href[^>]*>([^<]*)</g)]
     .map((m) => fileNameOf(m[1]))
     .filter((n) => /\.ics$/i.test(n));
@@ -315,7 +317,7 @@ export async function syncCollection(
   <D:prop><D:getetag/></D:prop>
 </D:sync-collection>`;
   const res = await dav(cal.url, "REPORT", body, channel, auth, "1");
-  if (res.status >= 400) throw new HttpError(res.status, `增量同步失败: HTTP ${res.status}`);
+  if (res.status >= 400) throw new HttpError(res.status, `${t("增量同步失败")}: HTTP ${res.status}`);
   const tokenM = /<(?:[A-Za-z0-9_-]+:)?sync-token[^>]*>([^<]*)</.exec(res.body);
   const deletedHrefs: string[] = [];
   const chunks = res.body.split(/<(?:[A-Za-z0-9_-]+:)?response\b[^>]*>/i).slice(1);
@@ -346,7 +348,7 @@ async function multiget(cal: CalCalendar, channel: Channel, auth: DavAuth, hrefs
   ${batch.map((h) => `<D:href>${escapeXml(h)}</D:href>`).join("\n  ")}
 </c:calendar-multiget>`;
     const res = await dav(base, "REPORT", body, channel, auth, "1");
-    if (res.status >= 400) throw new HttpError(res.status, `multiget 失败: HTTP ${res.status}`);
+    if (res.status >= 400) throw new HttpError(res.status, `multiget ${t("失败")}: HTTP ${res.status}`);
     items.push(...parseMultistatus(res.body, cal));
   }
   return items;
@@ -416,8 +418,8 @@ export async function putItem(
   if (icsBytes > maxBytes) {
     throw new HttpError(
       413,
-      `内容过大（ICS ${(icsBytes / 1024 / 1024).toFixed(1)}MB），超过「单个ICS文件限制」${maxMB}MB，未上传。` +
-        `请删除该条目的大附件或改用外链；如确认服务器允许更大体积，可到设置里调高该上限。`
+      `${t("内容过大（")}ICS ${(icsBytes / 1024 / 1024).toFixed(1)}MB${t("），超过「单个")}ICS${t("文件限制」")}${maxMB}MB${t("，未上传。")}` +
+        `${t("请删除该条目的大附件或改用外链；如确认服务器允许更大体积，可到设置里调高该上限。")}`
     );
   }
   const headers: Record<string, string> = { "Content-Type": "text/calendar; charset=utf-8" };
@@ -430,16 +432,16 @@ export async function putItem(
     channel,
     auth
   );
-  if (res.status === 412) throw new HttpError(412, "服务端已变更（412 冲突）");
+  if (res.status === 412) throw new HttpError(412, t("服务端已变更（412 冲突）"));
   if (res.status === 413) {
     // 别把插件的设置值说成「服务器默认」：真实上限各不相同——nginx 反代常见
     // 默认仅 1MB（client_max_body_size），Radicale 默认 10MB，PHP 默认 8MB。
     // 2026-10-18 雄哥的 Baïkal 前有 nginx，413 就来自反代而非 CalDAV 服务器。
     throw new HttpError(
       413,
-      `上传失败：内容过大，服务器拒绝（HTTP 413）。` +
-        `服务器（或其反向代理）对单条日历数据有上限——nginx 反代常见默认仅 1MB，Radicale 默认 10MB。` +
-        `请删除该待办的大附件或改用外链后重试。`
+      `${t("上传失败：内容过大，服务器拒绝（")}HTTP 413${t("）。")}` +
+        `${t("服务器（或其反向代理）对单条日历数据有上限——")}nginx ${t("反代常见默认仅")} 1MB${t("，")}Radicale ${t("默认")} 10MB${t("。")}` +
+        `${t("请删除该待办的大附件或改用外链后重试。")}`
     );
   }
   if (res.status >= 400) {
@@ -448,12 +450,12 @@ export async function putItem(
     // 412/413 在上面已分别处理，到这里的是真异常。
     debugDump(
       "icloud-put-item",
-      `${item.href} (If-Match: ${item.etag || "无"})`,
+      `${item.href} (If-Match: ${item.etag || t("无")})`,
       res.status,
-      "OUTGOING ICS (\u957f " + (ics ? ics.length : 0) + "):\n" + (ics || "") + "\n\nSERVER RESPONSE BODY:\n" + (res.body || ""),
+      t("OUTGOING ICS (长 {0}):\n{1}\n\nSERVER RESPONSE BODY:\n{2}", (ics ? ics.length : 0), (ics || ""), (res.body || "")),
       res.headers
     );
-    throw new HttpError(res.status, `上传失败: HTTP ${res.status}`);
+    throw new HttpError(res.status, `${t("上传失败")}: HTTP ${res.status}`);
   }
   const etag = (res.headers["etag"] || res.headers["etag".toLowerCase()] || "").replace(/^"|"$/g, "");
   return { etag: etag || undefined };
@@ -663,7 +665,7 @@ export async function uploadIcloudAttachment(
   auth: DavAuth,
   knownManagedIds: string[] = []
 ): Promise<{ uri: string; managedId: string; etag?: string }> {
-  if (!item.href) throw new HttpError(400, "条目没有服务端地址（href），无法上传托管附件");
+  if (!item.href) throw new HttpError(400, t("条目没有服务端地址（href），无法上传托管附件"));
   const url = item.href + "?action=attachment-add";
   const headers: Record<string, string> = {
     "Content-Type": mime || "application/octet-stream",
@@ -687,11 +689,11 @@ export async function uploadIcloudAttachment(
     if (res.status === 507) {
       throw new HttpError(
         507,
-        `上传失败：HTTP 507（iCloud 存储配额不足或拒绝接收）。请检查 iCloud 账户剩余空间后重试。`
+        `${t("上传失败：")}HTTP 507${t("（")}iCloud ${t("存储配额不足或拒绝接收）。请检查")} iCloud ${t("账户剩余空间后重试。")}`
       );
     }
     debugDump("icloud-add-attachment", url, res.status, res.body, res.headers);
-    throw new HttpError(res.status, `上传附件「${name}」失败: HTTP ${res.status}`);
+    throw new HttpError(res.status, `${t("上传附件「")}${name}${t("」失败")}: HTTP ${res.status}`);
   }
   // ① 响应体带托管信息（RFC 8607 标准形态）→ 直接用；ETag 头有就一起拿
   const parsed = parseManagedAttach(res.body);
@@ -712,7 +714,7 @@ export async function uploadIcloudAttachment(
   }
   throw new HttpError(
     res.status,
-    `附件「${name}」上传后无法确认托管信息：服务端响应为空且回读资源也未找到新附件。请重试；若持续失败，请把 D:/Temp/caldav-debug.txt 里 icloud-add-attachment 片段反馈给开发者。`
+    `${t("附件「")}${name}${t("」上传后无法确认托管信息：服务端响应为空且回读资源也未找到新附件。请重试；若持续失败，请把")} D:/Temp/caldav-debug.txt ${t("里")} icloud-add-attachment ${t("片段反馈给开发者。")}`
   );
 }
 
@@ -722,7 +724,7 @@ export async function deleteItem(item: CalItem, channel: Channel, auth: DavAuth)
   if (item.etag) headers["If-Match"] = `"${item.etag}"`;
   const res = await httpRequest(item.href, { method: "DELETE", headers, timeoutMs: 30000 }, channel, auth);
   if (res.status >= 400 && res.status !== 404) {
-    throw new HttpError(res.status, `删除失败: HTTP ${res.status}`);
+    throw new HttpError(res.status, `${t("删除失败")}: HTTP ${res.status}`);
   }
 }
 
@@ -735,9 +737,9 @@ export function describeNetworkError(e: unknown, channel: Channel): string {
   const raw = e instanceof Error ? e.message : String(e ?? "");
   if (!isNetworkLevelError(e)) return raw;
   if (channel === "direct") {
-    return `请求未能到达服务器（${raw}）——浏览器直连被拦截（跨域或明文 HTTP），请把「请求通道」改为「自动」或「仅思源内核代理」后重试`;
+    return `${t("请求未能到达服务器（")}${raw}${t("）——浏览器直连被拦截（跨域或明文")} HTTP${t("），请把「请求通道」改为「自动」或「仅思源内核代理」后重试")}`;
   }
-  return `请求未能到达服务器（${raw}）——请检查服务器地址、端口与网络连通性`;
+  return `${t("请求未能到达服务器（")}${raw}${t("）——请检查服务器地址、端口与网络连通性")}`;
 }
 
 /** 测试连接：PROPFIND 根集合 */
@@ -751,7 +753,7 @@ export async function testConnection(serverUrl: string, channel: Channel, auth: 
       channel,
       auth
     );
-    if (res.status === 401) return { ok: false, message: "认证失败（401）：用户名或密码错误" };
+    if (res.status === 401) return { ok: false, message: t("认证失败（401）：用户名或密码错误") };
     // 405/501 = 服务器「这个路径不收 WebDAV 方法」。常见于自建服务把网页管理界面
     // 挂在根路径（nginx 只放行 GET/HEAD），真正的 DAV 入口在别的子路径。
     // 此时别只丢一个状态码给用户——主动探出入口，给一个能直接粘的地址。
@@ -760,14 +762,14 @@ export async function testConnection(serverUrl: string, channel: Channel, auth: 
       return {
         ok: false,
         message: entry
-          ? `根路径不支持 WebDAV（HTTP ${res.status}）。已探测到 DAV 入口：${entry} —— 请把「服务器地址」改成它再测试`
-          : `根路径不支持 WebDAV（HTTP ${res.status}）。请填写服务器的 DAV 入口地址（Baïkal 常见 …/dav.php/，标准入口 …/.well-known/caldav）`
+          ? `${t("根路径不支持")} WebDAV${t("（")}HTTP ${res.status}${t("）。已探测到")} DAV ${t("入口：")}${entry} ${t("——")} ${t("请把「服务器地址」改成它再测试")}`
+          : `${t("根路径不支持")} WebDAV${t("（")}HTTP ${res.status}${t("）。请填写服务器的")} DAV ${t("入口地址（")}Baïkal ${t("常见")} ${t("…")}/dav.php/${t("，标准入口")} ${t("…")}/.well-known/caldav${t("）")}`
       };
     }
-    if (res.status >= 400) return { ok: false, message: `服务器返回 HTTP ${res.status}` };
-    return { ok: true, message: `连接成功（${res.via === "proxy" ? "内核代理" : "直连"}，${res.elapsedMs}ms）` };
+    if (res.status >= 400) return { ok: false, message: `${t("服务器返回")} HTTP ${res.status}` };
+    return { ok: true, message: `${t("连接成功（")}${res.via === "proxy" ? t("内核代理") : t("直连")}${t("，")}${res.elapsedMs}ms${t("）")}` };
   } catch (e: any) {
-    return { ok: false, message: "连接失败: " + describeNetworkError(e, channel) };
+    return { ok: false, message: t("连接失败: {0}", describeNetworkError(e, channel)) };
   }
 }
 

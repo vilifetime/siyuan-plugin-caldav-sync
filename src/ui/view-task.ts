@@ -27,6 +27,8 @@ import { calColorOf, escape, keyOfItem, matchesSearchQuery, todoDueOccurrences, 
 import { blockBadgeOn } from "../core/block-todo";
 import { resolveTaskFilter, saveLastTaskFilter, TASK_FILTER_LABEL } from "./filter-pref";
 import { icons } from "./icons";
+import { t } from "../core/i18n";
+
 
 /**
  * 键集合统一放在 core/types.ts（设置项 defaultTaskFilter 要引用它），
@@ -215,10 +217,10 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   /** iCal PRIORITY（1 最高、9 最低）→ 文案与配色级别；覆盖 1~9 全部取值 */
   const priorityMeta = (p?: number): { label: string; cls: string } => {
     if (!p || p <= 0) return { label: "", cls: "" };
-    if (p <= 2) return { label: "紧急", cls: "prio-urgent" };
-    if (p <= 4) return { label: "高", cls: "prio-high" };
-    if (p <= 6) return { label: "中", cls: "prio-mid" };
-    return { label: "低", cls: "prio-low" };
+    if (p <= 2) return { label: t("紧急"), cls: "prio-urgent" };
+    if (p <= 4) return { label: t("高"), cls: "prio-high" };
+    if (p <= 6) return { label: t("中"), cls: "prio-mid" };
+    return { label: t("低"), cls: "prio-low" };
   };
 
   /**
@@ -233,20 +235,20 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
    * （避免「今天到期」这类筛选下多出一层无用标题）。
    */
   const GROUPS: { key: string; label: string; color: string; match: (r: Row) => boolean }[] = [
-    { key: "overdue", label: "逾期", color: "var(--caldav-danger)", match: (r) => !isCancelled(r) && !isDone(r) && r.due !== "" && r.due < today },
-    { key: "today", label: "今天", color: "#BA7517", match: (r) => !isCancelled(r) && !isDone(r) && r.due === today },
-    { key: "tomorrow", label: "明天", color: "#378ADD", match: (r) => !isCancelled(r) && !isDone(r) && r.due === tomorrow },
-    { key: "thisweek", label: "本周", color: "#1D9E75", match: (r) => !isCancelled(r) && !isDone(r) && r.due > tomorrow && r.due <= weekEnd },
+    { key: "overdue", label: t("逾期"), color: "var(--caldav-danger)", match: (r) => !isCancelled(r) && !isDone(r) && r.due !== "" && r.due < today },
+    { key: "today", label: t("今天"), color: "#BA7517", match: (r) => !isCancelled(r) && !isDone(r) && r.due === today },
+    { key: "tomorrow", label: t("明天"), color: "#378ADD", match: (r) => !isCancelled(r) && !isDone(r) && r.due === tomorrow },
+    { key: "thisweek", label: t("本周"), color: "#1D9E75", match: (r) => !isCancelled(r) && !isDone(r) && r.due > tomorrow && r.due <= weekEnd },
     // ⚠️ 必须 `due > tomorrow`：今天若是周日，weekEnd === 今天，
     //  `due > weekEnd` 会把「明天」也吞进「下周后」，导致一条待办同时出现在两个组头下。
     //  加 `> tomorrow` 后「明天」独占那一天，其余日子因 weekEnd ≥ tomorrow 行为不变。
-    { key: "later", label: "下周后", color: "#888780", match: (r) => !isCancelled(r) && !isDone(r) && r.due > weekEnd && r.due > tomorrow },
-    { key: "nodate", label: "无日期", color: "#B4B2A9", match: (r) => !isCancelled(r) && !isDone(r) && r.due === "" },
+    { key: "later", label: t("下周后"), color: "#888780", match: (r) => !isCancelled(r) && !isDone(r) && r.due > weekEnd && r.due > tomorrow },
+    { key: "nodate", label: t("无日期"), color: "#B4B2A9", match: (r) => !isCancelled(r) && !isDone(r) && r.due === "" },
     // 已完成：percent === 100（或过期日程）。作废（CANCELLED）单独沉到最末的「作废」组，
     // 这里必须显式排除，否则一条被作废的过期日程会同时落在「已完成」与「作废」两组。
-    { key: "done", label: "已完成", color: "#1D9E75", match: (r) => isDone(r) && !isCancelled(r) },
+    { key: "done", label: t("已完成"), color: "#1D9E75", match: (r) => isDone(r) && !isCancelled(r) },
     // 作废（CANCELLED）：含待办与日程，默认折叠、沉在最末（与「已完成」同款终端分组）。
-    { key: "cancelled", label: "已作废", color: "#9e9e9e", match: (r) => isCancelled(r) }
+    { key: "cancelled", label: t("已作废"), color: "#9e9e9e", match: (r) => isCancelled(r) }
   ];
 
   /** 把筛选后的列表按组切分；每组内部按「日期升序 → 有优先级的在前」排 */
@@ -349,33 +351,33 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     const overdue = !finished && !cancelled && !!due && due < today;
     const pr = priorityMeta(it.priority);
     const cal = findCalendarByUrl(ctx.store.settings, it.calendarUrl);
-    const kindLabel = isEvent ? "日程" : "待办";
+    const kindLabel = isEvent ? t("日程") : t("待办");
     const dueText = cancelled
-      ? "已作废"
+      ? t("已作废")
       : finished
         ? it.completedAt
-          ? "完成于 " + it.completedAt.slice(5, 10)
+          ? t("完成于 {0}", it.completedAt.slice(5, 10))
           : expired
-            ? "已过期"
-            : "已完成"
+            ? t("已过期")
+            : t("已完成")
         : !due
-          ? "无日期"
+          ? t("无日期")
           : due === today
-            ? "今天"
+            ? t("今天")
             : due === tomorrow
-              ? "明天"
+              ? t("明天")
               : overdue
-                ? `逾期 ${Math.abs(diffDays(due, today))} 天`
+                ? `${t("逾期")} ${Math.abs(diffDays(due, today))} ${t("天")}`
                 : due.slice(5);
     // 日程没有「完成」语义：勾选框改为圆点标记，且不显示优先级（VEVENT 无 PRIORITY）。
     // 注意过期日程虽归入「已完成」组，但仍走圆点分支 —— 它并没有真的被勾选。
     const check = isEvent
-      ? `<span class="cal-task-check cal-task-check--event${cancelled ? " cal-task-check--cancelled" : ""}" title="${cancelled ? "已作废" : kindLabel}">${cancelled ? "✕" : ""}</span>`
-      : `<button class="cal-task-check" data-toggle="${k}" title="${cancelled ? "恢复为待办" : finished ? "标记未完成" : "标记完成"}">${cancelled ? "✕" : finished ? "✓" : ""}</button>`;
+      ? `<span class="cal-task-check cal-task-check--event${cancelled ? " cal-task-check--cancelled" : ""}" title="${cancelled ? t("已作废") : kindLabel}">${cancelled ? "✕" : ""}</span>`
+      : `<button class="cal-task-check" data-toggle="${k}" title="${cancelled ? t("恢复为待办") : finished ? t("标记未完成") : t("标记完成")}">${cancelled ? "✕" : finished ? "✓" : ""}</button>`;
     const prio = !isEvent && pr.label ? `<span class="cal-task-priority ${pr.cls}">${pr.label}</span>` : "";
     // 「文档」角标：这条待办来自思源文档里的任务块（issue #2）。设置里可关（纯 UI，不动数据）
     const docBadge = it.blockId && blockBadgeOn(ctx.store.settings)
-      ? `<span class="cal-task-doc" title="来自思源文档任务块">文档</span>`
+      ? `<span class="cal-task-doc" title="${t("来自思源文档任务块")}">${t("文档")}</span>`
       : "";
     // 附件：只在**待办**上显示，位置在备注之后、日历名之前（雄哥 2026-10-14 指定）。
     // 日程不显示 —— 附件对日程意义不大，且会把 meta 行撑得很长。
@@ -389,13 +391,13 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     const first = atts[0];
     const firstIsBin = !!first?.b64;
     const attHtml = atts.length
-      ? `<span class="cal-task-attach" title="${escape(atts.map((a) => a.name || a.uri || "附件").join("\n"))}">${icons.paperclip}<a class="cal-task-attach-link${firstIsBin ? " cal-task-attach-link--bin" : ""}" ${firstIsBin ? "" : `href="${escape(first.uri || "")}"`} data-attach-open="${firstIsBin ? "bin:0" : escape(first.uri || "")}" ${firstIsBin ? "" : 'target="_blank" rel="noreferrer"'}>${escape(first.name || first.uri || "附件")}</a>${atts.length > 1 ? `<span class="cal-task-attach-more">+${atts.length - 1}</span>` : ""}</span>`
+      ? `<span class="cal-task-attach" title="${escape(atts.map((a) => a.name || a.uri || t("附件")).join("\n"))}">${icons.paperclip}<a class="cal-task-attach-link${firstIsBin ? " cal-task-attach-link--bin" : ""}" ${firstIsBin ? "" : `href="${escape(first.uri || "")}"`} data-attach-open="${firstIsBin ? "bin:0" : escape(first.uri || "")}" ${firstIsBin ? "" : 'target="_blank" rel="noreferrer"'}>${escape(first.name || first.uri || t("附件"))}</a>${atts.length > 1 ? `<span class="cal-task-attach-more">+${atts.length - 1}</span>` : ""}</span>`
       : "";
     return `
 <div class="cal-task ${finished ? "is-done" : ""} ${cancelled ? "is-cancelled" : ""} ${overdue ? "is-overdue" : ""} ${isEvent ? "is-event" : "is-todo"}" data-open="${k}" style="--cal-color:${calColorOf(ctx, it)}">
   ${check}
   <div class="cal-task-body">
-    <div class="cal-task-title"><span class="cal-task-kind ${isEvent ? "is-event" : "is-todo"}">${kindLabel}</span>${docBadge}${it.rrule ? "↻ " : ""}${escape(it.summary || "(无标题)")}
+    <div class="cal-task-title"><span class="cal-task-kind ${isEvent ? "is-event" : "is-todo"}">${kindLabel}</span>${docBadge}${it.rrule ? "↻ " : ""}${escape(it.summary || t("(无标题)"))}
       ${prio}</div>
     <div class="cal-task-meta">
       <span class="${overdue ? "cal-task-overdue" : ""}">${dueText}</span>
@@ -417,7 +419,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
       // 区分「筛选下没东西」与「筛选有、被搜索过滤光了」——
       // 后者若也报「暂无任务」，用户会以为数据没了。
       const q = searchQuery();
-      return `<div class="cal-task-empty">${q ? `没有匹配「${escape(q)}」的任务` : "该筛选下暂无任务"}</div>`;
+      return `<div class="cal-task-empty">${q ? `${t("没有匹配「")}${escape(q)}${t("」的任务")}` : t("该筛选下暂无任务")}</div>`;
     }
     /**
      * 只返回列表**内层**内容；外层 `.cal-task-list` 由模板提供。
@@ -437,7 +439,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
 <div class="cal-task-group" data-group="${g.key}">
   <div class="cal-task-group-head" data-toggle-group="${g.key}" role="button" tabindex="0"
        style="--group-color:${g.color}"
-       aria-expanded="${collapsed ? "false" : "true"}" title="${collapsed ? "展开" : "折叠"}">
+       aria-expanded="${collapsed ? "false" : "true"}" title="${collapsed ? t("展开") : t("折叠")}">
     <span class="cal-task-group-caret" aria-hidden="true">${caret}</span>
     <span class="cal-task-group-dot" style="background:${g.color}"></span>
     <span class="cal-task-group-label">${g.label}</span>
@@ -461,13 +463,13 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     return g ? todos.filter(g.match).length : 0;
   };
   const statHtml = [
-    { cls: "cal-stat-total", label: "待办", n: undone.length },
-    { cls: "cal-stat-today", label: "今日", n: countBy("today") },
-    { cls: "cal-stat-overdue", label: "逾期", n: countBy("overdue") },
+    { cls: "cal-stat-total", label: t("待办"), n: undone.length },
+    { cls: "cal-stat-today", label: t("今日"), n: countBy("today") },
+    { cls: "cal-stat-overdue", label: t("逾期"), n: countBy("overdue") },
     // 「未来」= 明天之后的全部未完成（明天 / 本周 / 下周后 三组合并）
-    { cls: "cal-stat-future", label: "未来", n: undone.filter((t) => t.due !== "" && t.due > today).length },
-    { cls: "cal-stat-nodate", label: "无日期", n: undone.filter((t) => t.due === "").length },
-    { cls: "cal-stat-done", label: "已完成", n: countBy("done") }
+    { cls: "cal-stat-future", label: t("未来"), n: undone.filter((t) => t.due !== "" && t.due > today).length },
+    { cls: "cal-stat-nodate", label: t("无日期"), n: undone.filter((t) => t.due === "").length },
+    { cls: "cal-stat-done", label: t("已完成"), n: countBy("done") }
   ]
     .map((s) => `<div class="cal-task-stat ${s.cls}"><b>${s.n}</b><span>${s.label}</span></div>`)
     .join("");
@@ -479,18 +481,18 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   viewEl.innerHTML = `
 <div class="cal-task-view">
   <div class="cal-task-filterbar">
-    <select class="cal-task-filter" data-filter title="按条件筛选">${optsHtml}</select>
-    <input class="caldav-input cal-task-quick" placeholder="快速添加待办，回车保存（默认今天）…" data-quickadd/>
+    <select class="cal-task-filter" data-filter title="${t("按条件筛选")}">${optsHtml}</select>
+    <input class="caldav-input cal-task-quick" placeholder="${t("快速添加待办，回车保存（默认今天）…")}" data-quickadd/>
     <!--
-      搜索框（2026-10-09 雄哥要求）：原先搜索框在左侧 Dock 里，
-      但Dock 只显示少量条目、在那儿搜等于「搜一个看不见全貌的列表」。
-      挪到任务视图 —— 这里才是完整清单，搜到了立刻看得见。
-      宽度按 2:1 分给快速添加（flex:2）与搜索（flex:1）：
-      快速添加是高频操作、需要能看清标题全文；搜索是「临时过滤」用途。
+      ${t("搜索框（")}2026-10-09 ${t("雄哥要求）：原先搜索框在左侧")} Dock ${t("里，")}
+      ${t("但")}Dock ${t("只显示少量条目、在那儿搜等于「搜一个看不见全貌的列表」。")}
+      ${t("挪到任务视图")} ${t("——")} ${t("这里才是完整清单，搜到了立刻看得见。")}
+      ${t("宽度按")} 2:1 ${t("分给快速添加（")}flex:2${t("）与搜索（")}flex:1${t("）：")}
+      ${t("快速添加是高频操作、需要能看清标题全文；搜索是「临时过滤」用途。")}
     -->
     <span class="cal-task-searchwrap">
       <span class="cal-task-search-icon">${icons.search}</span>
-      <input class="caldav-input cal-task-search" placeholder="搜索..." data-task-search
+      <input class="caldav-input cal-task-search" placeholder="${t("搜索")}..." data-task-search
              value="${escape(searchQuery())}" />
     </span>
   </div>

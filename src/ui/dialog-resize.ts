@@ -3,6 +3,8 @@
  */
 import type { Dialog } from "siyuan";
 import { isMobile } from "./device";
+import { t } from "../core/i18n";
+
 
 export function enableDialogResize(dialog: Dialog): void {
   const root = dialog.element as HTMLElement;
@@ -19,7 +21,7 @@ export function enableDialogResize(dialog: Dialog): void {
 
   const handle = document.createElement("div");
   handle.className = "caldav-resize";
-  handle.title = "拖动调整窗口大小";
+  handle.title = t("拖动调整窗口大小");
   handle.innerHTML =
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">' +
     '<path d="M11 5 L13 7"/><path d="M8 8 L13 13"/><path d="M5 11 L9 15"/></svg>';

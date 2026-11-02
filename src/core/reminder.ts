@@ -11,6 +11,8 @@
 import type { CalItem } from "./types";
 import { occurrencesInRange } from "./ics";
 import { parseLocalStamp, stampOfMs } from "./date";
+import { t as _t } from "./i18n";
+
 
 /** 最多提前排程的 horizon，超过的等 rescan 推进 */
 const HORIZON_MS = 24 * 86400000;
@@ -130,7 +132,7 @@ export class ReminderEngine {
     if (want.size !== this.lastLogged) {
       this.lastLogged = want.size;
       console.info(
-        `[caldav] 提醒排程 ${want.size} 条（本地带提醒时间的条目 ${this.armedCount()} 个）`
+        `[caldav] ${_t("提醒排程")} ${want.size} ${_t("条（本地带提醒时间的条目")} ${this.armedCount()} ${_t("个）")}`
       );
     }
   }

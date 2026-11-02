@@ -3,6 +3,8 @@
  * 不 import "siyuan"，以便在 Node 测试环境独立运行
  */
 import { buildDigestAuthorization, parseDigestChallenge, type DigestCred } from "./digest";
+import { t } from "./i18n";
+
 
 export interface HttpResult {
   status: number;
@@ -192,7 +194,7 @@ async function viaProxy(url: string, opts: HttpOptions): Promise<HttpResult> {
       signal: ctrl.signal
     });
     const data: any = await res.json();
-    if (data.code !== 0) throw new Error("内核代理失败: " + (data.msg || JSON.stringify(data)));
+    if (data.code !== 0) throw new Error(t("内核代理失败: {0}", (data.msg || JSON.stringify(data))));
     const d = data.data || {};
     const body = typeof d.body === "string" ? d.body : d.body?.content ?? "";
     // 二进制响应（responseEncoding=base64）：内核回传 base64 串，解码成字节。

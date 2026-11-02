@@ -34,22 +34,24 @@ import type { CalSettings, DockFilterKey, TaskFilterKey } from "../core/types";
  * 哪天往下拉里加一项，设置页就会静默少一个选项（这种漂移最不容易被发现）。
  */
 export const DOCK_FILTER_OPTIONS: Array<{ key: DockFilterKey; label: string }> = [
+  { key: "allitems", label: "所有" },
   { key: "next7", label: "未来七天" },
-  { key: "today", label: "今日任务" },
-  { key: "tomorrow", label: "明日任务" },
-  { key: "thisweek", label: "本周任务" },
-  { key: "future", label: "未来任务" },
-  { key: "overdue", label: "过期任务" },
+  { key: "today", label: "今日" },
+  { key: "tomorrow", label: "明日" },
+  { key: "thisweek", label: "本周" },
+  { key: "future", label: "未来" },
+  { key: "overdue", label: "过期" },
   { key: "past7", label: "过去七天" },
   { key: "undone", label: "所有未完成" },
-  { key: "nodate", label: "无日期任务" },
+  { key: "nodate", label: "无日期" },
   { key: "doneToday", label: "今日已完成" },
   { key: "doneYesterday", label: "昨日已完成" },
-  { key: "done", label: "已完成" }
+  { key: "done", label: "已完成" },
+  { key: "cancelled", label: "作废" }
 ];
 
 export const TASK_FILTER_OPTIONS: Array<{ key: TaskFilterKey; label: string }> = [
-  { key: "allitems", label: "所有项目" },
+  { key: "allitems", label: "所有" },
   { key: "today", label: "今日" },
   { key: "tomorrow", label: "明日" },
   { key: "next7", label: "未来七天" },
@@ -61,7 +63,8 @@ export const TASK_FILTER_OPTIONS: Array<{ key: TaskFilterKey; label: string }> =
   { key: "nodate", label: "无日期" },
   { key: "todaydone", label: "今日已完成" },
   { key: "yesterdaydone", label: "昨日已完成" },
-  { key: "doneall", label: "已完成" }
+  { key: "doneall", label: "已完成" },
+  { key: "cancelled", label: "作废" }
 ];
 
 /** key → 文案（给「每项自带 match 函数」的任务视图 filters 用） */
@@ -75,16 +78,16 @@ export const TASK_FILTER_LABEL: Record<TaskFilterKey, string> = Object.fromEntri
 
 /** 全部合法 Dock 筛选键（与 ui/panel.ts DOCK_FILTERS 一一对应） */
 export const VALID_DOCK: readonly DockFilterKey[] = [
-  "today", "tomorrow", "next7", "thisweek", "future",
+  "allitems", "today", "tomorrow", "next7", "thisweek", "future",
   "overdue", "past7", "undone", "nodate",
-  "doneToday", "doneYesterday", "done"
+  "doneToday", "doneYesterday", "done", "cancelled"
 ];
 
 /** 全部合法任务视图筛选键（与 ui/view-task.ts filters 一一对应） */
 export const VALID_TASK: readonly TaskFilterKey[] = [
   "allitems", "today", "tomorrow", "next7", "thisweek", "future",
   "overdue", "past7", "allincomplete", "nodate",
-  "todaydone", "yesterdaydone", "doneall"
+  "todaydone", "yesterdaydone", "doneall", "cancelled"
 ];
 
 /** 无记录时 Dock 的初始筛选（雄哥要求：由「未来七天」改为「所有未完成」） */

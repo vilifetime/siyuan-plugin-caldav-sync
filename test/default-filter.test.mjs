@@ -147,8 +147,8 @@ t("配置里带着 lastTaskFilter 时照样生效", () => {
 
 // ⑦ 选项表与两个下拉同源（防漂移）
 t("Dock 选项表 12 项、任务视图 13 项，且都有文案", () => {
-  assert.strictEqual(P.DOCK_FILTER_OPTIONS.length, 12);
-  assert.strictEqual(P.TASK_FILTER_OPTIONS.length, 13);
+  assert.strictEqual(P.DOCK_FILTER_OPTIONS.length, 14);
+  assert.strictEqual(P.TASK_FILTER_OPTIONS.length, 14);
   for (const o of P.DOCK_FILTER_OPTIONS) assert.ok(o.label, `Dock ${o.key} 缺文案`);
   for (const o of P.TASK_FILTER_OPTIONS) assert.ok(o.label, `Task ${o.key} 缺文案`);
 });

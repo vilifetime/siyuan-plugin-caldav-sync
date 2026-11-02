@@ -125,7 +125,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   // label 统一取自 ui/filter-pref.ts 的 TASK_FILTER_LABEL（与设置页共用一份）。
   // 每项的 match 是各自的判据，抽不走，只能就地写。
   const filters: TaskFilter[] = [
-    // 「所有项目」= 不做任何过滤（含已完成 / 作废）。
+    // 「所有」= 不做任何过滤（含已完成 / 作废）。
     { key: "allitems", label: TASK_FILTER_LABEL.allitems, match: () => true },
     { key: "today", label: TASK_FILTER_LABEL.today, match: (r) => !isCancelled(r) && !isDone(r) && r.due === today },
     { key: "tomorrow", label: TASK_FILTER_LABEL.tomorrow, match: (r) => !isCancelled(r) && !isDone(r) && r.due === tomorrow },
@@ -150,7 +150,8 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     { key: "nodate", label: TASK_FILTER_LABEL.nodate, match: (r) => !isCancelled(r) && !isDone(r) && !r.due },
     { key: "todaydone", label: TASK_FILTER_LABEL.todaydone, match: ({ it }) => it.status !== "CANCELLED" && completedOn(it, today) },
     { key: "yesterdaydone", label: TASK_FILTER_LABEL.yesterdaydone, match: ({ it }) => it.status !== "CANCELLED" && completedOn(it, yesterday) },
-    { key: "doneall", label: TASK_FILTER_LABEL.doneall, match: (r) => isDone(r) && !isCancelled(r) }
+    { key: "doneall", label: TASK_FILTER_LABEL.doneall, match: (r) => isDone(r) && !isCancelled(r) },
+    { key: "cancelled", label: TASK_FILTER_LABEL.cancelled, match: (r) => isCancelled(r) }
   ];
 
   // 收集启用日历下的条目。默认只有待办（VTODO）；

@@ -125,7 +125,7 @@ assert.strictEqual(catPopEl.hidden, true, "点 Dock 与弹层之外的区域应�
 // 筛选下拉必须是自定义控件：原生 <select> 的弹出列表由系统绘制，选中色永远是系统高亮色，
 // 无法随主题变化（option:hover / :checked 会被浏览器忽略）。
 assert.ok(!dockEl.querySelector("select[data-dock='filter']"), "筛选下拉不应再用原生 select");
-assert.strictEqual(dockEl.querySelectorAll("[data-dock-filter]").length, 12, "筛选下拉应有 12 个自定义选项");
+assert.strictEqual(dockEl.querySelectorAll("[data-dock-filter]").length, 14, "筛选下拉应有 14 个自定义选项");
 
 /** 选择某个筛选：先展开下拉，再点选项（与用户实际操作一致） */
 const pickDockFilter = (key) => {
@@ -196,7 +196,7 @@ assert.ok(/无日期待办/.test(nodateHint.textContent || ""), "提示文案应
 click(nodateHint);
 assert.strictEqual(
   dockEl.querySelector(".caldav-dock-select-text").textContent,
-  "无日期任务",
+  "无日期",
   "点击提示应切到「无日期」筛选（触发按钮文案同步）"
 );
 assert.ok(

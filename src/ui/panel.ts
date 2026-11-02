@@ -1137,9 +1137,15 @@ export function renderDockPanel(
      *  - 待办：命中窗口，或者「已过期且未完成」（没完成的过期任务照样显示）
      *  - 事件：命中窗口，且尚未结束（当前时间以前的不显示）
      */
-    const inWindow = (hit: boolean): boolean => (isTodo ? hit || overdue : hit && !ended);
+    // 作废项（CANCELLED）只在「所有」/「作废」两个筛选里出现，其余时间窗 /
+    // 完成态筛选一律排除 —— 与任务视图 filters 口径统一（view-task.ts）。
+    const isCancelled = it.status === "CANCELLED";
+    const inWindow = (hit: boolean): boolean =>
+      (isTodo ? hit || overdue : hit && !ended) && !isCancelled;
 
     switch (filter) {
+      case "allitems":
+        return true;
       case "today":
         return inWindow(date === today);
       case "tomorrow":
@@ -1151,20 +1157,22 @@ export function renderDockPanel(
       case "future":
         return inWindow(diff >= 0);
       case "overdue":
-        return overdue;
+        return overdue && !isCancelled;
       case "past7":
         // 回顾用：保留过去 7 天（含已经结束的事件），不套用 inWindow
-        return diff >= -6 && diff < 0;
+        return diff >= -6 && diff < 0 && !isCancelled;
       case "undone":
-        return isTodo && !isDone;
+        return isTodo && !isDone && !isCancelled;
       case "nodate":
-        return isTodo && !date;
+        return isTodo && !date && !isCancelled;
       case "doneToday":
-        return isDone && !!it.completedAt && it.completedAt.slice(0, 10) === today;
+        return isDone && !isCancelled && !!it.completedAt && it.completedAt.slice(0, 10) === today;
       case "doneYesterday":
-        return isDone && !!it.completedAt && it.completedAt.slice(0, 10) === addDays(today, -1).slice(0, 10);
+        return isDone && !isCancelled && !!it.completedAt && it.completedAt.slice(0, 10) === addDays(today, -1).slice(0, 10);
       case "done":
-        return isDone;
+        return isDone && !isCancelled;
+      case "cancelled":
+        return isCancelled;
       default:
         return true;
     }

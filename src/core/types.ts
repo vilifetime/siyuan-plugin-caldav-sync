@@ -625,15 +625,15 @@ export interface CalSettings {
  * 要引用它，而 core 不能反向依赖 ui（会成环）。SortMode 同理早已放这里。
  */
 export type DockFilterKey =
-  | "today" | "tomorrow" | "next7" | "thisweek" | "future"
+  | "allitems" | "today" | "tomorrow" | "next7" | "thisweek" | "future"
   | "overdue" | "past7" | "undone" | "nodate"
-  | "doneToday" | "doneYesterday" | "done";
+  | "doneToday" | "doneYesterday" | "done" | "cancelled";
 
 /** 任务视图筛选下拉的全部键（见 ui/view-task.ts filters） */
 export type TaskFilterKey =
   | "allitems" | "today" | "tomorrow" | "next7" | "thisweek" | "future"
   | "overdue" | "past7" | "allincomplete" | "nodate"
-  | "todaydone" | "yesterdaydone" | "doneall";
+  | "todaydone" | "yesterdaydone" | "doneall" | "cancelled";
 
 /** 「默认筛选」设置的全部取值：上次使用项 + 该下拉自己的全部键 */
 export type DefaultFilterSetting<K extends string> = "last" | K;

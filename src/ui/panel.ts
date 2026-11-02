@@ -59,6 +59,12 @@ export interface PanelCtx {
    * 用户会觉得「点了没生效」。故由设置页显式调一次。
    */
   refreshPanels?: () => void;
+  /**
+   * 延迟重排序：状态变为终态（完成 / 作废）或反向变更后，先就地显示勾圈，
+   * 再延迟 3 秒重排把条目移入对应分组，避免勾选刹那条目从原分组跳走打断浏览。
+   * 由 renderPanel 注入具体实现（内部用 suppressRerender 抑制期间重排）。
+   */
+  deferResort?: () => void;
   unsaved: Set<string>; // 面板实例 key，防重复渲染
   viewMode: ViewMode;
   /**
@@ -600,6 +606,23 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
   // 勾选待办时就地更新可见视图，抑制本次 store 变更触发的整视图重渲染
   // （否则会闪烁、且周/日视图滚动位置被重置到默认当前时间）
   let suppressRerender = false;
+
+  // 延迟重排序：勾选完成 / 改为作废（及其反向）后，先就地显示勾圈（即时），
+  // 再延迟 3 秒重排，把条目平滑移入「已完成 / 已作废」分组，避免勾选刹那
+  // 条目从原分组跳走打断浏览（雄哥 2026-11-02 要求）。期间用 suppressRerender
+  // 抑制 store 驱动的整视图重排，定时到点才放行并 renderAll。
+  let resortTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleDeferredResort(): void {
+    suppressRerender = true;
+    if (resortTimer) clearTimeout(resortTimer);
+    resortTimer = setTimeout(() => {
+      resortTimer = null;
+      suppressRerender = false;
+      renderAll();
+    }, 3000);
+  }
+  // 挂到 ctx 上，供编辑器「作废」等其它状态变更入口复用同一套延迟重排。
+  ctx.deferResort = scheduleDeferredResort;
   function updateTodoCheckDOM(root: HTMLElement, key: string, done: boolean): void {
     root
       .querySelectorAll<HTMLElement>(`[data-toggle="${key}"]`)
@@ -665,13 +688,10 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
         const taskEl = toggleEl.closest(".cal-task") as HTMLElement | null;
         taskEl?.classList.toggle("is-cancelled", item.status === "CANCELLED");
         patchListRowStatus(toggleEl, item);
-        suppressRerender = true;
-        // 兜底：万一同步 promise 一直挂着（网络挂起/等待解锁），最多抑制 10s，
-        // 否则界面从此再也不刷新，表现出来就是「点了没反应」。
-        const guard = setTimeout(() => (suppressRerender = false), 10000);
+        // 先就地显示勾圈（即时，见 updateTodoCheckDOM / patchListRowStatus），
+        // 再延迟 3 秒重排：把条目移入「已完成 / 已作废」分组，不立刻跳走。
+        scheduleDeferredResort();
         void ctx.sync.updateItem(item).finally(() => {
-          clearTimeout(guard);
-          suppressRerender = false;
           // 同步收尾后按 store 里的真实状态校正一次：上面那次是乐观更新，
           // 若推送失败/被服务端覆盖而界面停留在乐观值，用户会以为「点了没用」。
           const real = ctx.store.get(key);

@@ -1410,6 +1410,9 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
     try {
       it.status = "CANCELLED";
       const saved = collect(ctx, el, it, attachList);
+      // 先抑制 store 驱动的立即重排，让条目延迟 3 秒平滑移入「已作废」分组，
+      // 而非保存刹那立即跳走（与任务视图勾选完成的延迟入组一致）。
+      ctx.deferResort?.();
       void (isNew ? ctx.sync.createItem(saved) : ctx.sync.updateItem(saved)).catch((e) => {
         console.warn("[caldav] 作废后的后台上传失败:", e);
       });

@@ -798,6 +798,27 @@ assert.ok(
   );
 }
 
+// 反回归：勾选完成 / 改为作废后，延迟 3 秒才重排把条目移入「已完成 / 已作废」分组，
+// 而非勾选刹那立即跳走（雄哥 2026-11-02 要求）。toggle 分支须调用 scheduleDeferredResort，
+// 编辑器「作废」按钮须调用 ctx.deferResort。
+{
+  const panelSrc2 = fs.readFileSync(path.join(ROOT, "src/ui/panel.ts"), "utf8");
+  assert.ok(/function scheduleDeferredResort\(\)/.test(panelSrc2), "panel.ts 应定义 scheduleDeferredResort");
+  assert.ok(
+    /scheduleDeferredResort\(\);\s*void ctx\.sync\.updateItem/.test(panelSrc2),
+    "勾选待办分支应调用 scheduleDeferredResort（延迟 3 秒重排，而非立即跳走）"
+  );
+  assert.ok(
+    /renderAll\(\);\s*\}\s*,\s*3000\s*\);/.test(panelSrc2),
+    "scheduleDeferredResort 应延迟 3000ms 后 renderAll 重排入组"
+  );
+  const editorSrc = fs.readFileSync(path.join(ROOT, "src/ui/editor.ts"), "utf8");
+  assert.ok(
+    /ctx\.deferResort\?\.\(\)/.test(editorSrc),
+    "编辑器「作废」按钮应调用 ctx.deferResort（延迟 3 秒移入已作废组）"
+  );
+}
+
 // ---- 「日历视图中显示待办任务」开关：关掉后日历视图只留日程，任务视图不受影响 ----
 // 关键字形：主键 keyOf() 产出 "<uid>"（重复实例 "<uid>|<recurId>"，不含 kind），
 // chip 上用 data-kind 标种类，按它选 kind。

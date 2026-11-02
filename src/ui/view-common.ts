@@ -4,6 +4,7 @@ import { DEFAULT_CATEGORIES, calEventColor, calTodoColor, findCalendarByUrl } fr
 import type { PanelCtx } from "./panel";
 import { occurrencesInRange } from "../core/ics";
 import { parseLocalStamp, stampOfMs } from "../core/date";
+import { stateOfStatus, STATUS_CANCELLED, type TaskState } from "../core/task-state";
 import { chinaCalendarEnabled, holidayFor, lunarFor } from "../core/holiday-cn";
 
 export interface ViewArgs {
@@ -33,6 +34,27 @@ export function todoDueOccurrences(it: CalItem, startMs: number, endMs: number):
 export function keyOfItem(it: CalItem): string {
   // 与 core/store.ts 的 keyOf 保持同一口径（主键不含 kind，日程↔待办互转才能覆盖同一条目）
   return it.recurId ? `${it.uid}|${it.recurId}` : it.uid;
+}
+
+/**
+ * 从一条日历条目（含事件）推导四态，用于 UI 状态展示（列表/任务视图的状态前缀等）。
+ *
+ * - 待办：直接走 `stateOfStatus`（STATUS + PERCENT-COMPLETE → 四态）。
+ * - 事件：被作废（STATUS:CANCELLED）才是「已作废」；否则按是否过期判「已完成 / 未开始」
+ *   （与任务视图「过期日程归入已完成」的口径一致）。
+ *
+ * `nowMs` 仅用于事件过期判定，便于测试注入固定时刻。
+ */
+export function stateOfItem(it: CalItem, nowMs?: number): TaskState {
+  if (it.kind === "todo") return stateOfStatus(it.status, it.percent);
+  if (it.status === STATUS_CANCELLED) return "canceled";
+  const now = nowMs ?? Date.now();
+  const endMs = it.end
+    ? parseLocalStamp(it.end).getTime()
+    : it.start
+    ? parseLocalStamp(it.start).getTime()
+    : 0;
+  return endMs && endMs < now ? "done" : "todo";
 }
 
 /**

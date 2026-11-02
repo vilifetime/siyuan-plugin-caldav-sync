@@ -519,6 +519,11 @@ function editorHtml(
   <div class="caldav-tabs">
     <button class="caldav-tab is-active" data-tab="basic">${isTodo ? "任务设置" : "日程设置"}</button>
     <button class="caldav-tab" data-tab="note">${isTodo ? "备注附件" : "日程备注"}</button>
+    ${
+      // 「文档任务块信息」页签：**只有**由文档任务块映射来的待办才显示（判据 = item.blockId）。
+      // 普通待办没有 Block ID，多一个空页签只会让人以为同步坏了。
+      isTodo && it.blockId ? `<button class="caldav-tab" data-tab="block">文档任务块信息</button>` : ""
+    }
   </div>
 </div>
 
@@ -765,12 +770,29 @@ function editorHtml(
         : ""
     }
   </div>
+  ${
+    isTodo && it.blockId
+      ? `<div class="caldav-tab-panel" data-panel="block" style="display:none">
+    <div class="caldav-section caldav-section--card">
+      <div class="caldav-section-title"><span class="caldav-section-icon">${icons.doc}</span>文档任务块信息</div>
+      <div class="caldav-blkinfo" data-block-detail>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">笔记本名称</span><span class="caldav-blkinfo-v" data-bk="nb">读取中…</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">文档名称</span><span class="caldav-blkinfo-v" data-bk="doc">读取中…</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">任务块名称</span><span class="caldav-blkinfo-v" data-bk="text">读取中…</span></div>
+        <div class="caldav-blkinfo-row"><span class="caldav-blkinfo-k">任务块 ID</span><span class="caldav-blkinfo-v caldav-blkinfo-v--mono" data-bk="id">${escape(it.blockId)}</span></div>
+      </div>
+      <p class="caldav-set-hint" data-block-detail-hint>只读，改内容请回文档里改；下一轮同步会把改动带到服务端。</p>
+    </div>
+  </div>`
+      : ""
+  }
 </div>
 
 <div class="caldav-editor-foot">
   <div class="caldav-editor-error" data-error></div>
   ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--danger" data-action="delete">${icons.trash} 删除</button>` : ""}
-  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--convert" data-action="convert" title="转换为${it.kind === "todo" ? "日程" : "待办"}">${it.kind === "todo" ? icons.calendar + " 转为日程" : icons.tasks + " 转为待办"}</button>` : ""}
+  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--void" data-action="void" title="标记为已作废（CANCELLED 状态）">${icons.ban} 作废</button>` : ""}
+  ${!isNew ? `<button type="button" class="caldav-foot-btn caldav-foot-btn--convert" data-action="convert" title="转换为${it.kind === "todo" ? "日程" : "待办"}">${it.kind === "todo" ? icons.calendar + " 转日程" : icons.tasks + " 转待办"}</button>` : ""}
   <span class="caldav-flex"></span>
   <button type="button" class="caldav-foot-btn caldav-foot-btn--ghost" data-action="cancel">${icons.close} 取消</button>
   <button type="button" class="caldav-foot-btn caldav-foot-btn--primary" data-action="save">${icons.check} 保存</button>
@@ -794,6 +816,37 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       });
     });
   });
+
+  // ---- 「文档任务块信息」页签（仅块来源待办；2026-10-31）----
+  // 只读展示归属：笔记本 / 文档 / 块文字 / 块 ID。数据在打开弹窗后**异步**去内核取
+  // （弹窗是同步渲染的，等它取完再开窗会让点击有卡顿感）。
+  const detailEl = el.querySelector<HTMLElement>("[data-block-detail]");
+  if (detailEl && it.blockId) {
+    const hintEl = el.querySelector<HTMLElement>("[data-block-detail-hint]");
+    const setVal = (key: string, val: string): void => {
+      const n = detailEl.querySelector<HTMLElement>(`[data-bk="${key}"]`);
+      if (n) n.textContent = val;
+    };
+    const done = (d?: { notebookName?: string; docTitle?: string; text?: string; id?: string }): void => {
+      setVal("nb", d?.notebookName || "—");
+      setVal("doc", d?.docTitle || "—");
+      // 块文字取不到时退回同步时缓存的 blockText，别留空白让人以为坏了
+      setVal("text", d?.text || it.blockText || "—");
+      if (!d && hintEl) {
+        hintEl.textContent = "读不到这个块了 —— 它可能已被删除（或不在可访问范围内）。";
+        detailEl.classList.add("is-missing");
+      }
+    };
+    if (ctx.blockDetail) {
+      ctx
+        .blockDetail(it.blockId)
+        .then((d) => done(d || undefined))
+        .catch(() => done(undefined));
+    } else {
+      // 没注入内核入口（如单测环境）：至少把已知信息显示出来
+      done({ text: it.blockText });
+    }
+  }
 
   // ---- 附件区（仅待办；2026-10-14）----
   // 提到外层：保存时（collectItem）要读它，而附件区只在待办下渲染。
@@ -1215,7 +1268,11 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
   // 进度
   const percent = el.querySelector('[data-f="percent"]') as HTMLInputElement | null;
   percent?.addEventListener("input", () => {
-    (el.querySelector(".caldav-progress-val") as HTMLElement).textContent = percent.value + "%";
+    const v = +percent.value;
+    (el.querySelector(".caldav-progress-val") as HTMLElement).textContent = v + "%";
+    // 拖动进度即视为「取消作废」：清除 CANCELLED 终态，按进度回算 NEEDS-ACTION/IN-PROCESS/COMPLETED。
+    it.percent = v;
+    it.status = v === 100 ? "COMPLETED" : v > 0 ? "IN-PROCESS" : "NEEDS-ACTION";
   });
 
   // 把识别结果写入日期/时间字段并同步显示
@@ -1344,6 +1401,23 @@ function bindEvents(ctx: PanelCtx, dialog: Dialog, el: HTMLElement, it: CalItem,
       errEl.textContent = e?.message || String(e);
     }
   });
+
+  // 作废：标记为 CANCELLED 并立即保存关闭。不做二次确认 —— 它只是状态变更（与删除不同，
+  // 可重新编辑恢复），且「删除」已有自己的二次确认。先收集当前表单保留未保存编辑，
+  // 再强制 status=CANCELLED；collect 内部对 todo 会保持该终态（percent 归零、不按百分比回算），
+  // 对 event 则原样保留（事件分支不碰 status，并在 ics.ts 里按需写出 STATUS:CANCELLED）。
+  el.querySelector('[data-action="void"]')?.addEventListener("click", () => {
+    try {
+      it.status = "CANCELLED";
+      const saved = collect(ctx, el, it, attachList);
+      void (isNew ? ctx.sync.createItem(saved) : ctx.sync.updateItem(saved)).catch((e) => {
+        console.warn("[caldav] 作废后的后台上传失败:", e);
+      });
+      dialog.destroy();
+    } catch (e: any) {
+      errEl.textContent = e?.message || String(e);
+    }
+  });
 }
 
 function collectRepeat(el: HTMLElement): Recurrence {
@@ -1464,10 +1538,17 @@ function collect(ctx: PanelCtx, el: HTMLElement, it: CalItem, attachList?: CalAt
   }
   if (it.kind === "todo") {
     it.priority = +f("priority").value || 0;
-    it.percent = Math.min(100, Math.max(0, +f("percent").value || 0));
-    it.status = it.percent === 100 ? "COMPLETED" : it.percent > 0 ? "IN-PROCESS" : "NEEDS-ACTION";
-    if (it.percent === 100 && !it.completedAt) it.completedAt = stampNow();
-    if (it.percent < 100) it.completedAt = undefined;
+    // ⚠️「作废」(CANCELLED) 是终态：一旦进入，进度归零且不被百分比重算覆盖。
+    // 这同时修了一个潜在 bug —— 打开一条已作废的待办、不碰进度直接保存，
+    // 旧逻辑会按 percent=0 把它重算成 NEEDS-ACTION，把「放弃」偷偷改回「待办」。
+    if (it.status === "CANCELLED") {
+      it.percent = 0;
+    } else {
+      it.percent = Math.min(100, Math.max(0, +f("percent").value || 0));
+      it.status = it.percent === 100 ? "COMPLETED" : it.percent > 0 ? "IN-PROCESS" : "NEEDS-ACTION";
+      if (it.percent === 100 && !it.completedAt) it.completedAt = stampNow();
+      if (it.percent < 100) it.completedAt = undefined;
+    }
   }
   return it;
 }

@@ -1130,7 +1130,10 @@ assert.ok(!document.querySelector(".caldav-editor"), "保存成功后编辑弹�
 {
   const nd = new Date();
   const pad = (n) => (n < 10 ? "0" + n : String(n));
-  const tomorrowStamp = `${nd.getFullYear()}-${pad(nd.getMonth() + 1)}-${pad(nd.getDate() + 1)}`;
+  // ⚠️ 别写 `getDate() + 1`：跨月（今天 31 号）会算出 `2026-10-32` 这种不存在的日期，
+  //    格子永远造不出来 → 本段退化成「假失败」（2026-10-31 全量测试实测踩到）。
+  const tmr = new Date(nd.getTime() + 24 * 3600 * 1000);
+  const tomorrowStamp = `${tmr.getFullYear()}-${pad(tmr.getMonth() + 1)}-${pad(tmr.getDate())}`;
   for (let i = 0; i < 5; i++) {
     plugin.store.put({
       uid: `bulk-${i}@test`,

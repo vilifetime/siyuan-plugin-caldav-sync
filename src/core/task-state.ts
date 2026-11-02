@@ -29,8 +29,19 @@
  * 【自定义任务状态怎么归类】
  *   思源允许用户自定义任意单字符的状态（如 `- [!]`）。VTODO 没有对应的值，
  *   只能归到「待办」（NEEDS-ACTION）—— 这是**最保守**的归法：既不会把未完成
- *   说成完成，也不会把完成说成未完成。插件也**不会**去改写这类块的 marker
- *   （状态没变就不写回，见 `mergeServerState`）。
+ *   说成完成，也不会把完成说成未完成。
+ *
+ * 【⚠️ 双向如实同步，没有「单向保险」（2026-11-01 雄哥拍板）】
+ *   曾经这里有一套 `mergeServerState` / `canWriteState`：服务端「未完成」**永不**
+ *   取消已勾好的块，只允许「向前推进」。那是 2026-10-30 那次 60 个块被批量取消
+ *   勾选之后加的**临时保险** —— 但那次事故的**真因不是服务端乱改**，而是插件自己
+ *   带 `If-Match` 更新撞上 412、按冲突策略丢了本地改动（见 store.ts 注释与
+ *   test/blocksync.test.mjs 的源码级断言）。真因修掉之后，这条保险就成了
+ *   「该同步的没同步」：手机上取消完成，思源里永远是勾着的。
+ *
+ *   所以现在改成**如实双向**：服务端是什么状态，块就写成什么状态；块是什么状态，
+ *   VTODO 就写成什么状态。防误改的保险从「拦住状态方向」改为**数量告警**
+ *   （一轮改动超过阈值就弹窗让用户确认，见 core/block-sync.ts 的 confirm）。
  */
 
 /** 任务状态（四态）—— 与 VTODO 的 STATVALUE-TODO 一一对应 */
@@ -55,6 +66,19 @@ const VALID_STATUS = new Set<string>([
   STATUS_COMPLETED,
   STATUS_CANCELLED
 ]);
+
+/** 四态的中文短标签（用于列表 / 任务视图等 UI 状态前缀，「未开始 / 进行中 / 已完成 / 已作废」） */
+export const STATE_TEXT_ZH: Record<TaskState, string> = {
+  todo: "未开始",
+  "in-progress": "进行中",
+  done: "已完成",
+  canceled: "已作废"
+};
+
+/** 状态 → 中文短标签 */
+export function stateTextZh(state: TaskState): string {
+  return STATE_TEXT_ZH[state];
+}
 
 /**
  * marker → 状态。
@@ -161,33 +185,11 @@ export function withMarkerMarkdown(markdown: string, marker: string): string | n
 }
 
 /**
- * ⭐ 服务端状态能否覆盖块状态 —— **单向保险的核心**（2026-10-30 用户实测踩中过一次）。
+ * 服务端状态与块状态不同 → 以**服务端**为准（如实双向同步）。
  *
- * 规则（只允许「明确且不撤销完成」的状态推进块）：
- *   · 服务端「完成」    → 总是允许（块可以是待办/进行中/放弃）
- *   · 服务端「进行中」  → 只在块是「待办」时允许（不撤销已完成的块）
- *   · 服务端「放弃」    → 只在块是「待办/进行中」时允许（不撤销已完成的块）
- *   · 服务端「待办」    → **永远不允许**（服务端只是「没标完成」，没有更多信息；
- *                        拿它去覆盖块 = 把用户勾好的待办悄悄取消 —— 正是那次事故）
- *
- * 换句话说：**服务端只能把块往前推，不能把块往回拽。** 取消勾选只能由用户在文档里亲手做。
- * 「完成」之所以例外，是因为它不丢信息、且是终态（这也是原口径「完成优先」的由来）。
+ * ⚠️ 这里曾经是「单向保险」（只允许向前推进、不许取消完成），2026-11-01 移除。
+ *    理由见文件头：那次批量取消勾选的真因是插件自己撞 412 丢改动，不是服务端乱改；
+ *    保险反而让「手机上取消完成 → 思源里取消勾选」这条链永远走不通。
+ *    ⚠️ 移除后，误改的兜底**上移到执行层**：一轮改动条数超过告警值时先弹窗确认
+ *    （`blockSyncChangeAlert`，见 core/block-sync.ts）。
  */
-export function mergeServerState(current: TaskState, server: TaskState): TaskState {
-  if (server === "done") return "done";
-  if (server === "in-progress") return current === "todo" ? "in-progress" : current;
-  if (server === "canceled") {
-    return current === "todo" || current === "in-progress" ? "canceled" : current;
-  }
-  return current;
-}
-
-/**
- * 块状态是否允许被目标状态覆盖（结构性保险的判定口）。
- *
- * ⚠️ 这条是**函数级**的保险：回写块之前必须过这一关，哪怕将来上面的判定逻辑
- *    被改错，最坏也只是「该推进的没推进」，绝不会出现「用户勾好的待办被悄悄改掉」。
- */
-export function canWriteState(current: TaskState, target: TaskState): boolean {
-  return mergeServerState(current, target) === target;
-}

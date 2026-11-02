@@ -117,35 +117,40 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     return done(r.it) || r.expired === true;
   }
 
+  /** 「是否算作废」：状态为 CANCELLED（含待办与日程）。与 isDone 共用同一口径。 */
+  function isCancelled(r: Row): boolean {
+    return r.it.status === "CANCELLED";
+  }
+
   // label 统一取自 ui/filter-pref.ts 的 TASK_FILTER_LABEL（与设置页共用一份）。
   // 每项的 match 是各自的判据，抽不走，只能就地写。
   const filters: TaskFilter[] = [
-    // 「所有项目」= 不做任何过滤。此时列表内容与统计栏基数相同，数字必然一致。
+    // 「所有项目」= 不做任何过滤（含已完成 / 作废）。
     { key: "allitems", label: TASK_FILTER_LABEL.allitems, match: () => true },
-    { key: "today", label: TASK_FILTER_LABEL.today, match: (r) => !isDone(r) && r.due === today },
-    { key: "tomorrow", label: TASK_FILTER_LABEL.tomorrow, match: (r) => !isDone(r) && r.due === tomorrow },
+    { key: "today", label: TASK_FILTER_LABEL.today, match: (r) => !isCancelled(r) && !isDone(r) && r.due === today },
+    { key: "tomorrow", label: TASK_FILTER_LABEL.tomorrow, match: (r) => !isCancelled(r) && !isDone(r) && r.due === tomorrow },
     {
       key: "next7",
       label: TASK_FILTER_LABEL.next7,
-      match: (r) => !isDone(r) && r.due > tomorrow && r.due <= in7
+      match: (r) => !isCancelled(r) && !isDone(r) && r.due > tomorrow && r.due <= in7
     },
     {
       key: "thisweek",
       label: TASK_FILTER_LABEL.thisweek,
-      match: (r) => !isDone(r) && r.due >= weekStart && r.due <= weekEnd
+      match: (r) => !isCancelled(r) && !isDone(r) && r.due >= weekStart && r.due <= weekEnd
     },
-    { key: "future", label: TASK_FILTER_LABEL.future, match: (r) => !isDone(r) && r.due > in7 },
-    { key: "overdue", label: TASK_FILTER_LABEL.overdue, match: (r) => !isDone(r) && !!r.due && r.due < today },
+    { key: "future", label: TASK_FILTER_LABEL.future, match: (r) => !isCancelled(r) && !isDone(r) && r.due > in7 },
+    { key: "overdue", label: TASK_FILTER_LABEL.overdue, match: (r) => !isCancelled(r) && !isDone(r) && !!r.due && r.due < today },
     {
       key: "past7",
       label: TASK_FILTER_LABEL.past7,
-      match: (r) => !isDone(r) && !!r.due && r.due >= past7Start && r.due < today
+      match: (r) => !isCancelled(r) && !isDone(r) && !!r.due && r.due >= past7Start && r.due < today
     },
-    { key: "allincomplete", label: TASK_FILTER_LABEL.allincomplete, match: (r) => !isDone(r) },
-    { key: "nodate", label: TASK_FILTER_LABEL.nodate, match: (r) => !isDone(r) && !r.due },
-    { key: "todaydone", label: TASK_FILTER_LABEL.todaydone, match: ({ it }) => completedOn(it, today) },
-    { key: "yesterdaydone", label: TASK_FILTER_LABEL.yesterdaydone, match: ({ it }) => completedOn(it, yesterday) },
-    { key: "doneall", label: TASK_FILTER_LABEL.doneall, match: (r) => isDone(r) }
+    { key: "allincomplete", label: TASK_FILTER_LABEL.allincomplete, match: (r) => !isCancelled(r) && !isDone(r) },
+    { key: "nodate", label: TASK_FILTER_LABEL.nodate, match: (r) => !isCancelled(r) && !isDone(r) && !r.due },
+    { key: "todaydone", label: TASK_FILTER_LABEL.todaydone, match: ({ it }) => it.status !== "CANCELLED" && completedOn(it, today) },
+    { key: "yesterdaydone", label: TASK_FILTER_LABEL.yesterdaydone, match: ({ it }) => it.status !== "CANCELLED" && completedOn(it, yesterday) },
+    { key: "doneall", label: TASK_FILTER_LABEL.doneall, match: (r) => isDone(r) && !isCancelled(r) }
   ];
 
   // 收集启用日历下的条目。默认只有待办（VTODO）；
@@ -227,13 +232,20 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
    * （避免「今天到期」这类筛选下多出一层无用标题）。
    */
   const GROUPS: { key: string; label: string; color: string; match: (r: Row) => boolean }[] = [
-    { key: "overdue", label: "逾期", color: "var(--caldav-danger)", match: (r) => !isDone(r) && r.due !== "" && r.due < today },
-    { key: "today", label: "今天", color: "#BA7517", match: (r) => !isDone(r) && r.due === today },
-    { key: "tomorrow", label: "明天", color: "#378ADD", match: (r) => !isDone(r) && r.due === tomorrow },
-    { key: "thisweek", label: "本周", color: "#1D9E75", match: (r) => !isDone(r) && r.due > tomorrow && r.due <= weekEnd },
-    { key: "later", label: "下周后", color: "#888780", match: (r) => !isDone(r) && r.due > weekEnd },
-    { key: "nodate", label: "无日期", color: "#B4B2A9", match: (r) => !isDone(r) && r.due === "" },
-    { key: "done", label: "已完成", color: "#1D9E75", match: (r) => isDone(r) }
+    { key: "overdue", label: "逾期", color: "var(--caldav-danger)", match: (r) => !isCancelled(r) && !isDone(r) && r.due !== "" && r.due < today },
+    { key: "today", label: "今天", color: "#BA7517", match: (r) => !isCancelled(r) && !isDone(r) && r.due === today },
+    { key: "tomorrow", label: "明天", color: "#378ADD", match: (r) => !isCancelled(r) && !isDone(r) && r.due === tomorrow },
+    { key: "thisweek", label: "本周", color: "#1D9E75", match: (r) => !isCancelled(r) && !isDone(r) && r.due > tomorrow && r.due <= weekEnd },
+    // ⚠️ 必须 `due > tomorrow`：今天若是周日，weekEnd === 今天，
+    //  `due > weekEnd` 会把「明天」也吞进「下周后」，导致一条待办同时出现在两个组头下。
+    //  加 `> tomorrow` 后「明天」独占那一天，其余日子因 weekEnd ≥ tomorrow 行为不变。
+    { key: "later", label: "下周后", color: "#888780", match: (r) => !isCancelled(r) && !isDone(r) && r.due > weekEnd && r.due > tomorrow },
+    { key: "nodate", label: "无日期", color: "#B4B2A9", match: (r) => !isCancelled(r) && !isDone(r) && r.due === "" },
+    // 已完成：percent === 100（或过期日程）。作废（CANCELLED）单独沉到最末的「作废」组，
+    // 这里必须显式排除，否则一条被作废的过期日程会同时落在「已完成」与「作废」两组。
+    { key: "done", label: "已完成", color: "#1D9E75", match: (r) => isDone(r) && !isCancelled(r) },
+    // 作废（CANCELLED）：含待办与日程，默认折叠、沉在最末（与「已完成」同款终端分组）。
+    { key: "cancelled", label: "已作废", color: "#9e9e9e", match: (r) => isCancelled(r) }
   ];
 
   /** 把筛选后的列表按组切分；每组内部按「日期升序 → 有优先级的在前」排 */
@@ -257,51 +269,56 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
   }
 
   /** 「已完成」被用户**显式展开**的标记 —— 解决「默认值与用户状态混在一个字段」的问题 */
-  const EXPANDED_KEY = "__none__";
-
   /**
-   * 该分组是否处于折叠态。
+   * 默认折叠的分组（首次进入任务视图时折叠，不抢注意力）：
+   * 「已完成」与「作废」都是已终结状态，沉在底部、默认收起。
    *
    * 折叠状态存 `viewEl.dataset.collapsedGroups`（逗号分隔的分组 key），
    * **所有分组一视同仁** —— 任何组都能点组头折叠 / 展开。
    *
    * ⚠️ Obsidian 侧连修三次才定型的坑，这里直接采用最终解法（别再走回头路）：
    *
-   * ① 写成 `if (gkey !== "done") return false;`（只有已完成组可折叠）——
-   *    把「已完成默认折叠」这个**默认值**错当成**权限限制**，
+   * ① 写成 `if (DEFAULT_COLLAPSED.has(gkey)) return false;`（只有默认组可折叠）——
+   *    把「默认折叠」这个**默认值**错当成**权限限制**，
    *    其他分组永远返回 false，写了状态也读不回来，等于锁死。
    *
-   * ② 只存「折叠了哪些」无法表达「用户明确要求展开已完成」：
+   * ② 只存「折叠了哪些」无法表达「用户明确要求展开默认组」：
    *    展开时删掉 key → 读回时又走默认值判成折叠 → 点一下没反应。
    *
    * ③ 更隐蔽的：把默认值和用户状态混在**同一个字段**里 ——
    *    一旦用户折叠了别的组（如逾期），字段就非空，
-   *    「已完成」便不再走默认值，被**静默判成展开**（用户点过展开的意图丢失）。
+   *    默认组便不再走默认值，被**静默判成展开**（用户点过展开的意图丢失）。
    *
    * 正解：**默认值只认「字段未设置」这一种情况**，
-   * 一旦用户动过任何分组，就完全以显式列表为准。
+   * 一旦用户动过任何分组，就完全以显式列表为准；默认组被点开时写入
+   * 「显式展开标记」（形如 `+done`），这样折别的组后它仍保持展开。
+   */
+  const DEFAULT_COLLAPSED = new Set(["done", "cancelled"]);
+
+  /**
+   * 折叠状态存 `viewEl.dataset.collapsedGroups`（逗号分隔）。
+   * 每个分组有三种状态：未碰过（走默认）/ 显式折叠（`gkey`）/ 显式展开（`+gkey`）。
+   * 这样「默认折叠组」在用户没碰过它时，即便别的组被折叠，它仍按默认保持折叠
+   * （否则一旦动过任何组，默认值就失效、被静默判成展开，见缺陷②）。
    */
   function isCollapsed(gkey: string): boolean {
-    // 仅在「从未被操作过」时用默认值（181 条不该和待办抢注意力）
-    if (!viewEl.dataset.collapsedGroups) return gkey === "done";
+    if (!viewEl.dataset.collapsedGroups) return DEFAULT_COLLAPSED.has(gkey);
     const set = viewEl.dataset.collapsedGroups.split(",");
-    // 已完成且被显式展开 → 永不折叠（其余分组不受影响）
-    if (gkey === "done" && set.includes(EXPANDED_KEY)) return false;
-    return set.includes(gkey);
+    if (set.includes("+" + gkey)) return false; // 显式展开
+    if (set.includes(gkey)) return true;        // 显式折叠
+    return DEFAULT_COLLAPSED.has(gkey);         // 没碰过 → 走默认
   }
 
   function setCollapsed(gkey: string, collapsed: boolean): void {
     const cur = (viewEl.dataset.collapsedGroups || "").split(",").filter(Boolean);
-    let next: string[];
+    // 先抹掉本组已有的两种标记，再按本次操作重记
+    const next = cur.filter((x) => x !== gkey && x !== "+" + gkey);
     if (collapsed) {
-      // 折叠：写入本组；若折的是「已完成」，同时移除「显式展开」标记
-      next = [...new Set([...cur.filter((x) => x !== EXPANDED_KEY), gkey])];
-    } else {
-      // 展开：移除本组
-      next = cur.filter((x) => x !== gkey);
-      // 展开「已完成」要留下显式标记，否则会被默认值判回折叠（缺陷②）
-      if (gkey === "done" && !next.includes(EXPANDED_KEY)) next.push(EXPANDED_KEY);
+      next.push(gkey); // 显式折叠
+    } else if (DEFAULT_COLLAPSED.has(gkey)) {
+      next.push("+" + gkey); // 默认折叠组被点开 → 留显式展开标记
     }
+    // 非默认组点开 → next 里不含它，等价于「走默认（展开）」
     if (next.length) viewEl.dataset.collapsedGroups = next.join(",");
     else delete viewEl.dataset.collapsedGroups;
   }
@@ -327,30 +344,33 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     const k = keyOfItem(it);
     // 复用外层的 isDone（含「过期日程算已完成」），不另写一份
     const finished = isDone({ it, due, isEvent, expired });
-    const overdue = !finished && !!due && due < today;
+    const cancelled = it.status === "CANCELLED";
+    const overdue = !finished && !cancelled && !!due && due < today;
     const pr = priorityMeta(it.priority);
     const cal = findCalendarByUrl(ctx.store.settings, it.calendarUrl);
     const kindLabel = isEvent ? "日程" : "待办";
-    const dueText = finished
-      ? it.completedAt
-        ? "完成于 " + it.completedAt.slice(5, 10)
-        : expired
-        ? "已过期"
-        : "已完成"
-      : !due
-      ? "无日期"
-      : due === today
-      ? "今天"
-      : due === tomorrow
-      ? "明天"
-      : overdue
-      ? `逾期 ${Math.abs(diffDays(due, today))} 天`
-      : due.slice(5);
+    const dueText = cancelled
+      ? "已作废"
+      : finished
+        ? it.completedAt
+          ? "完成于 " + it.completedAt.slice(5, 10)
+          : expired
+            ? "已过期"
+            : "已完成"
+        : !due
+          ? "无日期"
+          : due === today
+            ? "今天"
+            : due === tomorrow
+              ? "明天"
+              : overdue
+                ? `逾期 ${Math.abs(diffDays(due, today))} 天`
+                : due.slice(5);
     // 日程没有「完成」语义：勾选框改为圆点标记，且不显示优先级（VEVENT 无 PRIORITY）。
     // 注意过期日程虽归入「已完成」组，但仍走圆点分支 —— 它并没有真的被勾选。
     const check = isEvent
-      ? `<span class="cal-task-check cal-task-check--event" title="${kindLabel}"></span>`
-      : `<button class="cal-task-check" data-toggle="${k}" title="${finished ? "标记未完成" : "标记完成"}">${finished ? "✓" : ""}</button>`;
+      ? `<span class="cal-task-check cal-task-check--event${cancelled ? " cal-task-check--cancelled" : ""}" title="${cancelled ? "已作废" : kindLabel}">${cancelled ? "✕" : ""}</span>`
+      : `<button class="cal-task-check" data-toggle="${k}" title="${cancelled ? "恢复为待办" : finished ? "标记未完成" : "标记完成"}">${cancelled ? "✕" : finished ? "✓" : ""}</button>`;
     const prio = !isEvent && pr.label ? `<span class="cal-task-priority ${pr.cls}">${pr.label}</span>` : "";
     // 「文档」角标：这条待办来自思源文档里的任务块（issue #2）。设置里可关（纯 UI，不动数据）
     const docBadge = it.blockId && blockBadgeOn(ctx.store.settings)
@@ -371,7 +391,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
       ? `<span class="cal-task-attach" title="${escape(atts.map((a) => a.name || a.uri || "附件").join("\n"))}">${icons.paperclip}<a class="cal-task-attach-link${firstIsBin ? " cal-task-attach-link--bin" : ""}" ${firstIsBin ? "" : `href="${escape(first.uri || "")}"`} data-attach-open="${firstIsBin ? "bin:0" : escape(first.uri || "")}" ${firstIsBin ? "" : 'target="_blank" rel="noreferrer"'}>${escape(first.name || first.uri || "附件")}</a>${atts.length > 1 ? `<span class="cal-task-attach-more">+${atts.length - 1}</span>` : ""}</span>`
       : "";
     return `
-<div class="cal-task ${finished ? "is-done" : ""} ${overdue ? "is-overdue" : ""} ${isEvent ? "is-event" : "is-todo"}" data-open="${k}" style="--cal-color:${calColorOf(ctx, it)}">
+<div class="cal-task ${finished ? "is-done" : ""} ${cancelled ? "is-cancelled" : ""} ${overdue ? "is-overdue" : ""} ${isEvent ? "is-event" : "is-todo"}" data-open="${k}" style="--cal-color:${calColorOf(ctx, it)}">
   ${check}
   <div class="cal-task-body">
     <div class="cal-task-title"><span class="cal-task-kind ${isEvent ? "is-event" : "is-todo"}">${kindLabel}</span>${docBadge}${it.rrule ? "↻ " : ""}${escape(it.summary || "(无标题)")}

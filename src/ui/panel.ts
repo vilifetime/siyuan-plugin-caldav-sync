@@ -5,6 +5,7 @@
  * Dock 负责导航与新增/排序/刷新，主面板只呈现日历视图。
  */
 import type { CalStore } from "../core/store";
+import type { BlockDetail } from "../core/block-api";
 import { keyOf } from "../core/store";
 import type { SyncEngine } from "../core/sync";
 import type { CalAttachment, CalItem, CalKind, DockFilterKey, SortMode } from "../core/types";
@@ -26,7 +27,8 @@ import { renderWeekView } from "./view-week";
 import { renderTaskView } from "./view-task";
 import { renderYearView } from "./view-year";
 import { renderListView } from "./view-list";
-import { todoDueOccurrences } from "./view-common";
+import { todoDueOccurrences, stateOfItem } from "./view-common";
+import { stateTextZh } from "../core/task-state";
 import { chinaCalendarEnabled, warmChinaCalendar } from "../core/holiday-cn";
 
 export type ViewMode = "year" | "month" | "week" | "day" | "task";
@@ -81,6 +83,11 @@ export interface PanelCtx {
   scanBlocksNow?: () => Promise<string>;
   /** 文档任务块：一键清理全部块来源 VTODO，由入口注入 */
   clearBlockItems?: () => Promise<string>;
+  /**
+   * 文档任务块：按 Block ID 取块的归属信息（笔记本 / 文档 / 块文字），由入口注入。
+   * 编辑弹窗的「文档任务块信息」页签用；块不存在或查询失败返回 `undefined`。
+   */
+  blockDetail?: (blockId: string) => Promise<BlockDetail | undefined>;
 }
 
 export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => void; refresh: () => void } {
@@ -609,6 +616,22 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       .forEach((el) => el.classList.toggle("is-done", done));
   }
 
+  /**
+   * 列表视图行就地更新：勾选/作废/恢复后同步行上的「完成 / 作废」样式与状态前缀文字，
+   * 避免等整视图重渲染（与任务视图的 .cal-task 修补对称）。
+   * 列表行的勾圈是 `.cal-chip-check`，其 ✓/✕ 已由 updateTodoCheckDOM 写过 content，
+   * 这里只补 `.cal-list-row` 的 is-done / is-cancelled 类与 `.cal-list-status` 前缀。
+   */
+  function patchListRowStatus(toggleEl: HTMLElement, item: CalItem): void {
+    const row = toggleEl.closest(".cal-list-row") as HTMLElement | null;
+    if (!row) return;
+    const cancelled = item.status === "CANCELLED";
+    row.classList.toggle("is-cancelled", cancelled);
+    row.classList.toggle("is-done", item.kind === "todo" && item.percent === 100);
+    const st = row.querySelector(".cal-list-status") as HTMLElement | null;
+    if (st) st.textContent = `（${stateTextZh(stateOfItem(item))}）`;
+  }
+
   // ---- 事件委托 ----
   on(app, "click", (ev) => {
     const t0 = ev.target as HTMLElement;
@@ -618,12 +641,25 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
     if (toggleEl && app.contains(toggleEl)) {
       const item = ctx.store.get(toggleEl.dataset.toggle!);
       if (item && item.kind === "todo") {
-        const nextDone = item.percent !== 100;
-        item.percent = nextDone ? 100 : 0;
-        item.status = nextDone ? "COMPLETED" : "NEEDS-ACTION";
-        item.completedAt = nextDone ? new Date().toISOString().slice(0, 19) : undefined;
+        // 已在「作废」态：点 ✕ 取消作废 → 恢复为普通待办（而非直接标完成，避免误判「已完成」）
+        if (item.status === "CANCELLED") {
+          item.percent = 0;
+          item.status = "NEEDS-ACTION";
+          item.completedAt = undefined;
+        } else {
+          const nextDone = item.percent !== 100;
+          item.percent = nextDone ? 100 : 0;
+          item.status = nextDone ? "COMPLETED" : "NEEDS-ACTION";
+          item.completedAt = nextDone ? new Date().toISOString().slice(0, 19) : undefined;
+        }
         const key = toggleEl.dataset.toggle!;
-        updateTodoCheckDOM(app, key, nextDone);
+        const doneNow = item.status === "COMPLETED";
+        updateTodoCheckDOM(app, key, doneNow);
+        // 同步修正「作废 / 完成」视觉：恢复时去掉 is-cancelled，状态前缀也跟着改，
+        // 避免等整页重渲染才刷新（任务视图改 .cal-task，列表视图改 .cal-list-row）。
+        const taskEl = toggleEl.closest(".cal-task") as HTMLElement | null;
+        taskEl?.classList.toggle("is-cancelled", item.status === "CANCELLED");
+        patchListRowStatus(toggleEl, item);
         suppressRerender = true;
         // 兜底：万一同步 promise 一直挂着（网络挂起/等待解锁），最多抑制 10s，
         // 否则界面从此再也不刷新，表现出来就是「点了没反应」。
@@ -634,7 +670,12 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           // 同步收尾后按 store 里的真实状态校正一次：上面那次是乐观更新，
           // 若推送失败/被服务端覆盖而界面停留在乐观值，用户会以为「点了没用」。
           const real = ctx.store.get(key);
-          if (real) updateTodoCheckDOM(app, key, real.percent === 100);
+          if (real) {
+            updateTodoCheckDOM(app, key, real.percent === 100);
+            const te = toggleEl.closest(".cal-task") as HTMLElement | null;
+            te?.classList.toggle("is-cancelled", real.status === "CANCELLED");
+            patchListRowStatus(toggleEl, real);
+          }
         });
         ev.stopPropagation();
         return;

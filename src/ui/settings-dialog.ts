@@ -63,6 +63,11 @@ function blankAccount(seq: number): CalAccount {
 
 export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
   return new Promise((resolve) => {
+    // 笔记本多选浮层挂在 document.body 上（fixed 定位），必须提到函数作用域，
+    // 才能被 bindSave（保存时读勾选）和 destroyCallback（关闭时清理）访问到。
+    let nbPop: HTMLElement | null = null;
+    let nbOutsideHandler: ((e: MouseEvent) => void) | null = null;
+    let nbKeyHandler: ((e: KeyboardEvent) => void) | null = null;
     if (activeSettings && isDialogAlive(activeSettings)) {
       activeSettings.element.querySelector<HTMLElement>("input, button, select")?.focus({ preventScroll: true });
       resolve();
@@ -80,6 +85,10 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       // 设置页被层管理收掉时（比如用户在设置页里又开了别的入口）也要 resolve，
       // 否则调用方 `.then(…, renderAll)` 永远等不到，界面停在旧数据上。
       destroyCallback: () => {
+        // 清掉挂在 body 上的笔记本浮层，避免重复累积、也防止下次打开读到旧勾选
+        if (nbOutsideHandler) document.removeEventListener("mousedown", nbOutsideHandler, true);
+        if (nbKeyHandler) document.removeEventListener("keydown", nbKeyHandler, true);
+        if (nbPop) { nbPop.remove(); nbPop = null; }
         if (activeSettings === dialog) activeSettings = null;
         resolve();
       }
@@ -517,10 +526,23 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const bsCal = $("select[data-s='blockSyncCal']")?.value || "";
         s.blockSyncCalendarUrl = bsCal || undefined;
         s.blockSyncDefaultEnd = (($("select[data-s='blockSyncEnd']")?.value || "sameAsTodo") as CalSettings["blockSyncDefaultEnd"]);
+        // 「一次同步改动数量告警值」：留空 = 不提醒（undefined），否则取非负整数
+        // ⚠️ 空串必须解析成 undefined —— 若 `Number("")` 会得到 0（= 每次都弹窗），与「留空=不提醒」的文案相反。
+        const alertRaw = ($("input[data-s='blockSyncChangeAlert']")?.value || "").trim();
+        if (!alertRaw) {
+          s.blockSyncChangeAlert = undefined;
+        } else {
+          const n = Number(alertRaw);
+          s.blockSyncChangeAlert = Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+        }
         s.blockSyncScope = (($("select[data-s='blockSyncScope']")?.value || "all") as CalSettings["blockSyncScope"]);
-        s.blockSyncNotebooks = Array.from(el.querySelectorAll("input[data-blocksync-nb]"))
-          .filter((i) => (i as HTMLInputElement).checked)
-          .map((i) => (i as HTMLInputElement).value);
+        // ⚠️ 笔记本浮层挂在 document.body，不在 el 内 → 必须读 nbPop（而非 el.querySelector）。
+        // 仅在范围=笔记本时覆盖；范围≠笔记本时保留原值，避免切到「全部文档」再切回丢失勾选。
+        if (s.blockSyncScope === "notebooks" && nbPop) {
+          s.blockSyncNotebooks = Array.from(
+            nbPop.querySelectorAll<HTMLInputElement>("input[data-blocksync-nb]:checked")
+          ).map((i) => i.value);
+        }
         const marks: ("badge" | "prefix")[] = [];
         if (($("input[data-s='blockSyncMarkBadge']") as HTMLInputElement | null)?.checked) marks.push("badge");
         if (($("input[data-s='blockSyncMarkPrefix']") as HTMLInputElement | null)?.checked) marks.push("prefix");
@@ -666,7 +688,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       blkEnable?.addEventListener("change", toggleBlock);
 
       const scopeSel = el.querySelector<HTMLSelectElement>("select[data-s='blockSyncScope']");
-      const nbWrap = el.querySelector<HTMLElement>("[data-blocksync-nbs]");
+      const nbField = el.querySelector<HTMLElement>("[data-blocksync-nb-field]");
+      const nbHint = el.querySelector<HTMLElement>("[data-blocksync-nb-hint]");
       const prefixCb = el.querySelector<HTMLInputElement>("input[data-s='blockSyncMarkPrefix']");
       const prefixWrap = el.querySelector<HTMLElement>("[data-blocksync-prefix]");
       const msg = el.querySelector<HTMLElement>("[data-blocksync-msg]");
@@ -679,29 +702,137 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
 
       const syncVisibility = (): void => {
         if (prefixWrap) prefixWrap.hidden = !prefixCb?.checked;
-        if (!nbWrap) return;
         const need = scopeSel?.value === "notebooks";
-        nbWrap.hidden = !need;
-        if (need && !nbWrap.dataset.loaded) void loadNotebooks();
+        if (nbField) nbField.hidden = !need;
+        if (nbHint) nbHint.hidden = !need;
+        if (need) void loadNotebooks(); // 预载笔记本列表（创建隐藏浮层），让触发按钮上能显示已选名
+      };
+
+      const updateNbText = (): void => {
+        if (!nbPop) return;
+        const checked = Array.from(
+          nbPop.querySelectorAll<HTMLInputElement>("input[data-blocksync-nb]:checked")
+        );
+        const names = checked.map((c) => c.dataset.name || c.value);
+        const txtEl = el.querySelector<HTMLElement>("[data-blocksync-nb-text]");
+        if (!txtEl) return;
+        if (names.length) {
+          txtEl.textContent = names.join("; ");
+          txtEl.classList.remove("is-placeholder");
+        } else {
+          txtEl.textContent = "未选择";
+          txtEl.classList.add("is-placeholder");
+        }
+      };
+
+      // 笔记本浮层：挂到 document.body + position:fixed，用触发按钮的 getBoundingClientRect 定位。
+      // 原先写在 .caldav-input-wrap 内的 relative 浮层会被思源 Dialog 的 transform 祖先当成包含块，
+      // 弹到对话框底部左下角（雄哥 2026-11-01 反馈）。改成 body + fixed 后定位稳定，且不会被弹窗裁切。
+      const ensureNbPop = (): HTMLElement => {
+        if (!nbPop) {
+          nbPop = document.createElement("div");
+          nbPop.className = "caldav-ms-pop";
+          nbPop.hidden = true;
+          document.body.appendChild(nbPop);
+          nbPop.addEventListener("change", (ev) => {
+            if ((ev.target as HTMLElement).matches("input[data-blocksync-nb]")) updateNbText();
+          });
+        }
+        return nbPop;
       };
 
       const loadNotebooks = async (): Promise<void> => {
-        if (!nbWrap) return;
-        nbWrap.innerHTML = `<p class="caldav-set-hint">加载中…</p>`;
+        const pop = ensureNbPop();
+        if (pop.dataset.loaded) return;
+        pop.innerHTML = `<p class="caldav-set-hint">加载中…</p>`;
         const list = (await ctx.listNotebooks?.()) || [];
-        nbWrap.dataset.loaded = "1";
+        pop.dataset.loaded = "1";
         if (!list.length) {
-          nbWrap.innerHTML = `<p class="caldav-set-hint">没读到笔记本（请确认思源已打开工作区）</p>`;
+          pop.innerHTML = `<p class="caldav-set-hint">没读到笔记本（请确认思源已打开工作区）</p>`;
+          updateNbText();
           return;
         }
         const picked = new Set(s.blockSyncNotebooks || []);
-        nbWrap.innerHTML = list
+        // ⚠️ `value` 必须写：保存时读的是 `input.value`（见 bindSave 的 blockSyncNotebooks）。
+        //    只给 `data-blocksync-nb="id"` 不给 value → 复选框的 value 是默认的 "on" →
+        //    存进去的是 ["on","on"] 这种假 ID，范围等于空，重开设置页勾选项全部丢失
+        //    （「范围选笔记本、保存不生效」，雄哥 2026-10-31 截图）。
+        pop.innerHTML = list
           .map(
             (n) =>
-              `<label class="caldav-check-row"><input type="checkbox" data-blocksync-nb="${escape(n.id)}" ${picked.has(n.id) ? "checked" : ""}/><span>${escape(n.name)}</span></label>`
+              `<label class="caldav-check-row"><input type="checkbox" value="${escape(n.id)}" data-blocksync-nb="${escape(n.id)}" data-name="${escape(n.name)}" ${picked.has(n.id) ? "checked" : ""}/><span>${escape(n.name)}</span></label>`
           )
           .join("");
+        updateNbText();
       };
+
+      const positionNbPop = (): void => {
+        if (!nbPop || !nbTrigger) return;
+        const r = nbTrigger.getBoundingClientRect();
+        nbPop.style.width = r.width + "px";
+        nbPop.hidden = false; // 先显示才能量到自然高度
+        const ph = nbPop.offsetHeight;
+        const margin = 8;
+        const below = window.innerHeight - r.bottom - margin;
+        const above = r.top - margin;
+        let top: number;
+        let maxH: number;
+        if (ph + 4 <= below) {
+          top = r.bottom + 4; // 下方放得下 → 直接向下展开
+          maxH = ph;
+        } else if (ph + 4 <= above) {
+          top = r.top - ph - 4; // 放不下就翻到触发按钮上方
+          maxH = ph;
+        } else if (below >= above) {
+          top = r.bottom + 4; // 两边都放不下 → 限高出现滚动条，取空间大的一侧
+          maxH = Math.max(80, below);
+        } else {
+          top = margin;
+          maxH = Math.max(80, above);
+        }
+        nbPop.style.left = r.left + "px";
+        nbPop.style.top = top + "px";
+        nbPop.style.maxHeight = maxH + "px";
+      };
+
+      const closeNbPop = (): void => {
+        if (nbPop) nbPop.hidden = true;
+        if (nbOutsideHandler) document.removeEventListener("mousedown", nbOutsideHandler, true);
+        if (nbKeyHandler) document.removeEventListener("keydown", nbKeyHandler, true);
+        nbOutsideHandler = nbKeyHandler = null;
+      };
+      const openNbPop = async (): Promise<void> => {
+        const pop = ensureNbPop();
+        if (!pop.dataset.loaded) await loadNotebooks();
+        positionNbPop();
+        pop.hidden = false;
+        if (!nbOutsideHandler) {
+          nbOutsideHandler = (e: MouseEvent): void => {
+            if (!nbPop || nbPop.hidden) return;
+            const t = e.target as HTMLElement;
+            if (t.closest(".caldav-ms-pop") || t.closest("[data-blocksync-nb-trigger]")) return;
+            closeNbPop();
+          };
+          nbKeyHandler = (e: KeyboardEvent): void => {
+            if (e.key === "Escape") closeNbPop();
+          };
+          document.addEventListener("mousedown", nbOutsideHandler, true);
+          document.addEventListener("keydown", nbKeyHandler, true);
+        }
+      };
+      // 设置窗内部滚动时浮层（fixed）不会跟着滚 → 直接收起，避免错位
+      el.addEventListener("scroll", () => closeNbPop(), true);
+      window.addEventListener("resize", () => {
+        if (nbPop && !nbPop.hidden) positionNbPop();
+      });
+
+      // 笔记本多选：下拉式 —— 点触发按钮开/合浮层；浮层内勾选即时回填到触发按钮上
+      const nbTrigger = el.querySelector<HTMLButtonElement>("[data-blocksync-nb-trigger]");
+      nbTrigger?.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (!nbPop || nbPop.hidden) void openNbPop();
+        else closeNbPop();
+      });
 
       scopeSel?.addEventListener("change", syncVisibility);
       prefixCb?.addEventListener("change", syncVisibility);
@@ -998,8 +1129,7 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
   <div class="caldav-blk-acc ${s.blockSyncEnabled ? "is-open" : ""}" data-blk-acc>
     <div class="caldav-blk-head" data-blk-head>
       <span class="caldav-blk-dot"></span>
-      <span class="caldav-blk-name">思源任务块识别与映射</span>
-      <span class="caldav-blk-sum">把文档里的任务块同步成 CalDAV 待办</span>
+      <span class="caldav-blk-name">思源任务块识别与映射（测试版）</span>
       <span class="caldav-blk-tag" ${s.blockSyncEnabled ? "hidden" : ""}>未启用</span>
       <label class="caldav-blk-switch" title="启用 / 停用：开启后展开下方设置，关闭则完全停用（不扫描、无块菜单、不同步）">
         <input type="checkbox" class="b3-switch" data-blk-enable ${s.blockSyncEnabled ? "checked" : ""}/>
@@ -1035,43 +1165,59 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         增量扫描按思源任务块的「最后修改时间」定位改动，只把改过的块拉回来对账。
         范围一变、或距上次全量超过 24 小时，都会自动改做一次全量校准；关掉则每次都全量扫描。
       </p>
+      <p class="caldav-set-hint">增量模式下如果执行了「一键清理」，按同步按钮只会同步上次同步时间之后的变动，如需立刻全量扫描，请使用文档中任务块的右键菜单项——扫描任务块（全部）。</p>
 
-      <div class="caldav-field">
-        <label class="caldav-field-label">文档任务块转 VTODO 的默认日历</label>
-        <div class="caldav-input-wrap">
-          <select class="caldav-input" data-s="blockSyncCal">
-            <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>使用新建条目的默认日历</option>
-            ${blockCalOptions(s)}
-          </select>
-          <span class="caldav-input-suffix">${icons.chevron}</span>
+      <div class="caldav-field-row">
+        <div class="caldav-field">
+          <label class="caldav-field-label">文档任务块转 VTODO 的默认日历<span class="caldav-sub-sm">（建议另建日历）</span></label>
+          <div class="caldav-input-wrap">
+            <select class="caldav-input" data-s="blockSyncCal">
+              <option value="" ${!s.blockSyncCalendarUrl ? "selected" : ""}>使用新建条目的默认日历</option>
+              ${blockCalOptions(s)}
+            </select>
+            <span class="caldav-input-suffix">${icons.chevron}</span>
+          </div>
+        </div>
+
+        <div class="caldav-field">
+          <label class="caldav-field-label">文档任务块转 VTODO 的默认结束时间</label>
+          <div class="caldav-input-wrap">
+            <select class="caldav-input" data-s="blockSyncEnd">
+              <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>与新建待办任务一致</option>
+              <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>空（即无日期任务）</option>
+            </select>
+            <span class="caldav-input-suffix">${icons.chevron}</span>
+          </div>
         </div>
       </div>
 
-      <div class="caldav-field">
-        <label class="caldav-field-label">文档任务块转 VTODO 的默认结束时间</label>
-        <div class="caldav-input-wrap">
-          <select class="caldav-input" data-s="blockSyncEnd">
-            <option value="sameAsTodo" ${(s.blockSyncDefaultEnd || "sameAsTodo") === "sameAsTodo" ? "selected" : ""}>与新建待办任务一致</option>
-            <option value="none" ${s.blockSyncDefaultEnd === "none" ? "selected" : ""}>空（即无日期任务）</option>
-          </select>
-          <span class="caldav-input-suffix">${icons.chevron}</span>
+      <div class="caldav-field-row">
+        <div class="caldav-field">
+          <label class="caldav-field-label">自动扫描文档任务块的范围</label>
+          <div class="caldav-input-wrap">
+            <select class="caldav-input" data-s="blockSyncScope">
+              <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>打开的文档</option>
+              <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>仅日记</option>
+              <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>笔记本</option>
+              <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>全部文档</option>
+            </select>
+            <span class="caldav-input-suffix">${icons.chevron}</span>
+          </div>
+          <p class="caldav-set-hint" data-blocksync-nb-hint hidden>至少勾一个；一个都不勾 = 一个块也扫不到。</p>
+        </div>
+
+        <div class="caldav-field" data-blocksync-nb-field hidden>
+          <label class="caldav-field-label">全部可用笔记本</label>
+          <div class="caldav-input-wrap">
+            <button type="button" class="caldav-input caldav-ms-trigger" data-blocksync-nb-trigger>
+              <span class="caldav-ms-text" data-blocksync-nb-text>未选择</span>
+            </button>
+            <span class="caldav-input-suffix">${icons.chevron}</span>
+          </div>
         </div>
       </div>
 
-      <div class="caldav-field">
-        <label class="caldav-field-label">自动扫描文档任务块的范围</label>
-        <div class="caldav-input-wrap">
-          <select class="caldav-input" data-s="blockSyncScope">
-            <option value="open" ${s.blockSyncScope === "open" ? "selected" : ""}>打开的文档</option>
-            <option value="daily" ${s.blockSyncScope === "daily" ? "selected" : ""}>仅日记</option>
-            <option value="notebooks" ${s.blockSyncScope === "notebooks" ? "selected" : ""}>笔记本</option>
-            <option value="all" ${(s.blockSyncScope || "all") === "all" ? "selected" : ""}>全部文档</option>
-          </select>
-          <span class="caldav-input-suffix">${icons.chevron}</span>
-        </div>
-        <div class="caldav-blocksync-nbs" data-blocksync-nbs hidden></div>
-        <p class="caldav-set-hint">范围只决定**哪些新块会被识别**；已建立的映射照常双向同步，不受范围限制。</p>
-      </div>
+      <p class="caldav-set-hint">范围只决定**哪些新块会被识别**；已建立的映射照常双向同步，不受范围限制。</p>
 
       <div class="caldav-field">
         <label class="caldav-field-label">文档任务块转 VTODO 的标记</label>
@@ -1079,15 +1225,34 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
           <input type="checkbox" data-s="blockSyncMarkBadge" ${(s.blockSyncMarks || ["badge"]).includes("badge") ? "checked" : ""}/>
           <span>加「文档」小角标（只在插件的任务视图 / 侧栏里显示，不动数据）</span>
         </label>
-        <label class="caldav-check-row">
-          <input type="checkbox" data-s="blockSyncMarkPrefix" ${(s.blockSyncMarks || []).includes("prefix") ? "checked" : ""}/>
-          <span>自定义前缀（会写进待办标题，手机端 Tasks.org 里也能看出来）</span>
-        </label>
-        <div class="caldav-input-wrap caldav-blocksync-prefix" data-blocksync-prefix hidden>
-          <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || "[文档]")}" placeholder="[文档]"/>
+        <div class="caldav-check-row caldav-row-inline">
+          <label class="caldav-check-inline">
+            <input type="checkbox" data-s="blockSyncMarkPrefix" ${(s.blockSyncMarks || []).includes("prefix") ? "checked" : ""}/>
+            <span>自定义前缀（会写进待办标题，其他端也能看出来）</span>
+          </label>
+          <div class="caldav-input-wrap caldav-blocksync-prefix caldav-inline-input" data-blocksync-prefix hidden>
+            <input class="caldav-input" type="text" data-s="blockSyncPrefix" value="${escape(s.blockSyncPrefix || "[文档]")}" placeholder="[文档]"/>
+          </div>
         </div>
       </div>
 
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.sync}</span>安全提醒</div>
+      <div class="caldav-field caldav-field--inline">
+        <label class="caldav-field-label">一次同步改动数量告警值</label>
+        <div class="caldav-input-wrap caldav-inline-input">
+          <input class="caldav-input" type="number" min="0" step="1" data-s="blockSyncChangeAlert"
+                 value="${s.blockSyncChangeAlert === undefined || s.blockSyncChangeAlert === null ? "" : s.blockSyncChangeAlert}"
+                 placeholder="20"/>
+        </div>
+      </div>
+      <p class="caldav-set-hint">
+        一轮对账算出来的改动（回写任务块 + 新建 + 更新 + 删除）超过这个数，就先弹窗列出明细让你确认，
+        点「取消」则本轮一条都不改。填 <code>0</code> = 只要有改动就问；<b>留空 = 不提醒</b>。
+        留空后同步完全自动（默认 20，改之前建议先想清楚）。
+      </p>
+
+      <!-- 「扫描清理」：段标题 + 两个动作按钮 -->
+      <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.refreshThin}</span>扫描清理</div>
       <div class="caldav-actions-row">
         <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>立即扫描</span></button>
         <button class="caldav-btn caldav-btn--sm" data-action="blocks-clear">${icons.trash}<span data-blocksync-clear-label>一键清理</span></button>

@@ -14,8 +14,9 @@
  * 【本套件钉住的】
  *   ① marker ⇄ 四态 ⇄ VTODO STATUS/PERCENT 的映射
  *   ② 回写块时的 marker 改写（只动一个字符，子块不动）
- *   ③ ⭐ 单向保险：服务端**只能把块往前推**，绝不把块往回拽
- *      （2026-10-30 用户实测踩中过一次：60 个已勾选的任务块被批量取消）
+ *   ③ ⭐ 如实双向：服务端是什么状态，块就写成什么状态；块是什么状态，VTODO 就写成什么状态
+ *      （2026-11-01 雄哥拍板：原先那道「服务端只能把块往前推」的单向保险已移除，
+ *        兜底改为「一次同步改动数量告警值」弹窗确认）
  *   ④ 对账层四态动作（create / push / writeback）
  *   ⑤ ICS 往返（写进去再读回来，四态不失真）
  *
@@ -33,7 +34,7 @@ const outDir = path.join(root, ".test-taskstate");
 
 execSync(
   `npx tsc src/core/types.ts src/core/date.ts src/core/ics.ts src/core/task-state.ts ` +
-    `src/core/block-todo.ts src/core/block-api.ts ` +
+    `src/core/block-todo.ts src/core/block-api.ts src/core/block-sync.ts ` +
     `--outDir .test-taskstate --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --strict false`,
   { cwd: root, stdio: "inherit" }
 );
@@ -178,40 +179,73 @@ check("block-api 的 withStateMarkdown 按四态写回", () => {
   assert.strictEqual(bapi.withStateMarkdown("- [ ] 买牛奶", "canceled"), "- [-] 买牛奶");
 });
 
-console.log("[taskstate] ④ ⭐ 单向保险：服务端只能把块往前推");
+console.log("[taskstate] ④ ⭐ 如实双向：服务端是什么态，块就写成什么态");
 
-check("服务端「完成」→ 可以推进（任何块状态）", () => {
-  assert.strictEqual(ts.mergeServerState("todo", "done"), "done");
-  assert.strictEqual(ts.mergeServerState("in-progress", "done"), "done");
-  assert.strictEqual(ts.mergeServerState("canceled", "done"), "done");
+// 造「缓存是 cached、块是 blockState、服务端是 status/percent」的场景，看对账产出
+const driftPlan = (cachedState, blockState, status, percent) => {
+  const it = item({
+    blockId: "b1",
+    blockText: "买牛奶",
+    blockChecked: cachedState === "done",
+    blockState: cachedState,
+    status,
+    percent
+  });
+  return bt.planBlockSync([block("b1", "买牛奶", blockState)], [it], baseSettings());
+};
+
+check("服务端「完成」+ 块待办 → 回写块为完成", () => {
+  const plan = driftPlan("todo", "todo", "COMPLETED", 100);
+  assert.strictEqual(plan.writebacks.length, 1);
+  assert.strictEqual(plan.writebacks[0].state, "done");
 });
-check("服务端「进行中」→ 只推进待办", () => {
-  assert.strictEqual(ts.mergeServerState("todo", "in-progress"), "in-progress");
+check("⛔ 服务端「待办」+ 块已完成 → **如实**回写块为待办（2026-11-01 去掉单向保险）", () => {
+  const plan = driftPlan("done", "done", "NEEDS-ACTION", 0);
+  assert.strictEqual(plan.writebacks.length, 1);
+  assert.strictEqual(plan.writebacks[0].state, "todo");
+  assert.strictEqual(plan.writebacks[0].checked, false);
 });
-check("服务端「放弃」→ 推进待办与进行中", () => {
-  assert.strictEqual(ts.mergeServerState("todo", "canceled"), "canceled");
-  assert.strictEqual(ts.mergeServerState("in-progress", "canceled"), "canceled");
+check("服务端「进行中」+ 块已完成 → 如实回写为进行中", () => {
+  const plan = driftPlan("done", "done", "IN-PROCESS", 0);
+  assert.strictEqual(plan.writebacks[0].state, "in-progress");
 });
-check("⛔ 服务端「待办」→ 永不覆盖块（2026-10-30 事故的根因）", () => {
-  assert.strictEqual(ts.mergeServerState("done", "todo"), "done");
-  assert.strictEqual(ts.mergeServerState("in-progress", "todo"), "in-progress");
-  assert.strictEqual(ts.mergeServerState("canceled", "todo"), "canceled");
+check("服务端「放弃」+ 块已完成 → 如实回写为放弃", () => {
+  const plan = driftPlan("done", "done", "CANCELLED", 0);
+  assert.strictEqual(plan.writebacks[0].state, "canceled");
 });
-check("⛔ 服务端「进行中/放弃」→ 不撤销已完成的块", () => {
-  assert.strictEqual(ts.mergeServerState("done", "in-progress"), "done");
-  assert.strictEqual(ts.mergeServerState("done", "canceled"), "done");
+check("服务端「完成」+ 块放弃 → 如实回写为完成（反向也通）", () => {
+  const plan = driftPlan("canceled", "canceled", "COMPLETED", 100);
+  assert.strictEqual(plan.writebacks[0].state, "done");
 });
-check("⛔ 服务端「待办」→ 不撤销已放弃的块", () => {
-  assert.strictEqual(ts.mergeServerState("canceled", "todo"), "canceled");
+check("⛔ 单向保险必须**不存在**（mergeServerState / canWriteState 已移除）", () => {
+  // 源码级断言：防止后来者照旧注释把保险加回去。
+  const src = read("src/core/task-state.ts");
+  assert.doesNotMatch(src, /export function mergeServerState/);
+  assert.doesNotMatch(src, /export function canWriteState/);
+  // 双向的判据：服务端态直接决定块态，不再有任何方向判定
+  const todo = read("src/core/block-todo.ts");
+  assert.match(todo, /nextState = serverState;/);
 });
-check("canWriteState 与 mergeServerState 同口径（函数级保险）", () => {
-  assert.strictEqual(ts.canWriteState("todo", "done"), true);
-  assert.strictEqual(ts.canWriteState("todo", "in-progress"), true);
-  assert.strictEqual(ts.canWriteState("todo", "canceled"), true);
-  assert.strictEqual(ts.canWriteState("done", "todo"), false);
-  assert.strictEqual(ts.canWriteState("done", "in-progress"), false);
-  assert.strictEqual(ts.canWriteState("done", "canceled"), false);
-  assert.strictEqual(ts.canWriteState("canceled", "todo"), false);
+check("漂移检测：服务端「待办」+ 缓存「完成」→ 算漂移（要按 ID 捞回来对账）", () => {
+  const it = item({ blockId: "b1", blockText: "买牛奶", blockState: "done", blockChecked: true, status: "NEEDS-ACTION", percent: 0 });
+  assert.strictEqual(bt.blockItemDrift(it, baseSettings()), true);
+});
+check("漂移检测：两边一致 → 不算漂移", () => {
+  const it = item({ blockId: "b1", blockText: "买牛奶", blockState: "done", blockChecked: true, status: "COMPLETED", percent: 100 });
+  assert.strictEqual(bt.blockItemDrift(it, baseSettings()), false);
+});
+check("⛔ store 不再自我保护完成态（本地已完成 + 服务端未完成 → 以服务端为准）", () => {
+  // 源码级断言：那段 `localDone` 强行改回 COMPLETED 的保险已于 2026-11-01 移除
+  const src = read("src/core/store.ts");
+  assert.doesNotMatch(src, /localDone/);
+  assert.doesNotMatch(src, /merged\.status = "COMPLETED"/);
+});
+check("改动数量告警：blockChangeAlertThreshold 的解析口径", () => {
+  const bs = require(path.join(outDir, "block-sync.js"));
+  assert.strictEqual(bs.blockChangeAlertThreshold({ blockSyncChangeAlert: 20 }), 20);
+  assert.strictEqual(bs.blockChangeAlertThreshold({ blockSyncChangeAlert: 0 }), 0);
+  assert.strictEqual(bs.blockChangeAlertThreshold({}), undefined);
+  assert.strictEqual(bs.blockChangeAlertThreshold({ blockSyncChangeAlert: -1 }), undefined);
 });
 
 console.log("[taskstate] ⑤ 对账层四态动作");
@@ -249,20 +283,23 @@ check("服务端「放弃」+ 块待办 → 回写块成 canceled", () => {
   assert.strictEqual(plan.writebacks.length, 1);
   assert.strictEqual(plan.writebacks[0].state, "canceled");
 });
-check("⛔ 服务端「待办」+ 块已完成 → 一个字都不许回写", () => {
+check("服务端「待办」+ 块已完成 → 如实回写为待办（2026-11-01 起双向，取消勾选也同步）", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: true, blockState: "done", status: "NEEDS-ACTION" });
   const plan = bt.planBlockSync([block("b1", "买牛奶", "done")], [it], baseSettings());
-  assert.strictEqual(plan.writebacks.length, 0, "不得把用户勾好的待办取消掉");
+  assert.strictEqual(plan.writebacks.length, 1);
+  assert.strictEqual(plan.writebacks[0].state, "todo");
 });
-check("⛔ 服务端「进行中」+ 块已完成 → 不许回写（不撤销完成）", () => {
+check("服务端「进行中」+ 块已完成 → 如实回写为进行中（2026-11-01 起双向）", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: true, blockState: "done", status: "IN-PROCESS" });
   const plan = bt.planBlockSync([block("b1", "买牛奶", "done")], [it], baseSettings());
-  assert.strictEqual(plan.writebacks.length, 0);
+  assert.strictEqual(plan.writebacks.length, 1);
+  assert.strictEqual(plan.writebacks[0].state, "in-progress");
 });
-check("⛔ 服务端「放弃」+ 块已完成 → 不许回写（不撤销完成）", () => {
+check("服务端「放弃」+ 块已完成 → 如实回写为放弃（2026-11-01 起双向）", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: true, blockState: "done", status: "CANCELLED" });
   const plan = bt.planBlockSync([block("b1", "买牛奶", "done")], [it], baseSettings());
-  assert.strictEqual(plan.writebacks.length, 0);
+  assert.strictEqual(plan.writebacks.length, 1);
+  assert.strictEqual(plan.writebacks[0].state, "canceled");
 });
 check("反向能力不能坏：服务端「完成」+ 块未完成 → 仍要回写勾上", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: false, blockState: "todo", status: "COMPLETED", percent: 100 });
@@ -273,7 +310,9 @@ check("反向能力不能坏：服务端「完成」+ 块未完成 → 仍要回
 check("老数据只有 blockChecked（无 blockState）→ 仍能正确对账", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: true, status: "NEEDS-ACTION" });
   const plan = bt.planBlockSync([block("b1", "买牛奶", "done")], [it], baseSettings());
-  assert.strictEqual(plan.writebacks.length, 0, "服务端未完成 + 块已完成 → 仍不许回写");
+  // 缓存从 blockChecked 推出「完成」，服务端说待办 → 如实回写为待办（取消勾选）
+  assert.strictEqual(plan.writebacks.length, 1);
+  assert.strictEqual(plan.writebacks[0].state, "todo");
 });
 check("自定义任务状态的块：状态没变就不该被改写", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: false, blockState: "todo", status: "NEEDS-ACTION" });
@@ -284,11 +323,11 @@ check("漂移检测：服务端「完成」+ 块未完成 → 漂移（要把块
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: false, blockState: "todo", status: "COMPLETED", percent: 100 });
   assert.strictEqual(bt.blockItemDrift(it, baseSettings()), true);
 });
-check("漂移检测：服务端「待办」+ 块已完成 → 不漂移（否则每轮白跑）", () => {
+check("漂移检测：服务端「待办」+ 块已完成 → 漂移（要把块的勾取消，双向）", () => {
   const it = item({ blockId: "b1", blockText: "买牛奶", blockChecked: true, blockState: "done", status: "NEEDS-ACTION" });
-  assert.strictEqual(bt.blockItemDrift(it, baseSettings()), false);
+  assert.strictEqual(bt.blockItemDrift(it, baseSettings()), true);
 });
-check("漂移检测：服务端「进行中/放弃」+ 块已完成 → 不漂移", () => {
+check("漂移检测：服务端「进行中/放弃」+ 块已完成 → 也算漂移（四态如实同步）", () => {
   const a = item({ blockId: "b1", blockText: "买牛奶", blockChecked: true, blockState: "done", status: "IN-PROCESS" });
   const b = item({
     uid: "u-b2",
@@ -299,8 +338,8 @@ check("漂移检测：服务端「进行中/放弃」+ 块已完成 → 不漂�
     blockState: "done",
     status: "CANCELLED"
   });
-  assert.strictEqual(bt.blockItemDrift(a, baseSettings()), false);
-  assert.strictEqual(bt.blockItemDrift(b, baseSettings()), false);
+  assert.strictEqual(bt.blockItemDrift(a, baseSettings()), true);
+  assert.strictEqual(bt.blockItemDrift(b, baseSettings()), true);
 });
 
 console.log("[taskstate] ⑥ ICS 往返");
@@ -341,9 +380,19 @@ check("读回服务端：四态不失真", () => {
 
 console.log("[taskstate] ⑦ 源码级防漂移");
 
-check("回写块的保险必须走 canWriteState（函数级，不是特判）", () => {
+check("回写块**不许**再套方向判定（双向同步，兜底交给数量告警）", () => {
   const src = read("src/core/block-todo.ts");
-  assert.match(src, /stateDiffers && canWriteState\(b\.state, nextState\)/);
+  // ⚠️ 只禁**调用**（注释里还会提到这两个名字的来历，故正则带 `(`）
+  assert.doesNotMatch(src, /canWriteState\(/);
+  assert.doesNotMatch(src, /mergeServerState\(/);
+  assert.match(src, /if \(stateDiffers\) \{/);
+});
+check("数量告警必须在执行前拦一道（core/block-sync.ts）", () => {
+  const src = read("src/core/block-sync.ts");
+  assert.match(src, /await deps\.confirm\(/);
+  assert.match(src, /res\.cancelled = true/);
+  // 取消时连水位线都不推进
+  assert.match(src, /return res; \/\/ ⚠️ 连水位线也不推进/);
 });
 check("状态映射只允许一处实现（core/task-state.ts）", () => {
   const src = read("src/core/task-state.ts");

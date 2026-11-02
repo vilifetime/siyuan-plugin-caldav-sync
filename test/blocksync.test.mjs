@@ -243,6 +243,11 @@ check("设置区有「思源任务块识别与映射」段与（胶囊式）总�
   assert.match(settingsSrc, /data-blk-enable/);
   assert.match(settingsSrc, /b3-switch/);
 });
+check("设置区标题标「（测试版）」，且卡头不再挂小字摘要（2026-11-01）", () => {
+  // 这一段功能尚未充分实测，标题要显式提醒用户「自行选择开启」
+  assert.match(settingsSrc, /思源任务块识别与映射（测试版）/);
+  assert.doesNotMatch(settingsSrc, /caldav-blk-sum/);
+});
 check("停用态有常驻提示（点开关/标题即可展开，不改变「关掉就隐藏」设计）", () => {
   assert.match(settingsSrc, /caldav-blk-hint/);
   assert.match(settingsSrc, /未启用/);
@@ -301,6 +306,17 @@ check("手动「扫描全部」/「立即扫描」走全量，其余按增量 + 
   assert.match(indexSrc, /blockSyncPass\(undefined, \{ full: true \}\)/, "手动扫描应强制全量");
   assert.match(read("src/core/block-sync.ts"), /BLOCK_FULL_SCAN_INTERVAL_MS/, "要有 24h 全量校准");
   assert.match(read("src/core/block-sync.ts"), /blockScopeSig/, "范围变了要退回全量");
+});
+check("笔记本多选：复选框必须带 value=id（保存读的是 input.value，只给 data 属性会存成 \"on\"）", () => {
+  // 【踩坑】渲染时只写了 data-blocksync-nb="id" 没写 value → 复选框 value 默认是 "on"
+  //   → 存进设置的是 ["on","on"] 这种假 ID → SQL 里 box IN ('on') 一个块都扫不到，
+  //   重开设置页时 picked 里没有真实 ID → 勾选项全部丢失（雄哥 2026-10-31 截图）。
+  const nbLine = /<input type="checkbox"[^>]*data-blocksync-nb=/;
+  assert.match(settingsSrc, nbLine, "应有笔记本复选框");
+  const line = settingsSrc.split("\n").find((l) => nbLine.test(l)) || "";
+  assert.match(line, /value="\$\{escape\(n\.id\)\}"/, '复选框缺 value="${escape(n.id)}"');
+  // 保存侧：取 .value，不能取 dataset
+  assert.match(settingsSrc, /input\[data-blocksync-nb\]"\)\)\s*[\s\S]{0,200}\.map\(\(i\) => \(i as HTMLInputElement\)\.value\)/);
 });
 check("范围含四项（打开的文档 / 仅日记 / 笔记本 / 全部文档）", () => {
   for (const v of ['value="open"', 'value="daily"', 'value="notebooks"', 'value="all"']) {
@@ -389,24 +405,39 @@ check("完成态不可靠的归因必须是「同步冲突(412)」，不得写�
   // 若注释继续写「服务端会降级」，后来者会照着它把「单向回写」这条保险改回去 → 事故复发。
   const btSrc = read("src/core/block-todo.ts");
   const stSrc = read("src/core/store.ts");
-  assert.doesNotMatch(btSrc, /实测 Baikal 会把[\s\S]{0,80}降级/);
-  assert.doesNotMatch(stSrc, /实测服务端（Baikal）会把已完成的条目/);
-  assert.match(btSrc, /不要归咎于「服务端降级」/);
+  const tsSrc = read("src/core/task-state.ts");
+  // ⚠️ 源码里**允许**出现「降级」二字（要在注释里讲清「不是降级」），
+  //    但每一处都必须带否定前缀 —— 否则后来者会照着它把单向保险改回去。
+  const noDegradeClaim = (src, name) => {
+    const re = /[\s\S]{0,24}降级[\s\S]{0,24}/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const seg = m[0];
+      if (!/不会|不是|不要|别再|并非|证伪|并非如此/.test(seg)) {
+        throw new Error(`${name} 出现无否定前缀的「降级」表述：${seg.replace(/\s+/g, " ")}`);
+      }
+    }
+  };
+  noDegradeClaim(btSrc, "block-todo.ts");
+  noDegradeClaim(stSrc, "store.ts");
+  noDegradeClaim(tsSrc, "task-state.ts");
+  // 归因必须写清楚：是插件自己带 If-Match 更新撞上 412、按冲突策略丢了本地改动
   assert.match(btSrc, /If-Match/);
-  assert.match(stSrc, /不要写成「服务端会降级完成态」/);
+  assert.match(btSrc, /412/);
   assert.match(stSrc, /If-Match/);
+  assert.match(stSrc, /412/);
+  assert.match(tsSrc, /If-Match/);
 });
-check("服务端完成态被冲突覆盖时，块来源条目保留本地完成态", () => {
+check("块来源条目**不再**自我保护完成态（2026-11-01 移除：双向同步 + 数量告警兜底）", () => {
+  // 原先 store 合并时「本地记着已完成、服务端说未完成 → 强行改回 COMPLETED」。
+  // 那道保险把「别的客户端取消完成」这条正当链路永久挡住了，故移除。
   const stSrc = read("src/core/store.ts");
-  // 自我保护的判据：本地记着「已完成」—— 四态里的 done，老数据走 blockChecked 兜底
-  assert.match(
-    stSrc,
-    /keep\?\.blockState === "done" \|\| \(keep\?\.blockState === undefined && keep\?\.blockChecked === true\)/
-  );
-  assert.match(
-    stSrc,
-    /merged\.blockId && localDone && !\(merged\.percent === 100 \|\| merged\.status === "COMPLETED"\)/
-  );
+  assert.doesNotMatch(stSrc, /localDone/);
+  assert.doesNotMatch(stSrc, /merged\.status = "COMPLETED"/);
+  // 兜底上移到执行层的「改动数量告警」
+  const bsSrc = read("src/core/block-sync.ts");
+  assert.match(bsSrc, /blockSyncChangeAlert/);
+  assert.match(bsSrc, /await deps\.confirm\(/);
 });
 
 console.log(`\n[blocksync] 合计 ${pass} 项通过`);

@@ -28,8 +28,9 @@ import { diarySpanOf, spanContains, diaryTargetStamp, targetOptionsOf, type Diar
 import { dailyNoteAttrName, diaryWhenLabel, renderDailyNotePath, sqlText, baseNameOf } from "@/ui/diary-note";
 import { showReminderToast, clearReminderToasts } from "@/ui/reminder-toast";
 import { newDialog } from "@/ui/dialog";
+import { confirmBlockChanges } from "@/ui/change-alert-dialog";
 import type { KernelCaller } from "@/core/block-api";
-import { getTaskBlockById, getBlockRootId, setBlockSkip, listNotebooks, BLOCK_SKIP_ATTR } from "@/core/block-api";
+import { getTaskBlockById, getBlockRootId, setBlockSkip, listNotebooks, getBlockDetail, BLOCK_SKIP_ATTR } from "@/core/block-api";
 import { runBlockSync, convertBlock, unsyncBlock, clearBlockSync } from "@/core/block-sync";
 
 /**
@@ -1051,7 +1052,9 @@ export default class CalDavPlugin extends Plugin {
       // 文档任务块（issue #2）：设置页要用 —— 列笔记本、立即扫描、一键清理
       listNotebooks: () => listNotebooks(this.kernelCaller()),
       scanBlocksNow: () => this.scanBlocksNow(),
-      clearBlockItems: () => this.clearBlockItems()
+      clearBlockItems: () => this.clearBlockItems(),
+      // 文档任务块：编辑弹窗「文档任务块信息」页签（只读显示笔记本 / 文档 / 块名 / 块 ID）
+      blockDetail: (id) => getBlockDetail(this.kernelCaller(), id)
     };
   }
 
@@ -1187,8 +1190,11 @@ export default class CalDavPlugin extends Plugin {
       caller: this.kernelCaller(),
       openDocIds: () => this.openDocIds(),
       docIds,
-      full: opts?.full
+      full: opts?.full,
+      // 改动数量告警：超过设置里的「一次同步改动数量告警值」先弹窗让用户确认
+      confirm: (info) => confirmBlockChanges(info)
     });
+    if (res.cancelled) return { text: res.message || "已取消本轮任务块同步" };
     if (!res.scanned && !res.created && !res.updated && !res.written && !res.deleted) {
       return res.errors.length ? { text: res.errors[0] } : undefined;
     }

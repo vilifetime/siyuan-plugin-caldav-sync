@@ -659,6 +659,10 @@ function rebuildComponent(comp: IcsComponent, item: CalItem): IcsComponent {
   if (item.kind === "event") {
     const end = item.end || (dateOnly ? addDaysStamp(item.start, 1) : item.start);
     push("DTEND", stampToIcs(end, dateOnly), dateOnly ? { VALUE: "DATE" } : {});
+    // 作废（CANCELLED）：RFC 5545 允许 VEVENT 携带 STATUS:CANCELLED（已取消的日程）。
+    // 仅当被显式作废时写这一行 —— 普通事件（status 为空 / NEEDS-ACTION 等）保持原样，
+    // 不影响既有日程的同步。读取端 line 510 已会把 STATUS 回灌到 item.status。
+    if (item.status === "CANCELLED") push("STATUS", "CANCELLED");
   } else {
     if (item.end) push("DUE", stampToIcs(item.end, dateOnly), dateOnly ? { VALUE: "DATE" } : {});
     if (item.priority) push("PRIORITY", String(item.priority));

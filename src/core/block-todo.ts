@@ -29,8 +29,6 @@ import type { CalItem, CalSettings } from "./types";
 import { defaultStartStamp, todayStamp, stampOfMs, addDays as addDaysStamp } from "./date";
 import {
   type TaskState,
-  canWriteState,
-  mergeServerState,
   markerOfState,
   stateOfStatus,
   statusFields,
@@ -82,6 +80,12 @@ export interface BlockCreate {
 export interface BlockPush {
   item: CalItem;
   block: BlockTask;
+  /**
+   * 这次推送**只是补缓存**（块与服务端本来就一致，只是 store 里没记过 blockText/blockState），
+   * 对用户没有任何可见改动。数量告警**不计**它 —— 否则首次扫描会把全部映射条目算成
+   * 「改动」而弹窗（那是建缓存，不是改数据）。
+   */
+  cacheOnly?: boolean;
 }
 
 /** 回写动作：把块改成指定状态（文字不回写，理由见下） */
@@ -285,33 +289,22 @@ export function planBlockSync(
       // 块改了 → 以块为准（用户的主数据）
       nextState = b.state;
     } else if (serverChanged) {
-      // 服务端态与缓存不符，而**块没动** → 走**单向保险**。
+      // 服务端态与缓存不符，而**块没动** → 以服务端为准（如实双向）。
       //
-      // ⚠️⚠️ **服务端只能把块往前推，不能把块往回拽**（2026-10-30 用户实测踩中过一次）。
-      //   规则（见 core/task-state.ts 的 mergeServerState）：
-      //     · 服务端「完成」  → 允许（块可以是待办/进行中/放弃）
-      //     · 服务端「进行中」→ 只在块是「待办」时允许
-      //     · 服务端「放弃」  → 只在块是「待办/进行中」时允许
-      //     · 服务端「待办」  → **永远不允许**（服务端只是「没标完成」，没有更多信息）
+      // 【为什么不再是「单向保险」】2026-10-30 曾在这里加过 `mergeServerState`：
+      //   服务端只能把块往前推，「服务端未完成」永不取消块上已打的勾。
+      //   那条保险的由来是「AI 开发」文档里 60 个已勾选块一夜之间全被取消 ——
+      //   但**真因不是服务端乱改**：插件 PUT 时带 `If-Match: <本地 etag>`，
+      //   服务端内容已被别的客户端改过 → 返 412 → 按冲突策略（server）丢弃本地改动
+      //   → 完成态被服务端那一刻的状态覆盖（Baikal 实测不会降级 COMPLETED，
+      //     见 test/blocksync.test.mjs 的源码级断言）。
+      //   真因既已定位，这条保险就只剩坏处：手机上取消完成 / 改回待办，
+      //   思源里永远同步不过来。故 2026-11-01 按雄哥要求移除，改成**如实双向**。
       //
-      // 【踩坑经过】用户「AI开发」文档里 60 个已勾选的任务块，一夜之间全被改成未勾选。
-      //   根因：服务端那条 VTODO 当时是 NEEDS-ACTION，而缓存记着「块是勾选的」→
-      //   判定落在 serverChanged 分支 → nextChecked = serverCompleted = false →
-      //   回写块，把用户的 `- [X]` 拍成 `- [ ]`。
-      //
-      // 【⚠️ 不要归咎于「服务端降级」】2026-10-30 实测证伪了那个说法：
-      //   Baikal **不会**无缘无故把 COMPLETED 改成 NEEDS-ACTION（新建→GET、
-      //   改回→GET、等 3 秒→GET 四轮往返全对；199 条 COMPLETED 逐条 GET 与
-      //   REPORT 两条路径读回来全是 COMPLETED）。
-      //   服务端那一刻之所以是 NEEDS-ACTION，是**插件自己写的**：
-      //   更新时带 `If-Match: <本地 etag>`，服务端内容已变 → 返 412 →
-      //   插件按冲突策略（server=服务端优先）丢弃本地改动 → 完成态被服务端那份覆盖。
-      //
-      // 【正确口径】状态只允许**单向**影响块：服务端能安全推进块时才写回；
-      //   取消勾选只能由用户在文档里直接做。
-      //   这条铁律不依赖「服务端靠不靠谱」，是**结构性保险**：最坏只是该推进的没推进，
-      //   绝不会出现用户勾好的待办被插件悄悄取消。
-      nextState = mergeServerState(b.state, serverState);
+      // 【新的兜底在哪】从「拦方向」改成「拦数量」：一轮改动条数超过设置里的
+      //   「一次同步改动数量告警值」时，执行层先弹窗列出明细让用户确认再动手
+      //   （core/block-sync.ts 的 confirm）。异常批量改动照样能被用户拦下。
+      nextState = serverState;
     } else {
       nextState = cachedState === undefined ? b.state : cachedState;
     }
@@ -335,21 +328,19 @@ export function planBlockSync(
     if (!itemDiffers && !stateDiffers) {
       // 完全对齐，但缓存可能还没建（首次/映射重建）→ 只落缓存，不算动作
       if (it.blockText !== nextText || it.blockChecked !== (nextState === "done")) {
-        plan.pushes.push({ item: next, block: b });
+        plan.pushes.push({ item: next, block: b, cacheOnly: true });
       } else {
         plan.unchanged++;
       }
       continue;
     }
-    // 块侧要改 → 回写块的状态
+    // 块侧要改 → 回写块的状态（如实双向：服务端是什么态，块就写成什么态）
     //
-    // ⛔⛔ **结构性保险（函数级）**：只有「服务端状态能安全推进块」时才允许回写。
-    //   `canWriteState` 把「不许降级」写死在状态模型里（core/task-state.ts），
-    //   哪怕上面的判定逻辑将来又被改错，最坏也只是「该推进的没推进」，
-    //   绝不会出现「用户勾好的待办被插件悄悄取消」—— 那是直接改写用户的主数据。
-    //   （旧口径是特判 `wouldUncheck`，只能防「取消完成」；现在连「取消完成」、
-    //   「撤销放弃」、「把进行中拽回待办」都一并挡住了。）
-    if (stateDiffers && canWriteState(b.state, nextState)) {
+    // ⚠️ 这里曾经有过一道 `canWriteState` 的**结构性保险**（只允许「向前推进」），
+    //    2026-11-01 按雄哥要求移除 —— 它挡住的正是「手机上取消完成 → 文档取消勾选」
+    //    这条正当链路，而它想防的批量误改，真因（If-Match 412 丢改动）早已定位修掉。
+    //    现在的兜底是执行层的**数量告警**（改动条数超阈值先弹窗确认）。
+    if (stateDiffers) {
       plan.writebacks.push({
         item: next,
         block: b,
@@ -395,15 +386,13 @@ export function blockItemDrift(item: CalItem, settings: CalSettings): boolean {
   const cached = cachedStateOf(item);
   if (cached === undefined || item.blockText === undefined) return true;
   const server = stateOfStatus(item.status, item.percent);
-  // ⚠️ 只认**能安全推进块**的方向的漂移 —— 判据直接复用单向保险的同一函数
-  //   （mergeServerState）：服务端状态若会改变块的状态，就是真漂移。
-  //   · 服务端「完成」+ 块未完成 → 漂移（要回写勾上，手机端勾完成 → 回写文档）
-  //   · 服务端「进行中/放弃」+ 块是待办 → 漂移（明确状态，可以推进）
-  //   · 服务端「待办」+ 块已完成 → **不算漂移**：服务端只是没标完成，没有更多信息；
-  //     判成漂移会让每轮扫描都把这些条目按 ID 捞回来重新对账 —— 白跑一轮，
-  //     且反复触发完成态判定（2026-10-30 用户实测踩中）。
-  //   · 服务端「进行中/放弃」+ 块已完成 → **不算漂移**（不撤销用户的完成）
-  if (mergeServerState(cached, server) !== cached) return true;
+  // ⚠️ **如实双向**：服务端状态与缓存的块态**只要不同**就是漂移 —— 不管方向。
+  //   · 服务端「完成」+ 块待办     → 漂移（回写勾上：手机端勾完成 → 文档打勾）
+  //   · 服务端「待办」+ 块已完成   → 漂移（回写取消：手机端取消完成 → 文档取消勾选）
+  //   · 服务端「进行中/放弃」+ 任意 → 漂移（四态如实同步）
+  //   旧口径用 `mergeServerState` 只认「能向前推进」的方向，把「取消完成」这类
+  //   正当改动挡在了对账之外（2026-11-01 移除，见 core/task-state.ts 文件头）。
+  if (server !== cached) return true;
   if (stripPrefix(item.summary || "", settings) !== item.blockText) return true;
   return false;
 }

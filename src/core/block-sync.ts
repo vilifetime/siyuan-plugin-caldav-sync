@@ -72,7 +72,34 @@ export interface BlockSyncDeps {
   docIds?: string[];
   /** 强制**全量**扫描（手动「扫描全部」/「立即扫描」、首次、范围变更、24h 校准到期） */
   full?: boolean;
+  /**
+   * 本轮改动条数超过告警值时**询问用户**（core 不碰 UI，弹窗由入口注入）。
+   *
+   * 为什么需要它：2026-11-01 去掉了「服务端只能把块往前推」的单向保险，改成如实双向
+   * 同步。保险从「拦方向」换成「拦数量」—— 一次改一大片（无论哪个方向）都不是常态，
+   * 交给用户过一眼最稳。返回 false = 本轮取消，一条都不动。
+   */
+  confirm?: (info: BlockChangeAlert) => Promise<boolean>;
 }
+
+/** 一次对账的改动明细（数量告警的入参） */
+export interface BlockChangeAlert {
+  /** 用户可见的改动条数（不含「仅补缓存」的推送） */
+  total: number;
+  /** 回写文档里的任务块（服务端状态 → 块） */
+  written: number;
+  /** 新建 VTODO（块 → 服务端） */
+  created: number;
+  /** 更新 VTODO（块改了文字/状态 → 服务端） */
+  updated: number;
+  /** 删除 VTODO（块没了） */
+  deleted: number;
+  /** 触发本次询问的告警值（设置项 blockSyncChangeAlert） */
+  threshold: number;
+}
+
+/** 改动数量告警的默认值（设置项未填时用它） */
+export const DEFAULT_BLOCK_CHANGE_ALERT = 20;
 
 export interface BlockSyncResult {
   scanned: number;
@@ -83,6 +110,10 @@ export interface BlockSyncResult {
   errors: string[];
   /** 本轮是全量还是增量（报告文案用；也便于排查「为什么只扫到几个块」） */
   mode?: "full" | "incremental";
+  /** 用户在本轮数量告警里点了「取消」→ 一条都没动 */
+  cancelled?: boolean;
+  /** 提示性文案（非错误）：如「已取消本轮同步」 */
+  message?: string;
 }
 
 const emptyResult = (): BlockSyncResult => ({
@@ -256,10 +287,40 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
     checked
   });
 
+  // ── 改动数量告警（2026-11-01：取代「单向保险」的兜底）──
+  //
+  // 如实双向同步之后，「服务端取消完成 → 文档取消勾选」这类改动会真的落到文档上。
+  // 误改的兜底不再靠拦方向，而是靠**拦数量**：一次改动一大片（几十上百条）几乎必然
+  // 是异常（范围配错、缓存被清、服务端重建），交给用户过一眼最稳。
+  // 计入口径 = 回写块 + 新建 + 更新 + 删除；「仅补缓存」的推送不算（不改用户可见数据）。
+  const threshold = blockChangeAlertThreshold(s);
+  if (threshold !== undefined && deps.confirm) {
+    const written = plan.writebacks.length;
+    const created = plan.creates.length;
+    const updated = plan.pushes.filter((p) => !p.cacheOnly).length;
+    const deleted = plan.deletions.length;
+    // ⚠️ 计**条目数**而不是动作数：同一条待办常常既有「回写块」又有「推送服务端」，
+    //    算两次会把 3 条改动说成 6 条，阈值也就失真了。去重后才是用户感知的「改了几条」。
+    const touched = new Set<string>();
+    for (const w of plan.writebacks) touched.add(w.block.id);
+    for (const c of plan.creates) touched.add(c.block.id);
+    for (const p of plan.pushes) if (!p.cacheOnly) touched.add(p.block.id);
+    for (const it of plan.deletions) touched.add(it.blockId || it.uid);
+    const total = touched.size;
+    if (total > threshold) {
+      const ok = await deps.confirm({ total, written, created, updated, deleted, threshold });
+      if (!ok) {
+        res.cancelled = true;
+        res.message = `已取消本轮任务块同步：改动 ${total} 条，超过告警值 ${threshold}（一条都没改）`;
+        return res; // ⚠️ 连水位线也不推进 —— 本轮等于没跑
+      }
+    }
+  }
+
   // 1) 回写块（服务端状态变了）：先改块，再改条目 —— 块是用户看得见的那一边
   //
-  // ⚠️ 写回前 `planBlockSync` 已过 `canWriteState` 的**单向保险**：
-  //    只写「能安全推进」的状态，绝不把用户勾好的待办拽回未完成。
+  // ⚠️ 上面已过了「改动数量告警」；这里**如实双向**写入：服务端是什么状态就写什么状态
+  //    （曾经的 `canWriteState` 单向保险已于 2026-11-01 移除，见 core/task-state.ts）。
   for (const w of plan.writebacks) {
     const ok = await setBlockState(deps.caller, {
       id: w.block.id,
@@ -316,6 +377,18 @@ export async function runBlockSync(deps: BlockSyncDeps): Promise<BlockSyncResult
 function enabledAccountsConflict(s: CalSettings): string {
   const acc = (s.accounts || []).find((a) => a.enabled);
   return acc?.conflict || "server";
+}
+
+/**
+ * 改动数量告警值。
+ *
+ * `undefined` = 不告警（设置里留空，或填了负数/非数字）。
+ * `0` = 只要有 1 条改动就问（想要「每次都确认」就填 0）。
+ */
+export function blockChangeAlertThreshold(s: CalSettings): number | undefined {
+  const raw = s.blockSyncChangeAlert;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return undefined;
+  return Math.floor(raw);
 }
 
 /** 单笔转换：块菜单「同步此任务到 CalDAV」 */

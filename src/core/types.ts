@@ -580,6 +580,18 @@ export interface CalSettings {
    *   ③ 每 24 小时强制做一次全量校准。
    */
   blockSyncIncremental?: boolean;
+  /**
+   * 「一次同步改动数量告警值」（2026-11-01）。
+   *
+   * 一轮任务块对账算出来的**用户可见改动**（回写块 + 新建 + 更新 + 删除）超过这个数，
+   * 就先弹窗列出明细让用户确认再动手 —— 取代了原先「服务端只能把块往前推」的单向保险。
+   * 用户点「取消」→ 本轮一条都不改、连增量水位线也不推进。
+   *
+   * · `undefined` / 负数 = 不告警（直接执行）
+   * · `0` = 只要有 1 条改动就问
+   * · 默认 20（见 DEFAULT_SETTINGS）
+   */
+  blockSyncChangeAlert?: number;
 
   // ── 「上次使用项」的记录值（2026-10-27 改存配置，随数据同步）──
   //
@@ -701,7 +713,9 @@ export const DEFAULT_SETTINGS: CalSettings = {
   blockSyncOnManualSync: true,
   blockSyncOnDocClose: false,
   // 增量扫描默认开（只查改动过的任务块）；关掉则每次全量
-  blockSyncIncremental: true
+  blockSyncIncremental: true,
+  // 一次同步改动超过 20 条就先弹窗确认（取代原单向保险，见字段注释）
+  blockSyncChangeAlert: 20
 };
 
 export interface SyncState {

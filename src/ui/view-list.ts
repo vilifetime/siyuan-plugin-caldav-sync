@@ -21,7 +21,9 @@
  */
 import type { CalItem } from "../core/types";
 import { addDays, isDateOnly, padDate, parseLocalStamp, startOfWeek } from "../core/date";
-import { calColorOf, escape, keyOfItem, occComparator, type ViewArgs } from "./view-common";
+import { calColorOf, escape, keyOfItem, occComparator, stateOfItem, type ViewArgs } from "./view-common";
+import { stateTextZh } from "../core/task-state";
+import { blockBadgeOn } from "../core/block-todo";
 // ⚠️ 与 Obsidian 端的有意差异：Obsidian 社区审核禁 innerHTML 赋值，那边改用
 // dom.ts 的 setHtml（DOMParser + replaceChildren）；思源没有这套审核、全仓沿用
 // innerHTML，故此处保持原样。从 Obsidian 端 cp 同步本文件时**不要**把 setHtml
@@ -127,19 +129,30 @@ export function timeLabelOf(it: CalItem, occ: string): string {
 /** 一行条目 */
 function rowHtml(ctx: ViewArgs["ctx"], it: CalItem, occ: string): string {
   const k = keyOfItem(it);
+  const cancelled = it.status === "CANCELLED";
   const done = it.kind === "todo" && it.percent === 100;
-  const check = it.kind === "todo" ? `<button class="cal-chip-check" data-toggle="${k}" title="${done ? "标记未完成" : "标记完成"}">✓</button>` : "";
+  // 状态前缀：四种状态用括号括起，置于条目名之前（未开始 / 进行中 / 已完成 / 已作废）
+  const statusPrefix = `<span class="cal-list-status">（${stateTextZh(stateOfItem(it))}）</span>`;
+  const check = it.kind === "todo"
+    ? `<button type="button" class="cal-chip-check ${cancelled ? "is-cancelled" : ""}" data-toggle="${k}" title="${cancelled ? "恢复为待办" : done ? "标记未完成" : "标记完成"}">${cancelled ? "✕" : done ? "✓" : ""}</button>`
+    : cancelled
+    ? `<span class="cal-chip-check is-cancelled" title="已作废">✕</span>`
+    : "";
   // 类型标记复用**任务视图**的那两个文字角标（橙「待办」/ 蓝「日程」），
   // 不再是自绘的线框图标 —— 用户 2026-10-25 明确指正：图标表达错了，
   // 列表与任务视图要用同一套标记，跨视图认知才一致。
   const isEvent = it.kind !== "todo";
   const kindLabel = isEvent ? "日程" : "待办";
   const kindBadge = `<span class="cal-list-kind cal-task-kind ${isEvent ? "is-event" : "is-todo"}" title="${kindLabel}">${kindLabel}</span>`;
+  // 「文档」角标：来自思源文档任务块的条目（与任务视图一致）。设置里可关（纯 UI，不动数据）
+  const docBadge = it.blockId && blockBadgeOn(ctx.store.settings)
+    ? `<span class="cal-task-doc" title="来自思源文档任务块">文档</span>`
+    : "";
   const repeat = it.rrule ? '<span class="cal-list-repeat" title="重复">↻</span>' : "";
-  return `<div class="cal-list-row ${done ? "is-done" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColorOf(ctx, it)}">
+  return `<div class="cal-list-row ${done ? "is-done" : ""} ${cancelled ? "is-cancelled" : ""}" data-open="${k}" data-kind="${it.kind}" style="--cal-color:${calColorOf(ctx, it)}">
     <span class="cal-list-time">${escape(timeLabelOf(it, occ))}</span>
     <span class="cal-list-dot"></span>
-    ${kindBadge}
+    ${kindBadge}${docBadge}${statusPrefix}
     <span class="cal-list-title">${repeat}${escape(it.summary || "(无标题)")}</span>
     ${check}
   </div>`;

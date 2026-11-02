@@ -121,8 +121,8 @@ const put = (over) => {
 };
 const todo = (summary, due, over = {}) =>
   put({ summary, start: `${due || TODAY}T09:00:00`, end: due ? `${due}T18:00:00` : undefined, ...over });
-const event = (summary, day) =>
-  put({ kind: "event", summary, start: `${day}T10:00:00`, end: `${day}T11:00:00` });
+const event = (summary, day, extra = {}) =>
+  put({ kind: "event", summary, start: `${day}T10:00:00`, end: `${day}T11:00:00`, ...extra });
 
 // 逾期两条：更早的必须排在前
 todo("逾期十八天", addD(TODAY, -18));
@@ -135,6 +135,9 @@ if (HAS_THISWEEK) todo("本周内到期", WEEK_END);
 todo("很久以后", addD(TODAY, 20));
 todo("无日期任务", "");
 todo("已完成待办", addD(TODAY, -1), { percent: 100, status: "COMPLETED", completedAt: `${TODAY}T08:00:00` });
+// 作废一条待办 + 一条日程：都应沉到最末的「作废」组，且不得混入其他组
+todo("已作废待办", addD(TODAY, -3), { status: "CANCELLED", percent: 0 });
+event("已作废日程", addD(TODAY, 1), { status: "CANCELLED" });
 // 两个日程：一个未来、一个已过期
 const FUTURE_EVENT = "未来日程";
 const PAST_EVENT = "过期日程";
@@ -148,7 +151,8 @@ const EXPECTED = [
   ...(HAS_THISWEEK ? ["本周"] : []),
   "下周后",
   "无日期",
-  "已完成"
+  "已完成",
+  "已作废"
 ];
 
 /* ---------- 打开任务视图 ---------- */
@@ -171,16 +175,16 @@ const titlesOf = (label) => {
 
 /* ---------- 1. 默认筛选「所有未完成」下不该出现已完成组 ---------- */
 assert.ok(
-  !groupEl("已完成"),
-  "默认筛选是「所有未完成」—— 进任务视图先看该做的，已完成不该混进来"
+  !groupEl("已完成") && !groupEl("已作废"),
+  "默认筛选是「所有未完成」—— 已完成与已作废（已终结态）都不该混进来"
 );
 assert.deepStrictEqual(
   groupsOf(),
-  EXPECTED.filter((x) => x !== "已完成"),
+  EXPECTED.filter((x) => x !== "已完成" && x !== "已作废"),
   "默认筛选下分组应为 逾期/今天/明天/本周/下周后/无日期"
 );
 
-/* ---------- 2. 切到「所有项目」后才看全七组 ---------- */
+/* ---------- 2. 切到「所有项目」后才看全八组 ---------- */
 const filterSel = host.querySelector(".cal-task-filter");
 assert.ok(filterSel, "应有筛选下拉");
 filterSel.value = "allitems";
@@ -188,6 +192,24 @@ filterSel.dispatchEvent(new window.Event("change", { bubbles: true }));
 await settle();
 
 assert.deepStrictEqual(groupsOf(), EXPECTED, `分组顺序应为 ${EXPECTED.join(" / ")}`);
+
+/* ---------- 2b. 同一条待办不得同时出现在两个组头下 ----------
+ * 分组用「每组独立 filter」实现，组间并非天然互斥：今天若是周日，
+ * weekEnd === 今天，此时「下周后」= due > 今天 会把「明天」也吞进去，
+ * 导致「明天到期」同时出现在「明天」和「下周后」两组（雄哥 2026-11-01 反馈）。
+ * 这条不变量与运行当天的星期无关，任何一天跑都能兜住回归。 */
+{
+  const seen = new Map();
+  let dup = null;
+  for (const label of groupsOf()) {
+    for (const t of titlesOf(label) || []) {
+      if (seen.has(t)) { dup = `"${t}" 同时出现在「${seen.get(t)}」和「${label}」`; break; }
+      seen.set(t, label);
+    }
+    if (dup) break;
+  }
+  assert.ok(!dup, `分组必须互斥：同一条待办不能重复出现在两个组头下（${dup || "ok"}）`);
+}
 
 /* ---------- 3. 组内排序 ---------- */
 const overdueTitles = titlesOf("逾期");
@@ -233,6 +255,32 @@ assert.strictEqual(
   "true",
   "折叠别的组后，「已完成」仍应保持用户展开的状态（回归：被静默判成展开/折叠）"
 );
+
+/* ---------- 5b. 已作废组默认折叠、与已完成并列；展开后条目带 ✕ 与删除线 ----------
+ * 注意：此处仍在「只显示待办」的初始渲染下，日程尚未进列表，
+ * 故已作废组里只有已作废的待办；已作废的日程在「显示日程事件」打开后才进列表（见 7b）。 */
+const cancelGroup = groupEl("已作废");
+assert.ok(cancelGroup, "应有「已作废」组");
+assert.strictEqual(
+  cancelGroup.querySelector(".cal-task-group-head").getAttribute("aria-expanded"),
+  "false",
+  "「已作废」组应默认折叠（与「已完成」同款终端分组）"
+);
+assert.ok(!cancelGroup.querySelector(".cal-task-group-body"), "「已作废」折叠时不应渲染组内容");
+// 展开
+cancelGroup.querySelector(".cal-task-group-head").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+await settle();
+assert.strictEqual(
+  groupEl("已作废").querySelector(".cal-task-group-head").getAttribute("aria-expanded"),
+  "true",
+  "点一下「已作废」组头应展开"
+);
+const cancelTasks = Array.from(groupEl("已作废").querySelectorAll(".cal-task"));
+assert.ok(cancelTasks.some((t) => t.textContent.includes("已作废待办")), "作废组应含已作废的待办");
+for (const t of cancelTasks) {
+  assert.ok(t.classList.contains("is-cancelled"), "作废条目应带 is-cancelled 标记（删除线）");
+  assert.ok(t.querySelector(".cal-task-check")?.textContent.includes("✕"), "作废条目勾选框内应有 ✕");
+}
 
 /* ---------- 6. 统计条：六项，挂在工具条槽位上 ---------- */
 const slot = host.querySelector('[data-slot="task-stats"]');
@@ -288,6 +336,17 @@ assert.ok(pastEv, "打开第二层开关后，已过期的日程应进列表");
 assert.ok(
   pastEv.closest(".cal-task-group")?.querySelector(".cal-task-group-label")?.textContent.trim() === "已完成",
   "过期日程应归入「已完成」组（日程没有「完成」语义，时间过去即结束）"
+);
+
+/* ---------- 7b. 已作废的日程也应进「已作废」组，带 ✕ 与删除线 ---------- */
+const cancelEv = Array.from(groupEl("已作废").querySelectorAll(".cal-task")).find((e) =>
+  e.querySelector(".cal-task-title")?.textContent.includes("已作废日程")
+);
+assert.ok(cancelEv, "打开「显示日程事件」后，已作废日程应进「已作废」组");
+assert.ok(cancelEv.classList.contains("is-cancelled"), "作废日程应带 is-cancelled 标记（删除线）");
+assert.ok(
+  cancelEv.querySelector(".cal-task-check--cancelled")?.textContent.includes("✕"),
+  "作废日程圆点内应有 ✕"
 );
 
 /* ---------- 8. 「日历筛选」浮层里的两个开关（与设置弹窗同一对） ---------- */
@@ -359,12 +418,12 @@ const gBlock = SRC.slice(gStart, SRC.indexOf("];", gStart));
 const groupKeys = (gBlock.match(/key: "(\w+)"/g) || []).map((s) => s.match(/"(\w+)"/)[1]);
 assert.deepStrictEqual(
   groupKeys,
-  ["overdue", "today", "tomorrow", "thisweek", "later", "nodate", "done"],
-  "view-task.ts 的 GROUPS 顺序变了 —— 本测试的副本必须同步（顺序即轻重缓急）"
+  ["overdue", "today", "tomorrow", "thisweek", "later", "nodate", "done", "cancelled"],
+  "view-task.ts 的 GROUPS 顺序变了 —— 本测试的副本必须同步（顺序即轻重缓急，作废沉底）"
 );
-assert.ok(/const EXPANDED_KEY = "__none__"/.test(SRC), "应保留 EXPANDED_KEY 显式展开标记");
 // 剥掉注释后再查：注释里会引用这段历史，直接查字面量会误伤
 const noComment = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+assert.ok(/DEFAULT_COLLAPSED/.test(noComment), "应保留 DEFAULT_COLLAPSED 默认折叠集合（含 已完成 + 作废）");
 assert.ok(
   !/gkey !== "done"/.test(noComment),
   "isCollapsed 里不得再有 gkey !== \"done\" 特判（那是把默认值错当权限限制，会锁死其他分组）"

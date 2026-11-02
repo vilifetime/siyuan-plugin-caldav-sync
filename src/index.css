@@ -11,6 +11,8 @@
   --caldav-text: var(--b3-theme-on-background, #1f2329);
   --caldav-text-2: var(--b3-theme-on-surface, #646a73);
   --caldav-danger: var(--b3-theme-error, #d23f31);
+  /* 作废（CANCELLED）：中性告警色，区别于危险的删除红、强调的转类型蓝 */
+  --caldav-warn: #b07400;
   height: 100%;
   font-size: 13px;
   color: var(--caldav-text);
@@ -1108,6 +1110,8 @@
 
 .cal-task:hover { box-shadow: 0 1px 6px rgba(0, 0, 0, 0.07); }
 .cal-task.is-done .cal-task-title { text-decoration: line-through; opacity: 0.5; }
+/* 作废（CANCELLED）：与已完成同款删除线 */
+.cal-task.is-cancelled .cal-task-title { text-decoration: line-through; opacity: 0.5; }
 
 .cal-task-check {
   flex: 0 0 16px;
@@ -1130,6 +1134,13 @@
 .cal-task.is-done .cal-task-check {
   background: var(--cal-color, #10b981);
   border-color: var(--cal-color, #10b981);
+  color: #fff;
+}
+
+/* 作废：小圆圈里画 ✕（与「已完成」的 ✓ 对称），用中性灰以区别于完成态的日历色 */
+.cal-task.is-cancelled .cal-task-check {
+  background: #9e9e9e;
+  border-color: #9e9e9e;
   color: #fff;
 }
 
@@ -1206,6 +1217,31 @@
 .caldav-attach-msg { font-size: 12px; color: var(--caldav-text-2); min-height: 0; }
 .caldav-attach-msg:empty { display: none; }
 .caldav-attach-msg.is-error { color: var(--caldav-danger); }
+
+/* 「文档任务块信息」页签（只读的归属信息，2026-10-31） */
+.caldav-blkinfo { display: flex; flex-direction: column; gap: 6px; }
+.caldav-blkinfo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.caldav-blkinfo-k {
+  flex: 0 0 84px;
+  color: var(--caldav-text-2);
+}
+.caldav-blkinfo-v {
+  flex: 1;
+  min-width: 0;
+  color: var(--caldav-text);
+  word-break: break-all;
+  /* 只读但**要能选中复制**（块 ID 常被拿去查） */
+  user-select: text;
+}
+.caldav-blkinfo-v--mono { font-family: var(--caldav-font-mono, ui-monospace, Consolas, monospace); font-size: 11px; }
+/* 块已读不到（多半被删了）：整块降权，别让人误以为同步成功 */
+.caldav-blkinfo.is-missing .caldav-blkinfo-v { color: var(--caldav-text-2); }
 .caldav-btn--sm { padding: 3px 8px; font-size: 12px; }
 .caldav-btn--danger { color: var(--caldav-danger); }
 /* hidden 属性必须显式生效：.caldav-btn 是 display:inline-flex，会盖掉 UA 的
@@ -1313,6 +1349,22 @@
   flex: 0 0 auto;
 }
 
+/* 作废的日程事件：圆点改成交圈（✕），与待办作废态保持一致（覆盖上面的 8px 圆点） */
+.cal-task.is-cancelled .cal-task-check--event {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border-radius: 50%;
+  background: #9e9e9e;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid #9e9e9e;
+}
+
 /* 条目类型小框（日程 / 待办）—— 混排时才需要区分，故日程关闭时也在，便于一眼分辨 */
 .cal-task-kind {
   font-size: 10px;
@@ -1364,6 +1416,12 @@
   padding-left: 2px;
 }
 .caldav-blocksync-prefix { margin-top: 6px; }
+
+/* ⚠️ `.caldav-input-wrap{display:flex}` 会盖掉 UA 的 `[hidden]{display:none}`，
+   必须显式补一条，否则「没勾自定义前缀时 [文档] 输入框也照样显示」（2026-11-01）。
+   （行内窄框的布局规则写在文件后段 `.caldav-check-row` 附近 —— 那里才盖得住
+   `.caldav-field{flex-direction:column}`，写在这里会被后定义的同权重规则覆盖。） */
+.caldav-input-wrap[hidden] { display: none; }
 
 /* ===== 弹窗（编辑/设置）—— 跟随思源主题风格 ===== */
 .caldav-editor, .caldav-settings, .caldav-catmgr {
@@ -1598,6 +1656,7 @@
 
 /* 字段 */
 .caldav-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.caldav-field[hidden] { display: none; }
 .caldav-field-label {
   font-size: 12px;
   font-weight: 500;
@@ -1607,9 +1666,47 @@
   gap: 4px;
 }
 .caldav-field-label svg { width: 13px; height: 13px; color: var(--caldav-text-2); }
+.caldav-field-label .caldav-sub-sm { font-size: 11px; font-weight: 400; }
 
 .caldav-field-row { display: flex; gap: 12px; align-items: stretch; }
 .caldav-field-row > .caldav-field { flex: 1; min-width: 0; }
+
+/* 笔记本多选：下拉式（触发按钮 + 浮层勾选列表），选中项以「; 」拼接显示在触发按钮上 */
+.caldav-ms-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding-right: 28px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.caldav-ms-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caldav-ms-text.is-placeholder { color: var(--caldav-text-2); opacity: 0.7; }
+/* ⚠️ 浮层挂在 document.body 上，插件作用域内的 --caldav-* 变量取不到，
+   必须用 SiYuan 全局（:root）令牌，否则背景变透明、字压在页面上读不清 */
+.caldav-ms-pop {
+  position: fixed;
+  z-index: 9999;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--b3-menu-background, #fff);
+  color: var(--b3-theme-on-background, #333);
+  border: 1px solid var(--caldav-border, #d0d0d0);
+  border-radius: 9px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.caldav-ms-pop .caldav-check-row { margin: 0; padding: 5px 8px; border-radius: 6px; color: inherit; }
+.caldav-ms-pop .caldav-check-row:hover { background: rgba(127, 127, 127, 0.18); }
 
 .caldav-input-wrap {
   position: relative;
@@ -2319,6 +2416,24 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   /* 注意：这里不能加 overflow: hidden —— 编辑弹窗里的日历下拉弹层是 absolute 定位，
      容器裁剪会把它切掉；底部圆角改由页脚自带（见 .caldav-editor-foot） */
 }
+/*
+ * ⚠️⚠️ **思源 Dialog 的真实结构是 `__body`，不是 `__content`**（2026-11-01 实测读源码确认）。
+ *
+ *   思源 Dialog 的模板（`app/common.js` 里的 Dialog 构造）：
+ *     .b3-dialog__container
+ *       ├ svg.b3-dialog__close
+ *       ├ div.b3-dialog__header
+ *       ├ div.b3-dialog__body   ← **我们传进去的 content 是塞在这一层里的**
+ *       └ div.resize__rd …（缩放手柄）
+ *   也就是说根本没有 `.b3-dialog__content` 这一层（那是我们自己 HTML 里偶尔写的类名）。
+ *
+ *   原先这里只写了 `.b3-dialog__content` → **选择器从未命中** → 滚动链断在 `__body`：
+ *   body 是 flex item 但既没 `min-height:0` 也没受限高度，`.caldav-settings` 的
+ *   `height:100%` 解析不出来，于是内容整体撑开、被裁掉 —— 表现就是
+ *   「设置窗口鼠标滚不动」（雄哥 2026-11-01 反馈）。
+ *
+ *   所以下面两条选择器**必须都写**（`__body` 现行、`__content` 兼容旧版与我们自己的 HTML）。
+ */
 .caldav-dialog .b3-dialog__header {
   padding: 6px 15px 5px !important;
   flex: 0 0 auto;
@@ -2326,14 +2441,21 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 .caldav-dialog .b3-dialog__header .b3-dialog__title {
   font-size: 14px;
 }
+.caldav-dialog .b3-dialog__body,
 .caldav-dialog .b3-dialog__content {
   padding: 0 !important;
   margin: 0 !important;
   flex: 1 1 auto;
+  min-height: 0; /* ★ 缺这条 flex item 不会被压缩 → 子元素永远「撑开」而非滚动 */
   display: flex;
   flex-direction: column;
+  /* 让滚动交给内部的 .caldav-settings-form（它自带细滚动条样式）；
+     这里若留着思源的 overflow:auto，弹窗内会出现**两条**滚动条 */
   overflow: hidden !important;
 }
+.caldav-dialog .b3-dialog__body > .caldav-editor,
+.caldav-dialog .b3-dialog__body > .caldav-settings,
+.caldav-dialog .b3-dialog__body > .caldav-catmgr,
 .caldav-dialog .b3-dialog__content > .caldav-editor,
 .caldav-dialog .b3-dialog__content > .caldav-settings,
 .caldav-dialog .b3-dialog__content > .caldav-catmgr {
@@ -2738,6 +2860,17 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   border-color: var(--caldav-accent);
 }
 
+/* 「作废」（CANCELLED）：中性告警色描边，区别于删除红、转类型蓝 */
+.caldav-foot-btn--void {
+  color: var(--caldav-warn);
+  border-color: color-mix(in srgb, var(--caldav-warn) 35%, var(--caldav-border));
+  background: var(--caldav-bg);
+}
+.caldav-foot-btn--void:hover {
+  background: color-mix(in srgb, var(--caldav-warn) 9%, var(--caldav-bg));
+  border-color: var(--caldav-warn);
+}
+
 .caldav-foot-btn svg { width: 14px; height: 14px; }
 
 /* 缩放手柄（右下角） */
@@ -2976,6 +3109,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 /* 停用态收起子设置：body 用 hidden 收口（单卡无 data-s 跨卡串扰，无需像账户卡那样移出 DOM） */
 .caldav-blk-body[hidden] { display: none; }
 .caldav-blk-subtitle { margin: 12px 0 6px; font-size: 12px; }
+/* 段内说明文字与紧随其后的设置项之间留一点呼吸，别让说明贴着下一个下拉框 */
+.caldav-blk-body > .caldav-set-hint + .caldav-field { margin-top: 10px; }
+/* 同上，但紧跟说明的是左右并排的一行设置（caldav-field-row）时，空隙再大一点 */
+.caldav-blk-body > .caldav-set-hint + .caldav-field-row { margin-top: 16px; }
 /* 停用态的常驻提示：点开关/标题即可展开（不改变「关掉就隐藏」的设计，只是让段「找得到」） */
 .caldav-blk-hint { margin: 6px 12px 10px; padding: 6px 10px; border-left: 3px solid var(--caldav-accent); background: var(--caldav-bg-3); border-radius: 0 6px 6px 0; }
 /* 收起卡头上的「未启用」状态标签：让停用态一眼可见，不会误以为整段消失 */
@@ -3028,6 +3165,45 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 /* hidden 属性必须显式生效：.caldav-check-row{display:flex} 会盖掉 UA 的
    [hidden]{display:none} —— 设置页任何一行想用 hidden 收起都靠这条兜底。 */
 .caldav-check-row[hidden] { display: none; }
+
+/* ===== 行内窄输入框（2026-11-01）=====
+   文字/勾选框在左、窄输入框贴右，用于「自定义前缀」与「一次同步改动数量告警值」。
+   ⚠️ 这组规则**必须写在 `.caldav-field{flex-direction:column}` 之后** —— 同权重
+   靠后者胜，写在前面会被后者覆盖（第一次就踩了：输入框掉到下一行、孤零零靠右）。 */
+.caldav-inline-input {
+  flex: 0 0 auto;
+  width: 190px;
+  margin-left: auto;
+}
+.caldav-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+.caldav-field--inline > .caldav-field-label { flex: 1 1 auto; min-width: 0; }
+.caldav-row-inline {
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+.caldav-row-inline .caldav-blocksync-prefix { margin-top: 0; }
+.caldav-check-inline {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+.caldav-check-inline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex: 0 0 16px;
+  accent-color: var(--caldav-accent);
+  cursor: pointer;
+}
 
 /* 窄屏（Dock 面板）隐藏侧栏时保底 */
 .caldav-root .cal-month, .caldav-root .cal-wk { min-width: 0; }
@@ -3873,6 +4049,22 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .cal-list-row:hover { background: var(--caldav-bg-3); }
 .cal-list-row.is-done .cal-list-title { text-decoration: line-through; opacity: .55; }
+/* 作废：标题删除横线 + 圆角✕ 圈，与任务视图对称；前缀（已作废）标灰 */
+.cal-list-row.is-cancelled .cal-list-title { text-decoration: line-through; opacity: .5; }
+.cal-list-row.is-cancelled .cal-task-kind,
+.cal-list-row.is-cancelled .cal-task-doc { opacity: .5; }
+.cal-list-row.is-cancelled .cal-chip-check {
+  background: #9e9e9e;
+  border-color: #9e9e9e;
+  color: #fff;
+}
+/* 状态前缀：（未开始）/（进行中）/（已完成）/（已作废），置于条目名之前 */
+.cal-list-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--caldav-text-2);
+}
+.cal-list-row.is-cancelled .cal-list-status { color: #9e9e9e; }
 .cal-list-time {
   flex: 0 0 auto;
   min-width: 92px;
@@ -3897,6 +4089,9 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
    列表里它是独立的 flex 项，间距由 .cal-list-row 的 gap 统一管 —— 复位掉。 */
 .cal-list-row .cal-task-kind { margin-right: 0; vertical-align: middle; }
 .cal-list-row.is-done .cal-task-kind { opacity: .5; }
+/* 「文档」角标复用任务视图的 .cal-task-doc；列表里它是独立 flex 项，间距交 gap 统一管 */
+.cal-list-row .cal-task-doc { margin-right: 0; }
+.cal-list-row.is-done .cal-task-doc { opacity: .5; }
 .cal-list-title {
   flex: 1 1 auto;
   min-width: 0;

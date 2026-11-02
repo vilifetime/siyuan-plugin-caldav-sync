@@ -332,8 +332,9 @@ export async function setBlockChecked(
 /**
  * 写回块的任务状态（四态）。
  *
- * ⚠️ 调用方**必须**先过 `canWriteState`（单向保险）再调这里 —— 这里只管写，
- *    不做判断，是刻意的：判断集中在一处，避免两处口径不一致。
+ * ⚠️ 调用方**必须**先把好关再调这里 —— 这里只管写，不做判断，是刻意的：
+ *    判断集中在 core/block-todo.ts（对账）与 core/block-sync.ts（改动数量告警），
+ *    避免两处口径不一致。
  */
 export async function setBlockState(
   caller: KernelCaller,
@@ -385,6 +386,83 @@ export async function getTaskBlockById(
     rootId: r.root_id ? String(r.root_id) : undefined,
     box: r.box ? String(r.box) : undefined,
     hpath: r.hpath ? String(r.hpath) : undefined
+  };
+}
+
+/**
+ * 一个块的「归属信息」：编辑弹窗「文档任务块信息」页签要显示的东西（只读）。
+ *
+ * 数据来源（2026-10-31 本机实测确认，非推测）：
+ *   - `blocks.content` 带**前导空格**（`"- [ ] 待办1"` → `" 待办1"`）→ 必须 trim；
+ *   - `blocks.root_id` 指向**文档块**，其 `content` 就是文档名（如 `2026-04-17`）；
+ *   - `blocks.hpath` 是**不含笔记本名**的文档内路径（`/daily note/2026/04/2026-04-17`），
+ *     所以笔记本名**只能**靠 `box` 去 `/api/notebook/lsNotebooks` 里查 ——
+ *     别拿 hpath 第一段当笔记本名（实测第一段是文档名的情况也有）。
+ */
+export interface BlockDetail {
+  /** 块 ID */
+  id: string;
+  /** 块的文字（去掉 marker 与前后空白） */
+  text: string;
+  /** 块的 markdown 原文（形如 `- [X] 待办1`） */
+  markdown: string;
+  /** 所属文档 ID（root_id） */
+  rootId?: string;
+  /** 所属笔记本 ID（box） */
+  box?: string;
+  /** 文档名（文档块的 content）；取不到时回落 hpath 最后一段 */
+  docTitle?: string;
+  /** 笔记本名（box → lsNotebooks）；取不到时留空，由 UI 显示「—」 */
+  notebookName?: string;
+}
+
+/**
+ * 按 Block ID 查块的归属信息（只读）。
+ *
+ * @returns 块不存在 / 查询失败 → `undefined`（UI 侧显示「读不到」而不是瞎编）。
+ */
+export async function getBlockDetail(caller: KernelCaller, id: string): Promise<BlockDetail | undefined> {
+  if (!id) return undefined;
+  // ⚠️ 显式 LIMIT 1：内核没写 LIMIT 时只回 64 行（见文件头铁律）
+  const rows = await sql(
+    caller,
+    `SELECT id, content, markdown, root_id, box, hpath FROM blocks WHERE id = ${sqlQuote(id)} LIMIT 1`
+  );
+  const r = rows[0];
+  if (!r?.id) return undefined;
+
+  const rootId = r.root_id ? String(r.root_id) : undefined;
+  const box = r.box ? String(r.box) : undefined;
+  const hpath = r.hpath ? String(r.hpath) : undefined;
+  const segs = hpath ? hpath.split("/").filter(Boolean) : [];
+
+  // 文档名：文档块 content 为准
+  let docTitle: string | undefined;
+  if (rootId) {
+    const d = await sql(caller, `SELECT content FROM blocks WHERE id = ${sqlQuote(rootId)} LIMIT 1`);
+    const t = String(d?.[0]?.content || "").trim();
+    if (t) docTitle = t;
+  }
+  if (!docTitle) docTitle = segs.length ? segs[segs.length - 1] : undefined;
+
+  // 笔记本名：lsNotebooks 是唯一权威来源（hpath 不含笔记本名）
+  let notebookName: string | undefined;
+  try {
+    const nbs = await listNotebooks(caller);
+    const hit = box ? nbs.find((n) => n.id === box) : undefined;
+    if (hit) notebookName = hit.name;
+  } catch (e) {
+    console.warn("[caldav] 查笔记本列表失败（笔记本名留空）:", e);
+  }
+
+  return {
+    id: String(r.id),
+    text: cleanBlockText(r.content || ""),
+    markdown: String(r.markdown || ""),
+    rootId,
+    box,
+    docTitle,
+    notebookName
   };
 }
 

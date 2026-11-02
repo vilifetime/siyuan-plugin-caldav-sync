@@ -268,7 +268,9 @@ const runOnce = async (over = {}) => {
     caller,
     openDocIds: () => [],
     docIds: over.docIds,
-    full: over.full
+    full: over.full,
+    // 改动数量告警：由用例注入（不传 = 不告警，直接执行）
+    confirm: over.confirm
   });
   return { res, store, sync, stmts, caller, writes };
 };
@@ -585,14 +587,23 @@ check("★白名单漏了也不该删（checked 双重保险：没查过存在�
   assert.strictEqual(plan2.deletions.length, 1, "查过存在性且确认没了 → 该删");
 });
 
-section("[blockscan] ⑨ 完成态回写的方向性（2026-10-30 用户实测踩中）");
+section("[blockscan] ⑨ 完成态回写的方向性（2026-11-01 改为如实双向）");
 
-// ★ 事故复现：
-//   块在文档里是「已勾选」（markdown = "- [X] xxx"），
-//   而服务端那条 VTODO 是「未完成」—— 实测 Baikal 会把 COMPLETED 降级回 NEEDS-ACTION，
-//   store 里有 8 条「本地 COMPLETED / 服务端 raw 里 STATUS:NEEDS-ACTION」的活证据；
-//   而 store 缓存里记着「块是勾选的」→ 旧逻辑判定成「服务端改了」→ 回写块取消勾选。
-//   后果：用户 60 个已勾选的任务块被批量拍成 "- [ ]"。
+// ★ 历史（2026-10-30）：用户「AI开发」文档里 60 个已勾选的任务块一夜之间全被拍成 "- [ ]"。
+//   当时归因成「Baikal 把 COMPLETED 降级回 NEEDS-ACTION」，于是加了两道单向保险：
+//     ① 对账层：服务端只能把块「往前推」，未完成永不取消块上的勾；
+//     ② store 层：本地记着已完成、服务端说未完成 → 强行改回 COMPLETED。
+//
+// ⚠️ 那个归因是**错的**（2026-10-30 实测证伪，别再写回去）：Baikal 完整保留
+//    STATUS:COMPLETED（新建→GET / 改回→GET / 等 3 秒→GET 四轮往返全对；199 条
+//    COMPLETED 逐条 GET 与 REPORT 双路径读回一致）。那 8 条「本地 COMPLETED / raw 里
+//    NEEDS-ACTION」是本地**陈旧 raw 快照**（上传成功也不刷新），不是服务端内容。
+//    真因：插件 PUT 带 `If-Match: <本地 etag>` → 服务端已被别的客户端改过 → 返 **412**
+//    → 按冲突策略（server）丢弃本地改动 → 完成态被覆盖。
+//
+//   真因既已定位，那两道保险就只剩坏处（把「别的客户端取消完成」这条正当链路永久挡住），
+//   2026-11-01 按雄哥要求移除，改成**如实双向**；误改的兜底换成**改动数量告警**
+//   （见 ⑩：一轮改动超过阈值就弹窗让用户确认）。
 const checkedRow = (id, text) => fakeBlock(id, text, "20260101000000", { markdown: `- [X] ${text}` });
 const blockTask = (id, text, checked, state) => ({
   id,
@@ -607,15 +618,20 @@ const blockTask = (id, text, checked, state) => ({
   hpath: "/测试"
 });
 
-check("★服务端说未完成、块已勾选 → 绝不回写取消勾选（主数据不许被派生数据覆盖）", async () => {
+check("★服务端说未完成、块已勾选 → 如实回写取消勾选（双向，2026-11-01）", async () => {
   const rows = [checkedRow("b1", "买牛奶")];
   const items = [
     mappedItem({ blockId: "b1", blockText: "买牛奶", blockChecked: true, status: "NEEDS-ACTION", percent: 0 })
   ];
-  const { res, writes } = await runOnce({ rows, items, full: true });
-  assert.strictEqual(res.written, 0, "不该有回写");
-  assert.strictEqual(writes.length, 0, "绝不能调用 updateBlock 取消勾选");
-  assert.strictEqual(res.updated, 1, "但要把完成态纠正回服务端（自愈）");
+  const { res, writes } = await runOnce({
+    rows,
+    items,
+    full: true,
+    // 阈值给大一点，避免弹窗路径影响本用例（告警单独在 ⑩ 测）
+    settings: settings({ blockSyncChangeAlert: 999 })
+  });
+  assert.strictEqual(res.written, 1, "服务端未完成 → 块该被如实取消勾选");
+  assert.ok(/^- \[ \]/.test(writes[0].data || ""), "回写内容应是未勾选态");
 });
 
 check("反向能力不能坏：服务端说已完成、块还没勾 → 仍要回写把块勾上", async () => {
@@ -628,20 +644,27 @@ check("反向能力不能坏：服务端说已完成、块还没勾 → 仍要�
   assert.ok(/^- \[X\]/.test(writes[0].data || ""), "回写内容应是勾选态");
 });
 
-check("结构性保险：回写块只允许「勾上」，永不允许「取消勾选」", () => {
-  const plan = bt.planBlockSync(
+check("不再有「只许勾上」的方向保险：两个方向都通（2026-11-01 移除单向保险）", () => {
+  const st = settings();
+  const down = bt.planBlockSync(
     [blockTask("b1", "买牛奶", true)],
     [mappedItem({ blockId: "b1", blockText: "买牛奶", blockChecked: true, status: "NEEDS-ACTION", percent: 0 })],
-    settings(),
+    st,
     { conflict: "server", existing: new Set(), checked: new Set() }
   );
-  assert.strictEqual(plan.writebacks.length, 0, "不得回写取消勾选");
-  for (const w of plan.writebacks) {
-    assert.notStrictEqual(w.checked, false, "回写动作里不允许出现 checked=false");
-  }
+  assert.strictEqual(down.writebacks.length, 1, "服务端未完成 → 如实取消勾选");
+  assert.strictEqual(down.writebacks[0].checked, false);
+  const up = bt.planBlockSync(
+    [blockTask("b1", "买牛奶", false)],
+    [mappedItem({ blockId: "b1", blockText: "买牛奶", blockChecked: false, status: "COMPLETED", percent: 100 })],
+    st,
+    { conflict: "server", existing: new Set(), checked: new Set() }
+  );
+  assert.strictEqual(up.writebacks.length, 1, "服务端完成 → 如实勾上");
+  assert.strictEqual(up.writebacks[0].checked, true);
 });
 
-check("漂移检测只认「服务端完成、块未完成」这一个方向", () => {
+check("漂移检测两个方向都认（服务端与缓存不一致就是漂移）", () => {
   const downgraded = mappedItem({
     blockId: "b1",
     blockText: "买牛奶",
@@ -651,8 +674,8 @@ check("漂移检测只认「服务端完成、块未完成」这一个方向", (
   });
   assert.strictEqual(
     bt.blockItemDrift(downgraded, settings()),
-    false,
-    "服务端降级不该判成漂移（否则每轮都把所有条目捞回来对账）"
+    true,
+    "服务端取消完成 → 也是漂移，要按 ID 捞回来对账"
   );
   const serverDone = mappedItem({
     blockId: "b1",
@@ -662,9 +685,17 @@ check("漂移检测只认「服务端完成、块未完成」这一个方向", (
     percent: 100
   });
   assert.strictEqual(bt.blockItemDrift(serverDone, settings()), true, "服务端完成了、块没勾 → 该判漂移并回写");
+  const same = mappedItem({
+    blockId: "b1",
+    blockText: "买牛奶",
+    blockChecked: true,
+    status: "COMPLETED",
+    percent: 100
+  });
+  assert.strictEqual(bt.blockItemDrift(same, settings()), false, "两边一致 → 不漂移");
 });
 
-check("服务端把完成态降级时，块来源条目保留本地完成态（不被污染）", async () => {
+check("服务端说未完成 → 本地条目**以服务端为准**（不再自我保护完成态）", async () => {
   const real = new StoreMod.CalStore({ loadData: async () => undefined, saveData: async () => {} });
   await real.load();
   real.put(
@@ -693,9 +724,133 @@ check("服务端把完成态降级时，块来源条目保留本地完成态（�
     }
   ]);
   const cur = real.get("u9");
-  assert.strictEqual(cur.status, "COMPLETED", "服务端降级不该污染本地完成态");
-  assert.strictEqual(cur.percent, 100, "服务端降级不该污染本地完成态");
-  assert.strictEqual(cur.blockChecked, true, "对账缓存也要保住");
+  // 如实双向：服务端说未完成 → 本地就记未完成（不再自我保护），
+  // 对账据此把块取消勾选；误改的兜底是执行层的「改动数量告警」。
+  assert.strictEqual(cur.status, "NEEDS-ACTION", "服务端未完成 → 以服务端为准（不再强行改回 COMPLETED）");
+  assert.strictEqual(cur.percent, 0);
+  assert.strictEqual(cur.blockChecked, true, "对账缓存仍是上次同步时的块态（下一轮据此判漂移）");
+});
+
+section("[blockscan] ⑩ 改动数量告警（2026-11-01 取代单向保险的兜底）");
+
+// 三个块都已映射，服务端状态与缓存不一致 → 3 条回写（服务端「未完成」→ 块取消勾选）
+const alertRows = ["b1", "b2", "b3"].map((id) => checkedRow(id, "任务" + id.slice(-1)));
+const alertItems = ["b1", "b2", "b3"].map((id) =>
+  mappedItem({
+    uid: "u-" + id,
+    blockId: id,
+    blockText: "任务" + id.slice(-1),
+    blockChecked: true,
+    status: "NEEDS-ACTION",
+    percent: 0
+  })
+);
+
+check("改动数 ≤ 阈值 → 不打扰用户（confirm 一次都不调）", async () => {
+  let asked = 0;
+  const { res } = await runOnce({
+    rows: alertRows,
+    items: alertItems,
+    full: true,
+    settings: settings({ blockSyncChangeAlert: 3 }),
+    confirm: async () => {
+      asked++;
+      return true;
+    }
+  });
+  assert.strictEqual(asked, 0, "3 条改动、阈值 3 → 不该弹窗");
+  assert.strictEqual(res.written, 3, "照常执行");
+});
+
+check("改动数 > 阈值 → 先问用户；用户**取消**则一条都不动", async () => {
+  let asked = null;
+  const { res, store, sync, writes } = await runOnce({
+    rows: alertRows,
+    items: alertItems,
+    full: true,
+    settings: settings({ blockSyncChangeAlert: 2 }),
+    confirm: async (info) => {
+      asked = info;
+      return false;
+    }
+  });
+  assert.ok(asked, "必须弹窗询问");
+  assert.strictEqual(asked.total, 3, "改动条数要如实告诉用户");
+  assert.strictEqual(asked.written, 3);
+  assert.strictEqual(asked.threshold, 2);
+  assert.strictEqual(res.cancelled, true);
+  assert.strictEqual(res.written, 0, "取消了就不能写块");
+  assert.strictEqual(writes.length, 0, "一个 updateBlock 都不能发");
+  assert.strictEqual(sync.out.created.length + sync.out.updated.length + sync.out.removed.length, 0, "服务端也不能动");
+  assert.strictEqual(store.blockScanWatermark, undefined, "取消了连水位线都不推进");
+});
+
+check("用户在告警里点「继续」→ 照常执行", async () => {
+  const { res, writes } = await runOnce({
+    rows: alertRows,
+    items: alertItems,
+    full: true,
+    settings: settings({ blockSyncChangeAlert: 1 }),
+    confirm: async () => true
+  });
+  assert.strictEqual(res.cancelled, undefined);
+  assert.strictEqual(res.written, 3);
+  assert.strictEqual(writes.length, 3);
+});
+
+check("「仅补缓存」的推送不算改动（否则首次扫描必弹窗）", async () => {
+  // 两边完全一致，但 store 里没记过 blockText/blockState → 只会补缓存
+  const rows = [checkedRow("b1", "买牛奶")];
+  const items = [
+    mappedItem({
+      blockId: "b1",
+      blockText: undefined,
+      blockChecked: undefined,
+      blockState: undefined,
+      status: "COMPLETED",
+      percent: 100
+    })
+  ];
+  let asked = null;
+  const { res } = await runOnce({
+    rows,
+    items,
+    full: true,
+    settings: settings({ blockSyncChangeAlert: 0 }), // 阈值 0 = 有 1 条改动就问
+    confirm: async (info) => {
+      asked = info;
+      return true;
+    }
+  });
+  assert.strictEqual(asked, null, "补缓存不是改动，不该弹窗");
+  assert.strictEqual(res.written, 0);
+});
+
+check("阈值留空（undefined）→ 不告警，直接执行", async () => {
+  let asked = 0;
+  const { res } = await runOnce({
+    rows: alertRows,
+    items: alertItems,
+    full: true,
+    settings: settings({ blockSyncChangeAlert: undefined }),
+    confirm: async () => {
+      asked++;
+      return false; // 即便「拒绝」也不该被问到
+    }
+  });
+  assert.strictEqual(asked, 0);
+  assert.strictEqual(res.written, 3, "没配阈值就照常执行");
+});
+
+check("没注入 confirm（如无人值守的环境）→ 不卡住，照常执行", async () => {
+  const { res } = await runOnce({
+    rows: alertRows,
+    items: alertItems,
+    full: true,
+    settings: settings({ blockSyncChangeAlert: 1 })
+  });
+  assert.strictEqual(res.cancelled, undefined);
+  assert.strictEqual(res.written, 3);
 });
 
 await runAll();

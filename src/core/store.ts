@@ -526,35 +526,28 @@ export class CalStore {
         blockChecked: inc.blockChecked ?? keep?.blockChecked,
         blockState: inc.blockState ?? keep?.blockState
       };
-      // ⚠️⚠️ **块来源条目的完成态要自我保护**（2026-10-30 用户实测踩中）。
-      //   ⚠️ **不要写成「服务端会降级完成态」** —— 那是错的，2026-10-30 实测证伪：
-      //     · Baikal 完整保留 STATUS:COMPLETED（新建→GET、改回→GET、等 3 秒→GET，
-      //       四轮往返全对；服务端 199 条 COMPLETED 的条目逐条 GET 与 REPORT
-      //       两条路径读回来全是 COMPLETED）。**Baikal 不会无缘无故改状态。**
-      //     · 那 8 条「本地 COMPLETED / raw 里 STATUS:NEEDS-ACTION」是**假象**：
-      //       raw 是**本地缓存的旧原文**（上传成功时也不会刷新，见 sync.ts
-      //       `item.raw = item.raw || ics`），不是服务端当前的内容。
-      //       逐条 GET 服务端 → 那 8 条全是 COMPLETED，etag 也与本地一致。
+      // 【这里曾经有一道「块来源条目完成态自我保护」，2026-11-01 移除】
+      //   原样：块来源条目若本地记着「已完成」而服务端说「未完成」→ 强行改回 COMPLETED。
+      //   它是 2026-10-30 那次 60 个块被批量取消勾选之后加的**第二道保险**（另一道在
+      //   core/task-state.ts 的 mergeServerState）。
       //
-      //   【真正的事故机制】插件更新条目时带 `If-Match: <本地 etag>`（乐观锁）。
-      //     若服务端内容已被别的客户端改过 → 服务端返 **412** → 插件按账户的
-      //     冲突策略（server=服务端优先）**丢弃本地改动**，于是本地完成态被
-      //     服务端那一刻的状态覆盖。若那一刻服务端是 NEEDS-ACTION，块来源条目
-      //     的完成态就被污染 → 下一轮对账判定「服务端未完成」→ 回写文档 → 把
-      //     用户已勾好的 `- [X]` 拍成 `- [ ]`。
+      //   ⚠️⚠️ **事故真因（实测，别再写错）**：不是「Baikal 会降级完成态」——
+      //     2026-10-30 实测证伪：Baikal 完整保留 STATUS:COMPLETED（新建→GET、改回→GET、
+      //     等 3 秒→GET 四轮往返全对；199 条 COMPLETED 逐条 GET 与 REPORT 两条路径
+      //     读回来全是 COMPLETED）。那 8 条「本地 COMPLETED / raw 里 NEEDS-ACTION」
+      //     是**假象**：`item.raw` 是本地缓存的旧原文（上传成功也不刷新，见 sync.ts
+      //     `item.raw = item.raw || ics`），不是服务端当前内容。
+      //     真因是插件自己：更新带 `If-Match: <本地 etag>`（乐观锁），服务端内容已被
+      //     别的客户端改过 → 返 **412** → 按冲突策略（server）丢弃本地改动 →
+      //     本地完成态被服务端那一刻的状态污染。
       //
-      //   故：块来源条目若本地记着「已完成」而服务端说「未完成」，**保留本地的完成态**。
-      //   代价是「在别的客户端取消勾选」同步不过来 —— 这是有意取舍：
-      //   用户的完成态主数据在文档里，服务端那份可能被 412 冲突覆盖。
+      //   真因既已定位，这道保险就只剩坏处：它把「在别的客户端取消完成」这条**正当改动**
+      //   永久挡在外面（服务端说 NEEDS-ACTION，这里强行改回 COMPLETED → 对账永远判不出
+      //   服务端改了）。雄哥 2026-11-01 拍板：去掉单向保险，改成如实双向。
       //
-      // ⚠️ 四态口径：这里只保护**完成态**（done）。进行中/放弃不在保护范围内 ——
-      //   它们的「降级」是正常的状态流转（手机端取消一条进行中的待办 → NEEDS-ACTION
-      //   是合法的），且回写块那一步还有 `canWriteState` 单向保险兜底。
-      const localDone = keep?.blockState === "done" || (keep?.blockState === undefined && keep?.blockChecked === true);
-      if (merged.blockId && localDone && !(merged.percent === 100 || merged.status === "COMPLETED")) {
-        merged.status = "COMPLETED";
-        merged.percent = 100;
-      }
+      //   新的兜底是**改动数量告警**：一轮改动超过设置里的「一次同步改动数量告警值」就
+      //   弹窗让用户确认（core/block-sync.ts 的 confirm）—— 异常批量照样拦得住。
+      //   若仍担心 412 污染，正解是修冲突策略/etag 管理，而不是在这里硬掰状态。
       this.items.set(keyOf(inc), merged);
       changed = true;
       applied++;

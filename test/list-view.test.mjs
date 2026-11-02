@@ -116,6 +116,7 @@ function mkItem(over = {}) {
     start: over.start || "2026-10-08T09:00:00",
     end: over.end,
     rrule: over.rrule,
+    status: over.status,
     percent: over.percent
   };
 }
@@ -287,6 +288,46 @@ t("已完成待办行标 is-done（标题划线）", () => {
   const html = render(mkCtx("day", "2026-10-08"), [[it, ["2026-10-08T18:00:00"]]]);
   assert.ok(html.includes("is-done"), "已完成应标 is-done");
 });
+
+t("列表每行带四态状态前缀", () => {
+  const a = mkItem({ kind: "todo", summary: "未开始待办", start: "2026-10-08T09:00:00", end: "2026-10-08T18:00:00" });
+  const b = mkItem({ kind: "todo", summary: "进行中待办", start: "2026-10-08T09:00:00", end: "2026-10-08T18:00:00", status: "IN-PROCESS", percent: 30 });
+  const c = mkItem({ kind: "todo", summary: "已完成待办", start: "2026-10-08T09:00:00", end: "2026-10-08T18:00:00", status: "COMPLETED", percent: 100 });
+  const d = mkItem({ summary: "过去日程", start: "2026-10-08T09:00:00", end: "2026-10-08T10:00:00" });
+  const e = mkItem({ summary: "未来日程", start: "2099-01-01T09:00:00", end: "2099-01-01T10:00:00" });
+  const html = render(mkCtx("day", "2026-10-08"), [
+    [a, ["2026-10-08T18:00:00"]],
+    [b, ["2026-10-08T18:00:00"]],
+    [c, ["2026-10-08T18:00:00"]],
+    [d, ["2026-10-08T09:00:00"]],
+    [e, ["2099-01-01T09:00:00"]]
+  ]);
+  assert.ok(html.includes("（未开始）"), "待办无状态应标（未开始）");
+  assert.ok(html.includes("（进行中）"), "IN-PROCESS 应标（进行中）");
+  assert.ok(html.includes("（已完成）"), "COMPLETED 应标（已完成）");
+  assert.ok(html.includes("（未开始）"), "未来日程应标（未开始）");
+});
+
+t("作废待办：状态前缀（已作废）+ 删除横线 + 圆内✕", () => {
+  const it = mkItem({ kind: "todo", summary: "废了", start: "2026-10-08T09:00:00", end: "2026-10-08T18:00:00", status: "CANCELLED", percent: 0 });
+  const html = render(mkCtx("day", "2026-10-08"), [[it, ["2026-10-08T18:00:00"]]]);
+  assert.ok(html.includes("（已作废）"), "应标（已作废）");
+  assert.ok(html.includes("is-cancelled"), "作废行应标 is-cancelled（标题删除横线）");
+  // 勾选圈内为 ✕（不再是 ✓ 或空）
+  const chip = html.match(/<button[^>]*class="cal-chip-check is-cancelled"[^>]*>([^<]*)<\/button>/);
+  assert.ok(chip && chip[1].includes("✕"), "作废待办的勾选圈内应为 ✕");
+});
+
+t("作废日程：状态前缀（已作废）+ 删除横线 + 圆内✕（span，无 data-toggle）", () => {
+  const it = mkItem({ summary: "废日程", start: "2026-10-08T09:00:00", end: "2026-10-08T10:00:00", status: "CANCELLED" });
+  const html = render(mkCtx("day", "2026-10-08"), [[it, ["2026-10-08T09:00:00"]]]);
+  assert.ok(html.includes("（已作废）"), "作废日程应标（已作废）");
+  assert.ok(html.includes("is-cancelled"), "作废日程行应标 is-cancelled");
+  // 日程的✕圈是 span（无 data-toggle，事件不可在列表里切换完成态）
+  assert.ok(/<span[^>]*class="cal-chip-check is-cancelled"[^>]*>✕<\/span>/.test(html), "作废日程应渲染带✕的 span 圈（无 data-toggle）");
+  assert.ok(!html.includes('data-toggle="u1"'), "作废日程的圈不应带 data-toggle");
+});
+
 
 t("标题做 HTML 转义（防注入）", () => {
   const it = mkItem({ summary: '<img src=x onerror="alert(1)">', start: "2026-10-08T09:00:00" });

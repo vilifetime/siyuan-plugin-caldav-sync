@@ -96,6 +96,18 @@ export interface PanelCtx {
    * 编辑弹窗的「文档任务块信息」页签用；块不存在或查询失败返回 `undefined`。
    */
   blockDetail?: (blockId: string) => Promise<BlockDetail | undefined>;
+  /**
+   * 档2·内核后端句柄（由入口注入，实时透传）。`this.kernel` 是思源在插件 kernel.js
+   * 连接成功后设置的句柄，可能为 null（内核尚未加载 / 未连接）。设置页「测试 Webhook」
+   * 等经它调内核 RPC。用 getter 透传，保证读到的始终是入口实例此刻的 `this.kernel`，
+   * 而非 onload 时的快照值（那时内核多半还没连上，会是 null）。
+   */
+  kernel?: any;
+  /**
+   * 档2·把最新提醒快照推给内核后端（由入口注入）。设置保存后由设置页调用，
+   * 让内核立刻拿到新的 webhook / 提醒锚点设置并重排程。
+   */
+  pushReminderSnapshot?: () => void;
 }
 
 export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => void; refresh: () => void } {
@@ -359,7 +371,9 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
       // 任务视图自己收集待办（见 view-task.ts），不读这个开关，因此不受影响。
       if (!showTodos && it.kind === "todo") continue;
       const occ =
-        it.kind === "todo" ? todoDueOccurrences(it, startMs, endMs) : occurrencesInRange(it, startMs, endMs);
+        it.kind === "todo"
+          ? todoDueOccurrences(it, startMs, endMs, ctx.store.settings.todoDuePosition)
+          : occurrencesInRange(it, startMs, endMs);
       if (occ.length) out.set(it, occ);
     }
     return out;

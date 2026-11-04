@@ -16,6 +16,7 @@ const pluginName = env.VITE_SIYUAN_PLUGIN_NAME || "siyuan-plugin-caldav-sync";
 const files = [
   ["dist/index.js", "index.js"],
   ["dist/index.css", "index.css"],
+  ["dist/kernel.js", "kernel.js"],
   "plugin.json",
   "README.md",
   "README_zh_CN.md",

@@ -1,5 +1,5 @@
 /** 视图渲染公共类型 */
-import type { CalItem, SortMode } from "../core/types";
+import type { CalItem, SortMode, CalSettings } from "../core/types";
 import { DEFAULT_CATEGORIES, calEventColor, calTodoColor, findCalendarByUrl } from "../core/types";
 import type { PanelCtx } from "./panel";
 import { occurrencesInRange } from "../core/ics";
@@ -16,21 +16,81 @@ export interface ViewArgs {
 }
 
 /**
- * 待办的时间归属一律取「到期日期」（DUE），不看开始日期（DTSTART）。
- * - 日历显示、周/月视图落位、Dock 与任务视图的时间段统计都走这里
- * - 无到期日期时返回空数组，该待办归入「无日期」
- * - 重复待办：先按开始时间展开实例，再整体平移到到期日
+ * 待办在日历视图中归属到哪些日期单元格，由 mode 决定：
+ * - "due"       ：仅到期日(DUE)（默认，沿用旧行为）
+ * - "start"     ：仅开始日(DTSTART)；旧待办只有 DUE 时退回到 DUE
+ * - "start-due" ：跨 [开始日, 到期日] 整个闭区间的每一天都放一个 chip（类似多天事件）
+ *
+ * 无日期（既无 DTSTART 也无 DUE）返回空数组，归入「无日期」。
+ * 返回值为 local stamp 字符串数组，调用方按 `.slice(0,10)` 取日期分桶。
  */
-export function todoDueOccurrences(it: CalItem, startMs: number, endMs: number): string[] {
-  if (!it.end) return [];
+export function todoDueOccurrences(
+  it: CalItem,
+  startMs: number,
+  endMs: number,
+  mode: CalSettings["todoDuePosition"] = "due",
+): string[] {
+  // 既无开始也无到期：归入「无日期」
+  if (!it.start && !it.end) return [];
+
+  // 非重复：直接按 mode 取归属日期（无需展开）
   if (!it.rrule) {
-    const ms = parseLocalStamp(it.end).getTime();
-    return ms >= startMs && ms <= endMs ? [it.end] : [];
+    const dates: string[] = [];
+    if (mode === "due") {
+      if (it.end) dates.push(it.end);
+    } else if (mode === "start") {
+      // 旧待办只有 DUE 时退回到 DUE
+      dates.push(it.start || it.end!);
+    } else {
+      // start-due：跨 [start, end] 闭区间每天各一个
+      const a = it.start || it.end!;
+      const b = it.end || it.start!;
+      dates.push(...eachDayInclusive(a, b));
+    }
+    return dates.filter((d) => {
+      const ms = parseLocalStamp(d).getTime();
+      return ms >= startMs && ms <= endMs;
+    });
   }
-  const anchor = it.start || it.end;
+
+  // 重复待办：先按开始时间展开实例，再按 mode 落位
+  const anchor = it.start || it.end!;
   const occs = occurrencesInRange({ ...it, start: anchor }, startMs, endMs);
-  const delta = it.start ? parseLocalStamp(it.end).getTime() - parseLocalStamp(it.start).getTime() : 0;
-  return occs.filter(Boolean).map((s) => stampOfMs(parseLocalStamp(s).getTime() + delta));
+  const delta =
+    it.start && it.end
+      ? parseLocalStamp(it.end).getTime() - parseLocalStamp(it.start).getTime()
+      : 0;
+  const out: string[] = [];
+  for (const s of occs.filter(Boolean)) {
+    const sMs = parseLocalStamp(s).getTime();
+    if (mode === "due") {
+      // 实例整体平移到到期日（原行为）
+      out.push(stampOfMs(sMs + delta));
+    } else if (mode === "start") {
+      // 重复待办必有 DTSTART，直接落在实例开始日
+      out.push(stampOfMs(sMs));
+    } else {
+      // start-due：跨 [s, s+delta] 闭区间每天各一个
+      const eMs = sMs + delta;
+      for (let d = sMs; d <= eMs; d += DAY_MS) {
+        if (d >= startMs && d <= endMs) out.push(stampOfMs(d));
+      }
+    }
+  }
+  return out;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 返回 [a, b] 闭区间内每一天的 local stamp 字符串（含端点，按日期步进） */
+function eachDayInclusive(a: string, b: string): string[] {
+  const aMs = parseLocalStamp(a).getTime();
+  const bMs = parseLocalStamp(b).getTime();
+  const lo = Math.min(aMs, bMs);
+  const hi = Math.max(aMs, bMs);
+  const out: string[] = [];
+  for (let d = lo; d <= hi; d += DAY_MS) out.push(stampOfMs(d));
+  return out;
 }
 
 export function keyOfItem(it: CalItem): string {

@@ -177,7 +177,7 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
         rows.push({ it, due: "", isEvent: false });
         continue;
       }
-      const occs = todoDueOccurrences(it, parseLocalStamp(today).getTime(), endMs);
+      const occs = todoDueOccurrences(it, parseLocalStamp(today).getTime(), endMs, "due");
       rows.push({ it, due: occs.length && occs[0] ? occs[0].slice(0, 10) : dueSrc.slice(0, 10), isEvent: false });
       continue;
     }

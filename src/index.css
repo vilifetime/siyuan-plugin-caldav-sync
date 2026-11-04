@@ -4846,3 +4846,18 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   font-size: 12px;
 }
 .caldav-attach-confirm-text { flex: 1 1 100%; line-height: 1.5; }
+
+/* 「测试 Webhook」按钮 + 结果回显（档2·Webhook 通道扩展） */
+.caldav-webhook-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.caldav-webhook-test-result {
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.caldav-webhook-test-result.caldav-test-ok { color: var(--caldav-success, #2e9e5b); }
+.caldav-webhook-test-result.caldav-test-fail { color: var(--caldav-danger, #e0564f); }

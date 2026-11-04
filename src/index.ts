@@ -18,6 +18,7 @@ import { enabledAccounts, enabledCalendars, findCalendarByUrl, resolveDefaultCal
 import { todoDueOccurrences } from "@/ui/view-common";
 import { initialViewMode as readLastView, saveViewMode as writeLastView, saveCalendarView } from "@/ui/view-pref";
 import { ReminderEngine } from "@/core/reminder";
+import { projectReminderItem, type ReminderSnapshot } from "@/core/kernel-shared";
 import { renderPanel, renderDockPanel, notifyViewChange, toggleTodoDone, VIEW_CHANGE_EVENT, type PanelCtx, type ViewMode } from "@/ui/panel";
 import { isMobile } from "@/ui/device";
 import { adoptMobileLayer, closeAllMobileLayers, isDialogAlive } from "@/ui/mobile-layers";
@@ -111,6 +112,19 @@ export default class CalDavPlugin extends Plugin {
   private viewChangeHandler: ((e: Event) => void) | null = null;
 
   /**
+   * 档2·真·内核后端：前端↔内核 RPC 方法名（与 src/kernel.ts 严格对齐）。
+   * 内核 bind `pushReminderData` 收快照；内核 broadcast `requestReminderData` 拉首份。
+   */
+  private static readonly KERNEL_RPC_PUSH = "pushReminderData";
+  private static readonly KERNEL_RPC_REQUEST = "requestReminderData";
+  /** 推送提醒快照的去抖计时器（避免刷新/同步高频时反复大数组序列化） */
+  private reminderPushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** requestReminderData 的处理器引用（onunload 时需同一引用解绑） */
+  private kernelRequestHandler = (): void => {
+    this.pushReminderSnapshot();
+  };
+
+  /**
    * 主窗口「上次用的视图」。
    *
    * Dock 里原来有「日历视图 / 任务视图」两个按钮，现合并成一个（2026-10-10 雄哥要求）：
@@ -198,6 +212,8 @@ export default class CalDavPlugin extends Plugin {
     this.store.onChange(() => {
       this.reconcileReminders();
       this.reminder?.reschedule();
+      // 档2·内核后端：设置里有 webhook/提醒锚点变化，需同步给内核重新排程
+      this.pushReminderSnapshot();
     });
 
     // 左侧 Dock：精简导航（视图按钮在主窗口打开/切换日历页签）
@@ -331,6 +347,15 @@ export default class CalDavPlugin extends Plugin {
     }
     // 按当前设置决定是否启动提醒引擎（设置可能已开启）
     this.reconcileReminders();
+
+    // 档2·内核后端：监听内核拉首份数据请求 + 冷启动主动推一次快照。
+    // 若没有打包 kernel.js（旧版），bind/call 都会静默失败，不影响前端既有提醒通道。
+    try {
+      this.kernel.rpc.bind(CalDavPlugin.KERNEL_RPC_REQUEST, this.kernelRequestHandler);
+    } catch {
+      /* 无内核后端：忽略 */
+    }
+    this.pushReminderSnapshot();
   }
 
   /**
@@ -765,6 +790,16 @@ export default class CalDavPlugin extends Plugin {
       document.removeEventListener(VIEW_CHANGE_EVENT, this.viewChangeHandler);
       this.viewChangeHandler = null;
     }
+    // 档2·内核后端：清掉去抖计时器并解绑拉数据请求
+    if (this.reminderPushTimer) {
+      clearTimeout(this.reminderPushTimer);
+      this.reminderPushTimer = null;
+    }
+    try {
+      this.kernel.rpc.unbind(CalDavPlugin.KERNEL_RPC_REQUEST, this.kernelRequestHandler);
+    } catch {
+      /* 忽略 */
+    }
     this.tabPanel = null;
   }
 
@@ -1033,6 +1068,7 @@ export default class CalDavPlugin extends Plugin {
   }
 
   private createCtx(): PanelCtx {
+    const self = this;
     return {
       store: this.store,
       sync: this.sync,
@@ -1059,7 +1095,15 @@ export default class CalDavPlugin extends Plugin {
       scanBlocksNow: () => this.scanBlocksNow(),
       clearBlockItems: () => this.clearBlockItems(),
       // 文档任务块：编辑弹窗「文档任务块信息」页签（只读显示笔记本 / 文档 / 块名 / 块 ID）
-      blockDetail: (id) => getBlockDetail(this.kernelCaller(), id)
+      blockDetail: (id) => getBlockDetail(this.kernelCaller(), id),
+      // 档2·内核后端：把 `this.kernel` 以 getter 实时透传到上下文。
+      // 必须用 getter（读 self.kernel 而非捕获 onload 时的值）——内核连接成功前 this.kernel 是 null，
+      // 若直接写 `kernel: this.kernel` 会永远停在 null。设置页「测试 Webhook」与保存后推快照都依赖它。
+      get kernel() {
+        return self.kernel;
+      },
+      // 设置保存后由设置页调用，让内核立即拿到新设置重排程（见 settings-dialog bindSave）。
+      pushReminderSnapshot: () => self.pushReminderSnapshot()
     };
   }
 
@@ -1315,6 +1359,33 @@ export default class CalDavPlugin extends Plugin {
     } catch (e) {
       console.warn("[caldav] 刷新 Dock 失败（已忽略）", e);
     }
+    // 档2·内核后端：同步完成/面板刷新后顺带把最新快照推给内核（去抖）
+    this.pushReminderSnapshot();
+  }
+
+  /**
+   * 档2·真·内核后端：把当前「提醒快照」（精简条目 + 设置）推给内核 kernel.js。
+   *
+   * 前端关闭页面后仍能在到点时触发 Webhook 的是内核调度，它依赖这份快照。
+   * - 去抖 800ms：同步成功会高频触发 refreshPanels，避免反复序列化大数组推 RPC。
+   * - 没有打包 kernel.js（旧版/未构建）：`this.kernel` 存在但 call 会 reject，静默忽略。
+   * - 不打印任何条目内容到日志（条目可能含隐私），更不碰 webhookUrl。
+   */
+  /** 把当前提醒快照推给内核（设置变更/同步落盘后调用，确保内核拿到最新的 webhook 开关与地址） */
+  pushReminderSnapshot(): void {
+    if (this.reminderPushTimer) clearTimeout(this.reminderPushTimer);
+    this.reminderPushTimer = setTimeout(() => {
+      this.reminderPushTimer = null;
+      try {
+        if (!this.kernel) return; // 理论上 Plugin 基类的 kernel 必存在，保守兜底
+        const items = this.store.getAll().map(projectReminderItem);
+        const snapshot: ReminderSnapshot = { items, settings: this.store.settings };
+        // 内核未就绪（尚未 bind pushReminderData）时 call 会 reject，忽略即可
+        void this.kernel.rpc.call[CalDavPlugin.KERNEL_RPC_PUSH](snapshot).catch(() => {});
+      } catch (e) {
+        console.warn("[caldav] 推送提醒快照失败（已忽略）", e);
+      }
+    }, 800);
   }
 
   /** 按设置决定是否启用提醒引擎（开关切换/启动时调用） */
@@ -1324,7 +1395,9 @@ export default class CalDavPlugin extends Plugin {
     if (want && !this.reminder) {
       this.reminder = new ReminderEngine(
         () => this.store.getAll(),
-        (item, anchorISO, alarmMin) => this.fireReminder(item, anchorISO, alarmMin)
+        (item, anchorISO, alarmMin) => this.fireReminder(item, anchorISO, alarmMin),
+        undefined,
+        () => this.store.settings
       );
       this.reminder.start();
       console.info("[caldav] 提醒引擎已启动");
@@ -1503,7 +1576,7 @@ export default class CalDavPlugin extends Plugin {
         if (it.deleted || it.dirty || !enabled.has(it.calendarUrl)) continue;
         if (it.kind === "todo" && it.percent === 100) continue;
         const occs =
-          it.kind === "todo" ? todoDueOccurrences(it, startMs, endMs) : occurrencesInRange(it, startMs, endMs);
+          it.kind === "todo" ? todoDueOccurrences(it, startMs, endMs, "due") : occurrencesInRange(it, startMs, endMs);
         let inRange = false;
         for (const occ of occs) {
           if (!occ) continue;

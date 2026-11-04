@@ -425,6 +425,38 @@ export interface CalSettings {
   /** 启用提醒通知（托盘运行时，对设置了提醒时间的日程/待办到点弹系统通知） */
   enableReminders?: boolean;
   /**
+   * 启用 Webhook 通知（档2·真·内核后端）：提醒触发时向 `webhookUrl` 发送 HTTP POST（JSON）。
+   * 走内核 kernel.js 调度，即使关闭前端页面 / 最小化思源也能触发。
+   * 需配合 `enableWebhook__` 内核后端 + 设置项 `webhookUrl`。
+   */
+  enableWebhook?: boolean;
+  /**
+   * Webhook 接收地址（仅允许 http/https，协议由内核 webhook.ts 校验）。
+   * 留空则不发送。注意：URL 里常含 token，日志/缓存严禁明文打印。
+   */
+  webhookUrl?: string;
+  /**
+   * Webhook 报文通道类型（档2·内核后端扩展）：决定投递给目的地的 JSON 报文格式。
+   * - `"feishu"`    飞书自定义机器人（text 类型）；
+   * - `"wecom"`     企业微信群机器人（text 类型）；
+   * - `"dingtalk"`  钉钉群机器人（text 类型，报文结构与企微同构：`{"msgtype":"text","text":{"content":"..."}}`）；
+   * - `"custom"`    用户自定义 JSON 模板（见 `webhookTemplate`），支持 `${title}` / `${message}` 变量。
+   * 默认 `"feishu"`。
+   */
+  webhookType?: "feishu" | "wecom" | "dingtalk" | "custom";
+  /**
+   * 自定义 Webhook JSON 模板（仅 `webhookType === "custom"` 时生效）。
+   * 支持变量：`${title}`（提醒标题）、`${message}`（提醒正文）。
+   * 留空则回落到内置默认模板（与飞书 text 同构）。
+   */
+  webhookTemplate?: string;
+  /**
+   * 钉钉机器人「加签」密钥（仅 `webhookType === "dingtalk"` 且机器人安全设置为「加签」时填写）。
+   * 留空表示机器人用的是「自定义关键词」/「IP 白名单」等无需签名的模式。
+   * 内部仅在内核投递时用于计算 `timestamp` + `sign` 拼到 webhook URL，绝不落日志、绝不外泄。
+   */
+  webhookSecret?: string;
+  /**
    * 新建条目的默认日历（全局一个，不区分账户）。
    * 配套 defaultAccountId 组成设置页的「默认账户 + 默认日历」两级选择；
    * 停用/删除后由 resolveDefaultCalendar() 回退到第一个启用账户的第一个启用日历。
@@ -509,6 +541,20 @@ export interface CalSettings {
    * 避免算出「截止早于开始」的无效区间。全天待办不受此项影响（仍为次日）。
    */
   todoDefaultEnd?: "none" | "plus1h" | "plus8h";
+
+  /**
+   * 待办任务在日历视图中归属到哪个日期单元格：
+   * `"due"` = 结束日期(DUE)（默认，沿用旧行为）；
+   * `"start"` = 开始日期(DTSTART)（旧待办只有 DUE 时退回到 DUE）；
+   * `"start-due"` = 跨 [开始日期, 结束日期] 整个闭区间的每一天都放一个 chip（类似多天事件）。
+   */
+  todoDuePosition?: "due" | "start" | "start-due";
+  /**
+   * 待办提醒锚点（决定提醒在什么时候触发）：
+   * `"due"` = 结束日期(DUE)（默认，沿用旧行为 `item.end || item.start`）；
+   * `"start"` = 开始日期(DTSTART)。
+   */
+  todoReminderAnchor?: "due" | "start";
 
   // ── 思源任务块识别与映射（2026-10-28，issue #2）──
   //
@@ -685,6 +731,12 @@ export const DEFAULT_SETTINGS: CalSettings = {
   accounts: [],
   syncIntervalMin: 15,
   enableReminders: false,
+  // Webhook 通知（档2·内核后端）：默认关闭，需用户显式填写地址并勾选启用
+  enableWebhook: false,
+  webhookUrl: "",
+  webhookType: "feishu",
+  webhookTemplate: "",
+  webhookSecret: "",
   showTodosInCalendar: true,
   showEventsInTaskView: false,
   showExpiredEventsInTaskView: false,
@@ -702,6 +754,10 @@ export const DEFAULT_SETTINGS: CalSettings = {
   defaultTaskFilter: "last",
   // 新建待办的默认截止：开始 + 8 小时（2026-10-21 既定行为，现开放可配）
   todoDefaultEnd: "plus8h",
+  // 待办在日历单元格的显示位置：默认结束日期（沿用旧行为）
+  todoDuePosition: "due",
+  // 待办提醒锚点：默认结束日期（DUE 优先，沿用旧行为）
+  todoReminderAnchor: "due",
   // 思源任务块识别与映射：默认关闭（用户明确开启才启用），范围默认全部文档，标记默认小角标
   blockSyncEnabled: false,
   blockSyncCalendarUrl: "",

@@ -8,7 +8,7 @@
  * - 重复条目只排「下一个未来实例」，触发后由周期 rescan 推进到再下一个。
  * - 思源托盘运行时渲染进程不退出，setTimeout 照常触发；rescan 兜底防后台节流。
  */
-import type { CalItem } from "./types";
+import type { CalItem, CalSettings } from "./types";
 import { occurrencesInRange } from "./ics";
 import { parseLocalStamp, stampOfMs } from "./date";
 import { t as _t } from "./i18n";
@@ -52,7 +52,8 @@ export class ReminderEngine {
   constructor(
     private getItems: () => CalItem[],
     private fire: ReminderFire,
-    now?: () => number
+    now?: () => number,
+    private getSettings: () => CalSettings = () => ({}) as CalSettings
   ) {
     this.now = now || (() => Date.now());
   }
@@ -158,9 +159,19 @@ export class ReminderEngine {
     }
   }
 
-  /** 返回条目的若干未来发生时刻（毫秒）：事件用 start，待办用 due(end) */
+  /**
+   * 返回条目的若干未来发生时刻（毫秒）：事件用 start；
+   * 待办锚点由设置 todoReminderAnchor 决定 —— 默认 due(end)，可配为 start(DTSTART)。
+   */
   private nextOccurrences(item: CalItem, fromMs: number, toMs: number): number[] {
-    const anchor = item.kind === "todo" ? item.end || item.start : item.start;
+    const mode = this.getSettings().todoReminderAnchor || "due";
+    // 待办锚点：默认到期日(DUE)，可切换为开始日(DTSTART)；旧待办只有一端时退回到另一端
+    const anchor =
+      item.kind === "todo"
+        ? mode === "start"
+          ? item.start || item.end
+          : item.end || item.start
+        : item.start;
     if (!anchor) return [];
     // 非重复条目直接用锚点时刻；待办只填了到期日、没有 DTSTART 时也走这里
     // （旧实现要求 item.start 必须存在，导致「只有截止日期」的待办永远不提醒）

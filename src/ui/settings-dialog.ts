@@ -520,6 +520,15 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         s.defaultTaskFilter = (($("select[data-s='defaultTaskFilter']")?.value || "last") as CalSettings["defaultTaskFilter"]);
         // 新建待办的默认截止时间（2026-10-27）
         s.todoDefaultEnd = (($("select[data-s='todoDefaultEnd']")?.value || "plus8h") as CalSettings["todoDefaultEnd"]);
+        // 待办在日历单元格的显示位置 / 待办提醒锚点（2026-11 新增可配）
+        s.todoDuePosition = (($("select[data-s='todoDuePosition']")?.value || "due") as CalSettings["todoDuePosition"]);
+        s.todoReminderAnchor = (($("select[data-s='todoReminderAnchor']")?.value || "due") as CalSettings["todoReminderAnchor"]);
+        // Webhook 通知（档2·内核后端）：开关 + 地址 + 报文类型 + 自定义模板
+        s.enableWebhook = ($("input[data-s='webhook']") as HTMLInputElement | null)?.checked;
+        s.webhookUrl = ($("input[data-s='webhookUrl']")?.value || "").trim();
+        s.webhookType = (($("select[data-s='webhookType']")?.value || "feishu") as CalSettings["webhookType"]);
+        s.webhookTemplate = ($("textarea[data-s='webhookTemplate']")?.value || "").trim();
+        s.webhookSecret = ($("input[data-s='webhookSecret']")?.value || "").trim();
         s.blockSyncEnabled = !!($("input[data-blk-enable]") as HTMLInputElement | null)?.checked;
         s.blockSyncOnStartup = !!($("input[data-s='blockSyncOnStartup']") as HTMLInputElement | null)?.checked;
         s.blockSyncOnManualSync = !!($("input[data-s='blockSyncOnManualSync']") as HTMLInputElement | null)?.checked;
@@ -557,6 +566,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         const dcSel = $("select[data-s='defaultCal']")?.value || "";
         s.defaultCalendarUrl = dcSel || undefined;
         await ctx.store.persist();
+        // 提醒/Webhook 设置刚改过：立刻把最新快照推给内核（否则内核一直用旧快照、
+        // enableWebhook 停留在 false，提醒到点只弹前端卡片、webhook 永不触发）。
+        ctx.pushReminderSnapshot?.();
         // 凭据或服务器地址可能刚被改过：丢掉 Digest 协商缓存，
         // 否则下次请求会拿着旧 nonce/旧密码重发，白挨一次 401
         clearAuthCache();
@@ -594,6 +606,8 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
       bindRemind();
       bindPurge();
       bindChinaCalendar();
+      bindWebhook();
+      bindTestWebhook();
       bindBlockSync();
       bindSave();
       bindDefaultPicker();
@@ -639,6 +653,77 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
           if (msg) msg.textContent = _t("拉取失败（请检查网络或数据源 URL）");
         } finally {
           btn.removeAttribute("disabled");
+        }
+      });
+    }
+
+    /**
+     * Webhook 报文类型：选「自定义」时显示「Webhook JSON 格式」；选「钉钉」时显示「钉钉加签密钥」；
+     * 其余类型两者都隐藏（走内置模板、无需密钥）。
+     */
+    function bindWebhook(): void {
+      const typeSel = el.querySelector<HTMLSelectElement>("select[data-s='webhookType']");
+      const tmplWrap = el.querySelector<HTMLElement>("#caldav-webhook-template");
+      const secretWrap = el.querySelector<HTMLElement>("#caldav-webhook-secret");
+      typeSel?.addEventListener("change", () => {
+        if (tmplWrap) tmplWrap.style.display = typeSel.value === "custom" ? "" : "none";
+        if (secretWrap) secretWrap.style.display = typeSel.value === "dingtalk" ? "" : "none";
+      });
+    }
+
+    /**
+     * 「测试 Webhook」按钮：用当前表单里的 webhook 设置，经内核立即投递一条演示提醒，
+     * 把结果（成功 / HTTP 状态 / 错误）回显到按钮旁的 span —— 避免静默失败、方便排查。
+     */
+    function bindTestWebhook(): void {
+      const btn = el.querySelector<HTMLButtonElement>("button[data-action='test-webhook']");
+      const out = el.querySelector<HTMLElement>("[data-role='webhook-test-result']");
+      btn?.addEventListener("click", async () => {
+        if (!out) return;
+        const read = (sel: string): string =>
+          (el.querySelector<HTMLInputElement>(sel)?.value || "").trim();
+        const type = (el.querySelector<HTMLSelectElement>("select[data-s='webhookType']")?.value || "feishu") as CalSettings["webhookType"];
+        const probe: CalSettings = {
+          ...(s as CalSettings),
+          enableWebhook: true,
+          webhookUrl: read("input[data-s='webhookUrl']"),
+          webhookType: type,
+          webhookTemplate: read("textarea[data-s='webhookTemplate']"),
+          webhookSecret: read("input[data-s='webhookSecret']")
+        };
+        if (!probe.webhookUrl) {
+          out.textContent = _t("请先填写 Webhook 地址");
+          out.className = "caldav-webhook-test-result caldav-test-fail";
+          return;
+        }
+        out.textContent = _t("投递中…");
+        out.className = "caldav-webhook-test-result";
+        try {
+          const kernel = ctx.kernel;
+          if (!kernel) {
+            // 内核句柄为 null：kernel.js 未连接。思源里单纯「重载」插件通常只重载前端，
+            // 主进程里的内核后端需「停用→启用」或彻底退出思源重开才会重建连接。
+            out.textContent = _t("内核未连接（请退出思源重开，或停用插件后再启用）");
+            out.className = "caldav-webhook-test-result caldav-test-fail";
+            return;
+          }
+          if (!kernel?.rpc?.call?.testWebhook) {
+            // 内核连上了，但 testWebhook 没注册上：多半是 kernel.js 没更新到磁盘。
+            out.textContent = _t("内核已连接但测试接口缺失（kernel.js 可能未更新，请重启思源）");
+            out.className = "caldav-webhook-test-result caldav-test-fail";
+            return;
+          }
+          const r = await kernel.rpc.call.testWebhook({ settings: probe });
+          if (r?.ok) {
+            out.textContent = _t("投递成功") + (r.status ? `（HTTP ${r.status}）` : "");
+            out.className = "caldav-webhook-test-result caldav-test-ok";
+          } else {
+            out.textContent = _t("投递失败") + (r?.error ? `：${r.error}` : "");
+            out.className = "caldav-webhook-test-result caldav-test-fail";
+          }
+        } catch (e) {
+          out.textContent = _t("调用内核失败") + `：${(e as Error)?.message || e}`;
+          out.className = "caldav-webhook-test-result caldav-test-fail";
         }
       });
     }
@@ -993,6 +1078,59 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
       ${_t("不提供授权窗口（不会弹窗，内核默认放行），")}Windows ${_t("便携版思源还会因缺少开始菜单快捷方式")}
       ${_t("被系统丢弃系统通知")} ${_t("——")} ${_t("两者都属于已知限制，不影响应用内提醒卡片。")}
     </p>
+    <div class="caldav-field">
+      <label class="caldav-field-label">${_t("待办提醒时间")}</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="todoReminderAnchor">
+          <option value="due" ${(s.todoReminderAnchor || "due") === "due" ? "selected" : ""}>${_t("结束日期（DUE）")}</option>
+          <option value="start" ${s.todoReminderAnchor === "start" ? "selected" : ""}>${_t("开始日期")}</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+      <p class="caldav-set-hint">${_t("提醒触发时刻基于哪个日期：默认结束日期（DUE，即原行为）；可改为开始日期。")}</p>
+    </div>
+    <label class="caldav-check-row">
+      <input type="checkbox" data-s="webhook" ${s.enableWebhook ? "checked" : ""}/>
+      <span>${_t("启用 Webhook 通知（关掉前端页面也能触发，走内核后端）")}</span>
+    </label>
+    <div class="caldav-field">
+      <label class="caldav-field-label">${_t("Webhook 地址")}</label>
+      <div class="caldav-input-wrap">
+        <input class="caldav-input" type="text" data-s="webhookUrl" value="${escape(s.webhookUrl || "")}" placeholder="https://example.com/webhook?token=..."/>
+      </div>
+      <p class="caldav-set-hint">${_t("提醒触发时向该地址发送 HTTP POST（JSON）。仅允许 http/https；地址含 token，切勿外泄。")}</p>
+    </div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">${_t("Webhook 报文类型")}</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="webhookType">
+          <option value="feishu" ${(s.webhookType || "feishu") === "feishu" ? "selected" : ""}>${_t("飞书")}</option>
+          <option value="wecom" ${s.webhookType === "wecom" ? "selected" : ""}>${_t("企业微信")}</option>
+          <option value="dingtalk" ${s.webhookType === "dingtalk" ? "selected" : ""}>${_t("钉钉")}</option>
+          <option value="custom" ${s.webhookType === "custom" ? "selected" : ""}>${_t("自定义")}</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+      <p class="caldav-set-hint">${_t("通知目的地格式：飞书 / 企业微信 / 钉钉走内置模板，自定义可自填 JSON。")}</p>
+    </div>
+    <div class="caldav-field" id="caldav-webhook-template" style="display:${s.webhookType === "custom" ? "" : "none"}">
+      <label class="caldav-field-label">${_t("Webhook JSON 格式")}</label>
+      <div class="caldav-input-wrap">
+        <textarea class="caldav-input" data-s="webhookTemplate" rows="4" placeholder='{"msg_type":"text","content":{"text":"\${title}\\n\${message}"}}'>${escape(s.webhookTemplate || "")}</textarea>
+      </div>
+      <p class="caldav-set-hint">${_t("自定义 JSON 模板，支持变量")} \${title}（${_t("标题")}） / \${message}（${_t("正文")}）。${_t("留空用默认模板。")}</p>
+    </div>
+    <div class="caldav-field" id="caldav-webhook-secret" style="display:${s.webhookType === "dingtalk" ? "" : "none"}">
+      <label class="caldav-field-label">${_t("钉钉加签密钥")}</label>
+      <div class="caldav-input-wrap">
+        <input class="caldav-input" type="text" data-s="webhookSecret" value="${escape(s.webhookSecret || "")}" placeholder="SECxxxxxxxx（机器人安全设置「加签」处复制）"/>
+      </div>
+      <p class="caldav-set-hint">${_t("钉钉机器人安全设为「加签」时填写；关键词 / IP 白名单模式留空即可。")}</p>
+    </div>
+    <div class="caldav-field caldav-webhook-test-row">
+      <button type="button" class="caldav-btn" data-action="test-webhook">${_t("测试 Webhook")}</button>
+      <span class="caldav-webhook-test-result" data-role="webhook-test-result"></span>
+    </div>
   </div>
 
   <div class="caldav-section caldav-section--card">
@@ -1096,6 +1234,18 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         <span class="caldav-input-suffix">${icons.chevron}</span>
       </div>
       <p class="caldav-set-hint">${_t("只影响")}**${_t("新建")}**${_t("待办；基准是开始时间（新建时开始默认为当前时刻的下一个整点）。全天待办仍默认次日。")}</p>
+    </div>
+    <div class="caldav-field">
+      <label class="caldav-field-label">${_t("待办在日历单元格的显示位置")}</label>
+      <div class="caldav-input-wrap">
+        <select class="caldav-input" data-s="todoDuePosition">
+          <option value="due" ${(s.todoDuePosition || "due") === "due" ? "selected" : ""}>${_t("结束日期（DUE）")}</option>
+          <option value="start" ${s.todoDuePosition === "start" ? "selected" : ""}>${_t("开始日期")}</option>
+          <option value="start-due" ${s.todoDuePosition === "start-due" ? "selected" : ""}>${_t("开始日期到结束日期（区间）")}</option>
+        </select>
+        <span class="caldav-input-suffix">${icons.chevron}</span>
+      </div>
+      <p class="caldav-set-hint">${_t("待办在月/周/日/年视图中归属到哪一天：默认结束日期（DUE）；可选开始日期，或跨开始到结束的整个区间每天各显示一个。")}</p>
     </div>
   </div>
 

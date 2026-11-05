@@ -27,6 +27,8 @@ const EXACT_PAIRS = [
   ["帮助", "Help"],
 
   // 命令 / stock 键（langKey 引用，值已由 gen-ast 预翻，这里不用管）
+  // SPIKE issue#5：全局快捷键唤起独立窗口（中文文案键，非 stock）
+  ["在独立窗口打开日历", "Open Calendar in Separate Window"],
 
   // 账户
   ["账户名称", "Account Name"],

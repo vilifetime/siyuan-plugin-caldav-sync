@@ -2,7 +2,7 @@
  * CalDAV日历任务 —— 思源笔记插件入口
  * 左侧 Dock：精简导航（视图切换 + 设置）；主日历视图：主窗口页签
  */
-import { Dialog, Plugin, openTab, openMobileFileById, showMessage, type Custom, type MobileCustom, type Tab } from "siyuan";
+import { Dialog, Plugin, openTab, openWindow, openMobileFileById, showMessage, type Custom, type MobileCustom, type Tab } from "siyuan";
 // pushMsg 在部分思源版本的 siyuan.d.ts 里没有声明（运行时通常存在），故用命名空间做存在性容错调用
 import * as siyuanApi from "siyuan";
 import "@/index.css";
@@ -58,6 +58,8 @@ function docIdOf(protyle: any): string | undefined {
  */
 const DOCK_TYPE = "caldav-sync-dock";
 const TAB_TYPE = "caldav-sync-tab";
+/** 独立窗口存在态标记（localStorage key，同源窗口共享）；单例判定用 */
+const SECONDARY_WIN_KEY = "siyuan-caldav-sync-win";
 /** 插件数据文件名：带 .json 后缀，便于在文件管理器里直接双击查看/编辑 */
 const DATA_FILE = "caldav-sync.json";
 
@@ -100,6 +102,33 @@ export default class CalDavPlugin extends Plugin {
   private disposers = new Map<string, () => void>();
   private tabPanel: { refresh: () => void } | null = null;
   private tab: Tab | null = null;
+  /**
+   * [SPIKE issue #5] 插件「可用」信号：store / mainCtx / i18n 就绪后 resolve。
+   *
+   * 独立窗口里思源 `loadPlugins()` 默认不 await 插件的 async onload()，会先恢复布局、
+   * 后等 onload 跑完；自定义页签的 init 因此可能早于 mainCtx 就绪被调到。此时先占位，
+   * 等这里 resolve 再补渲染。**init 绝不能抛错** —— 异常会冒泡到思源 getEmojiConf 回调，
+   * 令 layoutReady 永不 resolve，新窗口就永远停在 #loading 转圈（issue #5 首轮实测现象）。
+   */
+  private resolveReady: () => void = () => {};
+  private readyPromise = new Promise<void>((resolve) => { this.resolveReady = resolve; });
+  /**
+   * [SPIKE issue #5] 当前是否是思源的「独立窗口」（window.html）。
+   * 从属窗口只读：不写 petal 数据、不启动自动同步/提醒/内核推送，避免与主窗口实例
+   * 互相覆盖同一份 caldav-sync.json → 内核高频 dataChange → 插件 teardown → 窗口消失。
+   */
+  private isSecondaryWindow = false;
+  /** 正在应用对端窗口传来的数据变更：期间本窗口任何 persist 都不广播，避免回环 */
+  private applyingRemote = false;
+  /** 跨窗口数据变更通知通道（BroadcastChannel；不可用时降级到 localStorage storage 事件） */
+  private bc: BroadcastChannel | null = null;
+  /** 独立窗口单例：正在开窗口，防连按重复开 */
+  private openingWindow = false;
+  /** 独立窗口存活探活：pending 的 pong 回调（BroadcastChannel ping/pong 用） */
+  private pendingWinAlive: ((alive: boolean) => void) | null = null;
+  /** 渲染就绪信号：在 createCtx 之后 resolve，供独立窗口页签延迟补挂载用（比 readyPromise 更准时） */
+  private resolveCtxReady: () => void = () => {};
+  private ctxReady: Promise<void> = new Promise<void>((res) => { this.resolveCtxReady = res; });
   /**
    * 移动端全屏承载面板（移动端没有页签，改用 Dialog 承载同一套 renderPanel）。
    * dialog 与其中的面板一起记账：回调按**实例**自证身份，旧层的迟到回调不会碰新层。
@@ -156,6 +185,66 @@ export default class CalDavPlugin extends Plugin {
 
   async onload(): Promise<void> {
     const self = this;
+
+    // [SPIKE issue #5] 独立窗口 URL 是 /stage/build/app/window.html（主窗口是 index.html）。
+    // 不用思源 isWindow() 的 `document.getElementById("toolbar")` 判据：onload 时 DOM
+    // 可能还没插入 toolbar，会误把主窗口判成从属窗口、导致配置完全不落盘。
+    this.isSecondaryWindow = /window\.html/i.test(window.location.pathname);
+    if (this.isSecondaryWindow) {
+      console.info("[caldav][spike] 独立窗口：从属模式");
+      // 标记独立窗口已开，供主窗口单例探活（同源 localStorage 跨窗口共享）
+      this.markSecondaryWindowOpen();
+    } else {
+      // 主窗口启动：清掉可能由「上一次会话崩溃 / 未按 onunload 退出」残留的陈旧标记，
+      // 否则会把热键永久锁死。真正存活的窗口会由 openCalendarWindow 的 ping/pong 探活确认。
+      this.clearSecondaryWindowOpen();
+    }
+
+    // [SPIKE issue #5] 自定义页签必须在**第一个 await 之前**同步注册。
+    // 思源新窗口 loadPlugins() 默认不 await 插件的 async onload()，布局恢复会先跑；
+    // 注册晚一步，newModelByInitData 就找不到 models[customModelType]，抛出的异常会
+    // 冒泡到 getEmojiConf 回调、令 layoutReady 永不 resolve → 独立窗口永远停在 loading 转圈。
+    // 同时 init 全程 try/catch + 上下文未就绪时延迟补渲染，保证绝不阻断思源窗口初始化。
+    this.addTab({
+      type: TAB_TYPE,
+      init: function (this: Custom) {
+        try {
+          if (self.disposers.has("tab")) return;
+          // 关键：直接挂到实时 this.element，绝不以 isConnected 门控。
+          // openWindow 把页签从主窗口迁移到独立窗口时，元素会短暂 disconnected；
+          // 渲染进节点的内容一旦元素连上即显示，若判 isConnected 反而会把挂载永久跳过 → 整窗空白
+          // （第五轮起独立窗口用不同 tab id 后，openTab 新建实例、迁移瞬间元素断开，正是这个门控导致空白）。
+          // 元素若尚未就绪（极少数时序），用 setTimeout 重试兜底。
+          let mountTries = 0;
+          const tryMount = () => {
+            if (self.disposers.has("tab")) return;
+            const el = this.element as HTMLElement | null;
+            if (!el) {
+              if (mountTries++ < 60) setTimeout(tryMount, 16);
+              return;
+            }
+            self.mountTabPanel(el);
+          };
+          if (!self.mainCtx) {
+            // 新窗口布局恢复早于本插件 onload 完成：先占位，ctxReady 后补挂载。
+            // 用 ctxReady（createCtx 之后 resolve）而非 readyPromise，避免早 resolve 时 mainCtx 尚未就绪而永不挂载。
+            void self.ctxReady.then(tryMount).catch((err) => {
+              console.warn("[caldav][spike] 独立窗口页签延迟补渲染失败", err);
+            });
+            return;
+          }
+          tryMount();
+        } catch (err) {
+          console.warn("[caldav][spike] 自定义页签 init 失败（已忽略，避免阻断窗口初始化）", err);
+        }
+      },
+      beforeDestroy: function () {
+        self.disposers.get("tab")?.();
+        self.disposers.delete("tab");
+      }
+    });
+    console.info("[caldav][spike] addTab 同步注册完成", this.name + TAB_TYPE);
+
     this.addIcons(ICONS);
     // 加载时先清场：覆盖安装 / 集市热更新只换 JS，页面上已有的插件全屏弹层会留下，
     // 它们不属于本实例、回调也属于旧模块，但照样挡着整屏 —— 每关一层下面还压着一层。
@@ -190,9 +279,13 @@ export default class CalDavPlugin extends Plugin {
     this.store = new CalStore({
       // 读：新文件名优先，读不到再回退历史文件名并一次性迁移（见 loadPluginData）
       loadData: () => this.loadPluginData(),
-      saveData: (d) => this.saveData(DATA_FILE, d)
+      // [SPIKE issue #5] 独立窗口现在正常落盘：勾选待办 / 改设置都必须写回。
+      // 「写 → dataChange → 关窗」的循环已通过覆写 onDataChanged（只 reload 不 teardown）
+      // 彻底阻断，因此不再需要把从属窗口设为只读。落盘后顺便广播给其它窗口（见 saveDataAndNotify）。
+      saveData: (d) => this.saveDataAndNotify(DATA_FILE, d)
     });
     await this.store.load();
+    this.setupCrossWindowSync();
     // 上次视图存在配置里（settings.lastView），必须在 load() 之后读。
     // 早先是 localStorage —— 思源每次启动端口随机，localStorage 按 origin（含端口）
     // 隔离，写进去的记录下次永远读不回来，等于「记住上次视图」一直是失效的。
@@ -204,9 +297,16 @@ export default class CalDavPlugin extends Plugin {
     }
     this.sync = new SyncEngine(this.store, () => "auto");
     this.mainCtx = this.createCtx();
+    // 渲染就绪信号：独立窗口页签延迟补挂载以本信号为准（createCtx 之后才真正可渲染）。
+    try { this.resolveCtxReady(); } catch { /* 忽略 */ }
     // i18n：把思源按 window.siyuan.config.lang 自动加载的 plugin.i18n 喂给全局单例，
     // 之后任何模块（含 core）都能用 t(key) 取文案。必须在 createCtx 之后、首次渲染前完成。
     setI18n(this.i18n as unknown as Record<string, string> | undefined);
+    // [SPIKE issue #5] 核心依赖（store / mainCtx / i18n）已就绪，放行独立窗口里挂起的补渲染。
+    // 兜底定时器：万一 onload 后续环节抛错，也不让新窗口页签永远空白（重复 resolve 无害）。
+    this.resolveReady();
+    setTimeout(() => this.resolveReady(), 2000);
+    console.info("[caldav][spike] onload 核心就绪，放行页签渲染");
 
     // 设置变更 / 同步落盘后：重算提醒开关并重新排程
     this.store.onChange(() => {
@@ -252,26 +352,7 @@ export default class CalDavPlugin extends Plugin {
     // 那条路径不经过 init/update —— 容器会空着给人看（就是「一片空白」）。
     this.watchMobileDock();
 
-    // 主窗口日历页签（单例）
-    this.addTab({
-      type: TAB_TYPE,
-      init: function (this: Custom) {
-        if (self.disposers.has("tab")) return;
-        const panel = renderPanel(this.element as HTMLElement, self.mainCtx);
-        self.tabPanel = panel;
-        self.disposers.set("tab", () => {
-          panel.destroy();
-          self.tabPanel = null;
-        });
-        notifyViewChange(self.mainCtx.viewMode);
-      },
-      beforeDestroy: function () {
-        self.disposers.get("tab")?.();
-        self.disposers.delete("tab");
-      }
-    });
-
-    // 监听视图切换，同步更新已打开页签的标题
+    // 监听视图切换，同步更新已打开页签的标题（页签注册已前移到 onload 开头，见上方注释）
     this.viewChangeHandler = (e: Event) => {
       const mode = (e as CustomEvent).detail as ViewMode;
       const title = mode === "task" ? _t("任务") : _t("日历");
@@ -317,6 +398,18 @@ export default class CalDavPlugin extends Plugin {
       callback: () => this.askInsertDiary()
     });
 
+    // [SPIKE issue #5] 全局快捷键 → 独立窗口（最小闭环探针，验证通过后产品化）。
+    // hotkey 必须非空：思源仅在带 globalCallback 的命令上注册系统级 globalShortcut，
+    // 且 accelerator 取 keymap 的 custom；hotkey 为空则 custom 为空、根本不会注册。
+    // callback 覆盖「焦点在应用内」，globalCallback 覆盖「焦点不在应用内 / 窗口最小化」。
+    this.addCommand({
+      langKey: "openCalendarWindow",
+      langText: _t("在独立窗口打开日历"),
+      hotkey: "⌥⇧⌘K",
+      callback: () => this.openCalendarWindow(),
+      globalCallback: () => this.openCalendarWindow()
+    });
+
     // 移动端入口：移动端没有 Dock 图标列，addTopBar 会归入右上「插件」菜单，
     // 这是手机上最直接调出日历/任务面板的路径。
     // 标题带插件名，免得和别的日历类插件在菜单里撞名。
@@ -341,21 +434,27 @@ export default class CalDavPlugin extends Plugin {
     // 用 destroy-protyle（detail = {protyle}）—— 文档 tab 真正销毁时才派发，比 switch-protyle（仅切换）精确。
     this.eventBus.on("destroy-protyle", (e: any) => this.onDocClose(e));
 
-    if (this.store.isConfigured()) {
-      this.sync.startAutoSync(() => this.reminder?.reschedule());
-      setTimeout(() => void this.runSync(false), 3000);
-    }
-    // 按当前设置决定是否启动提醒引擎（设置可能已开启）
-    this.reconcileReminders();
+    // [SPIKE issue #5] 从属窗口不跑「定时 / 调度」类后台任务（自动同步、提醒引擎、
+    // 内核 RPC 推送）：避免在同一份数据上重复跑调度、重复弹提醒。但用户**手动**交互
+    // 仍正常落盘（勾待办 / 改设置 / 手动同步都会 saveData），并通过 onDataChanged
+    // 钩子与对端同步。真正阻断「关窗循环」的是 onDataChanged（只 reload 不 teardown）。
+    if (!this.isSecondaryWindow) {
+      if (this.store.isConfigured()) {
+        this.sync.startAutoSync(() => this.reminder?.reschedule());
+        setTimeout(() => void this.runSync(false), 3000);
+      }
+      // 按当前设置决定是否启动提醒引擎（设置可能已开启）
+      this.reconcileReminders();
 
-    // 档2·内核后端：监听内核拉首份数据请求 + 冷启动主动推一次快照。
-    // 若没有打包 kernel.js（旧版），bind/call 都会静默失败，不影响前端既有提醒通道。
-    try {
-      this.kernel.rpc.bind(CalDavPlugin.KERNEL_RPC_REQUEST, this.kernelRequestHandler);
-    } catch {
-      /* 无内核后端：忽略 */
+      // 档2·内核后端：监听内核拉首份数据请求 + 冷启动主动推一次快照。
+      // 若没有打包 kernel.js（旧版），bind/call 都会静默失败，不影响前端既有提醒通道。
+      try {
+        this.kernel.rpc.bind(CalDavPlugin.KERNEL_RPC_REQUEST, this.kernelRequestHandler);
+      } catch {
+        /* 无内核后端：忽略 */
+      }
+      this.pushReminderSnapshot();
     }
-    this.pushReminderSnapshot();
   }
 
   /**
@@ -759,10 +858,198 @@ export default class CalDavPlugin extends Plugin {
     setTimeout(tick, 1500);
   }
 
+  /**
+   * [SPIKE issue #5] 思源对「插件数据文件变更」的默认处理是 **重载整个插件**：
+   * `shouldReloadOnDataChange = (p) => p.onDataChanged === Plugin.prototype.onDataChanged`，
+   * 未覆写时 `runDataChange` 把任务提升为 reload → teardown → 调 `onunload()`。
+   * 而本插件 `onunload()` 会 `closePanelTabs()`，把独立窗口里唯一的日历页签关掉，
+   * 窗口无页签 → 思源自动关窗（issue #5 第二轮实测：日历显示一会儿后窗口自动消失）。
+   *
+   * 覆写后该分支只调用本钩子，不卸载、不销毁页签 → 独立窗口不再因数据变更被关。
+   *
+   * 关键点：覆写后思源不再替我们重载数据，所以本钩子必须**主动重新加载最新数据到内存**
+   * 并刷新 UI。否则独立窗口 / 主窗口各自写盘后，对端内存仍是旧值，下次写盘会把对方刚落盘
+   * 的改动覆盖掉 —— 等于「落盘了又丢」。这里只 `load()`（读盘）不 `save()`（写盘），
+   * 因此不会形成「写 → 广播 → 写」的死循环（store.load 只读取内存，不触发 persist）。
+   */
+  /**
+   * [SPIKE issue #5] 思源对「插件数据文件变更」的默认处理是 **重载整个插件**，会关掉
+   * 独立窗口唯一的页签 → 独立窗口被思源自动关掉。覆写后只走本钩子，不卸载、不销毁页签。
+   *
+   * ⚠️ 但思源内置的 dataChange 广播在「另一 BrowserWindow（独立窗口）写入」场景下并不可靠，
+   * 主窗口收不到这次通知 —— 所以独立窗口的改动在主窗口看不到，必须手动点同步才刷新。
+   * 这里只是**兜底**路径；真正可靠的跨窗口通知由 `setupCrossWindowSync()` 用
+   * BroadcastChannel + localStorage storage 事件补齐，两者都汇入 `reloadFromDisk()`。
+   */
+  onDataChanged(): void {
+    void this.reloadFromDisk();
+  }
+
+  /**
+   * 从磁盘重新载入内存数据并刷新所有面板。供「对端窗口改了数据」时调用（双通道都汇入这里）。
+   * 用 `applyingRemote` 在 800ms 内抑制本窗口的 persist 广播，避免回环：
+   * `store.load()` 末尾的 `adoptKeyring` 会排一个 persistSoon，那次写盘不应再广播出去。
+   */
+  private async reloadFromDisk(): Promise<void> {
+    this.applyingRemote = true;
+    try {
+      await this.store.load();
+    } catch {
+      /* 读取失败不阻塞；绝不向上冒泡，否则可能重新触发思源的插件 teardown */
+    }
+    this.refreshPanels();
+    setTimeout(() => { this.applyingRemote = false; }, 800);
+  }
+
+  /**
+   * 落盘并广播给其它窗口。先写磁盘（env.saveData）再广播，保证对端读到的是最新文件。
+   * 仅在非「应用对端变更」期间才广播，避免回环。双通道：
+   * BroadcastChannel（现代标准）+ localStorage storage 事件（Electron 跨窗口兜底）。
+   */
+  private async saveDataAndNotify(file: string, data: unknown): Promise<void> {
+    await this.saveData(file, data);
+    if (!this.applyingRemote) this.bumpCrossWindow();
+  }
+
+  /** 把「本窗口落盘」广播出去（双通道；各自独立兜底，互不依赖） */
+  private bumpCrossWindow(): void {
+    if (this.bc) {
+      try { this.bc.postMessage({ t: "data" }); } catch { /* 忽略 */ }
+    }
+    try {
+      if (typeof localStorage !== "undefined" && localStorage) {
+        localStorage.setItem("siyuan-caldav-sync-bump", String(Date.now()));
+      }
+    } catch { /* localStorage 不可用：忽略，仍走 BroadcastChannel */ }
+  }
+
+  /**
+   * 建立跨窗口数据变更通知：独立窗口 ↔ 主窗口双向。任一窗口落盘后，其它窗口即时
+   * 重新从磁盘载入并刷新，于是「独立窗口改了待办/设置」能立刻反映到主窗口日历，
+   * 不必再手动点同步。
+   *
+   * 双通道都汇入 `reloadFromDisk()`：
+   * - BroadcastChannel：现代标准，同源 Electron 窗口之间可直达；
+   * - localStorage `storage` 事件：Electron 跨窗口的可靠兜底（同一 origin 共享 localStorage，
+   *   写入方不会收到自己的 storage 事件，天然不回环）。
+   *
+   * 不可用时（老内核 / 测试环境无 BroadcastChannel、无 localStorage）静默降级，不影响主流程。
+   */
+  private setupCrossWindowSync(): void {
+    // 用 `window.BroadcastChannel` 而非裸全局 BroadcastChannel：在 Node 测试环境（jsdom）
+    // 里裸全局 BroadcastChannel 是 libuv 长生命周期句柄，会阻止事件循环退出、让测试挂起；
+    // 而真正的浏览器/Electron 渲染进程用 window.BroadcastChannel，页面关闭即释放，无需手动 unref。
+    try {
+      if (typeof window !== "undefined" && typeof window.BroadcastChannel === "function") {
+        this.bc = new window.BroadcastChannel("siyuan-caldav-sync-data");
+        this.bc.onmessage = (ev: MessageEvent) => this.onCrossWindowMessage(ev);
+      }
+    } catch {
+      this.bc = null;
+    }
+    try {
+      if (typeof window !== "undefined" && window.addEventListener) {
+        window.addEventListener("storage", (e: StorageEvent) => {
+          if (e.key === "siyuan-caldav-sync-bump") void this.reloadFromDisk();
+        });
+      }
+    } catch { /* 忽略 */ }
+  }
+
+  /**
+   * 跨窗口消息分发（BroadcastChannel）：
+   * - `{t:"data"}`：对端落盘 → 重载内存并刷新（= reloadFromDisk）
+   * - `{t:"ping"}`：主窗口探活 → 仅独立窗口回 `{t:"pong"}`（自身不会收到自己发的 ping）
+   * - `{t:"pong"}`：独立窗口存活应答 → 解除 openCalendarWindow 的探活等待
+   */
+  private onCrossWindowMessage(ev: MessageEvent): void {
+    let msg: { t?: string } | null = null;
+    try { msg = ev && ev.data ? (ev.data as { t?: string }) : null; } catch { msg = null; }
+    if (!msg || typeof msg.t !== "string") return;
+    if (msg.t === "data") {
+      void this.reloadFromDisk();
+    } else if (msg.t === "ping") {
+      // 只有真正存活的独立窗口才应答；主窗口发的 ping 自己收不到（发送方排除），不会自答。
+      if (this.isSecondaryWindow) {
+        try { this.bc?.postMessage({ t: "pong" }); } catch { /* 忽略 */ }
+      }
+    } else if (msg.t === "pong") {
+      if (this.pendingWinAlive) {
+        const r = this.pendingWinAlive;
+        this.pendingWinAlive = null;
+        r(true);
+      }
+    }
+  }
+
+  /**
+   * 探活：发 ping，等至多 ~350ms 的 pong。收到 pong → 确有存活的独立窗口；超时/无 BC → 无。
+   * 发送方不会收到自己发的 ping（BroadcastChannel 规范），故主窗口不会自答、独立窗口会应答。
+   */
+  private winAliveCheck(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      if (!this.bc) { resolve(false); return; }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.pendingWinAlive = null;
+        resolve(false);
+      }, 350);
+      this.pendingWinAlive = (alive: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.pendingWinAlive = null;
+        resolve(alive);
+      };
+      try { this.bc.postMessage({ t: "ping" }); } catch {
+        settled = true;
+        clearTimeout(timer);
+        this.pendingWinAlive = null;
+        resolve(false);
+      }
+    });
+  }
+
+  /** 独立窗口单例辅助：以 localStorage 标记跨窗口共享「独立窗口存在态」 */
+  private secondaryWindowOpen(): boolean {
+    try {
+      if (typeof localStorage === "undefined" || !localStorage) return false;
+      return localStorage.getItem(SECONDARY_WIN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  private markSecondaryWindowOpen(): void {
+    try {
+      if (typeof localStorage !== "undefined" && localStorage) {
+        localStorage.setItem(SECONDARY_WIN_KEY, "1");
+      }
+    } catch { /* 忽略 */ }
+  }
+  private clearSecondaryWindowOpen(): void {
+    try {
+      if (typeof localStorage !== "undefined" && localStorage) {
+        localStorage.removeItem(SECONDARY_WIN_KEY);
+      }
+    } catch { /* 忽略 */ }
+  }
+
   onunload(): void {
+    // 先关掉跨窗口通知通道，避免泄漏/残留句柄
+    try { this.bc?.close(); } catch { /* 忽略 */ }
+    this.bc = null;
     // 先关掉本插件打开的自定义页签：思源只会摘掉自己接管的注册项（Dock / 顶栏 / 工具栏），
     // 页签不管，不关就会在主窗口留一个空白「日历」页签，还会被写进 conf，重启后依然在。
-    this.closePanelTabs();
+    // [SPIKE issue #5] 独立窗口里这个页签就是窗口唯一内容，关掉它思源会直接关窗；
+    // 禁用/卸载时由思源关窗顺带清理即可，别自己动手。
+    if (!this.isSecondaryWindow) {
+      this.closePanelTabs();
+    } else {
+      // 独立窗口关闭：清掉单例标记，否则主窗口热键会误以为窗口还开着、不再新建
+      this.clearSecondaryWindowOpen();
+    }
     this.sync.stopAutoSync();
     this.reminder?.stop();
     this.reminder = undefined;
@@ -847,6 +1134,22 @@ export default class CalDavPlugin extends Plugin {
   }
 
   /**
+   * [SPIKE issue #5] 把日历面板挂到自定义页签容器。
+   * 抽成方法是为了让「立即挂载」与「独立窗口里 onload 就绪后补挂载」共用同一条路径，
+   * 并补齐 disposers 记账，避免新窗口页签关闭时残留监听。
+   */
+  private mountTabPanel(el: HTMLElement): void {
+    if (!el || !this.mainCtx || this.disposers.has("tab")) return;
+    const panel = renderPanel(el, this.mainCtx);
+    this.tabPanel = panel;
+    this.disposers.set("tab", () => {
+      panel.destroy();
+      this.tabPanel = null;
+    });
+    notifyViewChange(this.mainCtx.viewMode);
+  }
+
+  /**
    * 打开日历面板：
    *  - 桌面端 → 主窗口页签；同一 id 的 custom 页签思源会自动聚焦已存在的实例（不再新建）
    *  - 移动端 → 全屏 Dialog（见 openMobilePanel）
@@ -888,6 +1191,73 @@ export default class CalDavPlugin extends Plugin {
         this.tab = tab;
         tab.updateTitle(title);
       });
+    }
+  }
+
+  /**
+   * [SPIKE issue #5] 把日历页签弹成**独立窗口** —— 只验证「全局热键 → 独立窗口」闭环，
+   * 验证通过后再正式产品化（单例复用 / 视图同步 / 尺寸与热键可配等）。
+   *
+   * 机制（均已对思源内核源码核实，勿凭印象改）：
+   *  1. `openWindow` 只接受 `openTab()` 返回的**已存在 Tab 实例**，故必须先 openTab、
+   *     在其 Promise 回调里再 openWindow。内部会把该页签 `layoutToJSON` 序列化，
+   *     交给主进程开一个新的 `window.html` 窗口加载这份布局，并 `removeTab` 原页签。
+   *  2. 全局快捷键由 `addCommand` 的 `globalCallback` 触发系统级 `globalShortcut`，
+   *     焦点不在应用内（含窗口最小化/后台）时也能调到本方法。
+   *  3. 复用现有 `TAB_TYPE`：新窗口重建页签时，插件会重新 onload → addTab 重新注册
+   *     → 自定义页签 init 重跑 → renderPanel 重绘。**新窗口能否正确重建插件自定义
+   *     页签，是本 spike 要实机验证的最大未知点**；复用类型正是为了顺带验证它。
+   *  4. 移动端 `openWindow`/`openTab` 是空实现（plugin/API.ts 里 TODO），故桌面端限定。
+   *
+   * 阶段说明：spike 阶段刻意不做单例/热键可配/尺寸记忆，也不新增页签类型或字典文案，
+   * 保持改动面最小、可随时回退。
+   */
+  private async openCalendarWindow(): Promise<void> {
+    // 移动端 openWindow 为空实现，且无系统级全局快捷键；不参与本次闭环验证。
+    if (isMobile()) return;
+    // 单例（存活感知）：用 BroadcastChannel ping/pong 探活，避免「窗口崩溃/空白/未按 onunload
+    // 退出」残留的 localStorage 标记把主窗口热键永久锁死。真有存活窗口会回 pong；探不到就当
+    // 没开，清掉陈旧标记并重开。openingWindow 防连按重复开。
+    if (this.openingWindow) return;
+    this.openingWindow = true;
+    try {
+      const alive = await this.winAliveCheck();
+      if (alive) return; // 确有存活的独立窗口，不重复开
+      this.clearSecondaryWindowOpen(); // 探活失败 → 标记必陈旧，清掉
+      const effective = this.mainCtx.viewMode;
+      const title = effective === "task" ? _t("任务") : _t("日历");
+      const tabPromise = openTab({
+        app: this.app,
+        custom: {
+          icon: "iconCalDavSync",
+          title,
+          // 同 id（与主窗口 openPanelTab 一致）：思源对同 id 的 custom 页签会聚焦已存在实例，
+          // openWindow 随后把它整体「搬」到独立窗口。元素一路 isConnected=true → 渲染稳定，
+          // 不会出现不同 id 新建实例迁移时页签空白的坑（第五~七轮反复踩过）。代价是打开独立
+          // 窗口时主窗口那个月历 tab 被搬走（关掉），但可重新打开，雄哥确认可接受。
+          data: { type: TAB_TYPE },
+          id: this.name + TAB_TYPE
+        },
+        keepCursor: false
+      });
+      void Promise.resolve(tabPromise).then((tab) => {
+        if (!tab) return; // 某些版本/移动端 openTab 返回空，静默跳过
+        try {
+          openWindow({
+            tab,
+            alwaysOnTop: true,
+            width: 1000,
+            height: 700
+          });
+        } catch (e) {
+          // 弹窗失败不能影响其他提醒/命令，只记日志
+          console.warn("[caldav][spike] openWindow 失败", e);
+        }
+      }).catch((e) => {
+        console.warn("[caldav][spike] openTab 失败", e);
+      });
+    } finally {
+      this.openingWindow = false;
     }
   }
 

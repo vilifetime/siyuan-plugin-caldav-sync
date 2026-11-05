@@ -917,5 +917,7 @@
   "调用内核失败": "Failed to call kernel",
   "内核未加载（请重载插件）": "Kernel not loaded (please reload the plugin)",
   "内核未连接（请退出思源重开，或停用插件后再启用）": "Kernel not connected (please quit and reopen SiYuan, or disable then re-enable the plugin)",
-  "内核已连接但测试接口缺失（kernel.js 可能未更新，请重启思源）": "Kernel connected but test API missing (kernel.js may be outdated, please restart SiYuan)"
+  "内核已连接但测试接口缺失（kernel.js 可能未更新，请重启思源）": "Kernel connected but test API missing (kernel.js may be outdated, please restart SiYuan)",
+  "openCalendarWindow": "Open Calendar in Separate Window",
+  "在独立窗口打开日历": "Open Calendar in Separate Window"
 }

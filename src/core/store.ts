@@ -79,6 +79,11 @@ export class CalStore {
   constructor(private env: StoreEnv) {}
 
   async load(): Promise<void> {
+    // 跨窗口重载（onDataChanged / BroadcastChannel / storage 事件）会重新从磁盘载入内存。
+    // 若此前本窗口尚有排队的 persistSoon（400ms 去抖），必须在载入前清掉，否则它会在
+    // load 之后把「旧内存状态」写回磁盘，把刚从对端读到的更新覆盖掉 —— 这正是「独立窗口
+    // 改了、主窗口重开日历却看不到、必须点同步才出来」的隐藏竞态之一。
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     const data = (await this.env.loadData()) as PersistData | undefined;
     if (data) {
       this.settings = { ...JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), ...data.settings };

@@ -33,6 +33,8 @@ const STOCK = {
   syncNow: { zh: "立即同步 CalDAV", en: "Sync Now" },
   openPanel: { zh: "打开日历与任务", en: "Open Calendar & Tasks" },
   insertToday: { zh: "把日程与待办插入日记", en: "Insert Schedule & Todos into Daily Note" },
+  // SPIKE issue#5：全局快捷键唤起独立窗口（langKey 必须作为 stock 键保留）
+  openCalendarWindow: { zh: "在独立窗口打开日历", en: "Open Calendar in Separate Window" },
 };
 
 for (const file of files) {

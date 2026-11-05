@@ -139,6 +139,11 @@ module.exports = {
   openMobileFileById(app, id, action) {
     globalThis.__syRegistrations.lastOpenMobile = { app, id, action };
   },
+  // SPIKE issue#5：把「主窗口页签」搬进独立窗口。记录调用供契约测试断言。
+  openWindow(o) {
+    const reg = globalThis.__syRegistrations;
+    reg.lastOpenWindow = o;
+  },
   // 通过 SY_FRONTEND 环境变量切换前端类型（mobile / desktop），供移动端回归测试驱动
   getFrontend: () => process.env.SY_FRONTEND || "desktop",
   getBackend: () => "desktop",

@@ -83,7 +83,7 @@ const reg = globalThis.__syRegistrations;
 assert.strictEqual(reg.topbar.length, 1, "移动端应注册顶栏入口（移动端归入「插件」菜单）");
 assert.strictEqual(reg.dock.length, 1, "Dock 仍应注册（移动端渲染为侧栏抽屉）");
 assert.strictEqual(reg.tab.length, 1, "addTab 仍会注册（桌面端用），但移动端不会调用 openTab");
-assert.strictEqual(reg.commands.length, 4, "命令数量不受移动端影响");
+assert.strictEqual(reg.commands.length, 5, "命令数量不受移动端影响（含 SPIKE issue#5 独立窗口）");
 assert.strictEqual(reg.topbar[0].title, "CalDAV日历任务", "顶栏入口标题要带插件名，避免与其他日历插件撞名");
 
 // ---- Dock 初始化不应自动打开面板 ----

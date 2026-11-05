@@ -22,7 +22,7 @@ assert.strictEqual(reg.topbar.length, 0, "不应注册顶栏按钮");
 assert.strictEqual(reg.dock.length, 1, "应注册 Dock");
 assert.strictEqual(reg.tab.length, 1, "应注册页签类型");
 assert.ok(reg.icons[0].includes("iconCalDavSync"), "应注册图标");
-assert.strictEqual(reg.commands.length, 4, "应注册 4 个命令");
+assert.strictEqual(reg.commands.length, 5, "应注册 5 个命令（4 个原有 + SPIKE issue#5 独立窗口）");
 
 const click = (el) => el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 

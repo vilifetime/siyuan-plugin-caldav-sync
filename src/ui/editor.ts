@@ -119,6 +119,22 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
   const el = dialog.element.querySelector(".caldav-editor") as HTMLElement;
   enableDialogResize(dialog);
   bindEvents(ctx, dialog, el, it, isNew);
+
+  // 新建时把光标直接落进标题输入框，省掉「先点一下再打字」这一步。
+  // 思源 Dialog 构造时会同步把焦点放到 .b3-dialog__container（并注册 Tab 焦点陷阱），
+  // 所以必须放在 newDialog 之后；再延迟一帧等淡入开始，避免被布局/主题代码抢回去。
+  // 编辑已有条目不动焦点（用户可能正想改日期或备注）；移动端也不自动聚焦 ——
+  // 会立刻唤起软键盘盖住弹窗，而触摸场景本来就要点一下输入框。
+  if (isNew && !mobile) {
+    window.setTimeout(() => {
+      const titleInput = el.querySelector<HTMLInputElement>('input[data-f="summary"]');
+      if (!titleInput || !titleInput.isConnected) return;
+      const active = document.activeElement;
+      // 用户若已在这极短间隙里主动聚焦了编辑器内别的控件，就不抢焦点
+      if (active && active !== document.body && el.contains(active)) return;
+      titleInput.focus({ preventScroll: true });
+    }, 0);
+  }
 }
 
 function addHoursStr(stamp: string, hours: number): string {

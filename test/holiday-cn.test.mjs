@@ -205,6 +205,75 @@ async function run() {
     assert.strictEqual(map["2095-09-01"].name, "测试节", "应经 timor.tech 兜底拿到数据");
   });
 
+  // ---- 跨窗口共享缓存 / 独立窗口零联网 / 换源不复用 / 失败冷却（issue #5 · C 项）----
+  // 用可注入的 runtime + 内存 storage 模拟「主窗口写、独立窗口读」，不污染全局环境。
+  const sharedStore = new Map();
+  const memStorage = {
+    getItem: (k) => (sharedStore.has(k) ? sharedStore.get(k) : null),
+    setItem: (k, v) => sharedStore.set(k, String(v))
+  };
+  const SHARED_KEY = "siyuan-caldav-sync-holiday-cache-v1";
+  const holidaySettings = { showHolidaysCN: true, holidayCnSource: "timor" };
+
+  await ta("主窗口拉取成功后写入跨窗口共享快照", async () => {
+    cn.setHolidayRuntime({ hostEnabled: true, networkAllowed: true, sharedStorage: memStorage });
+    cn.setHolidayTransport(async () => ({
+      ok: true,
+      data: { code: 0, holiday: { "01-01": { holiday: true, name: "元旦", date: "2094-01-01" } } }
+    }));
+    const map = await cn.loadHolidayYear(holidaySettings, 2094, true);
+    assert.ok(map && map["2094-01-01"].name === "元旦", "应拿到节假日数据");
+    assert.ok(sharedStore.has(SHARED_KEY), "成功结果应写入共享快照供其它窗口复用");
+    const snap = JSON.parse(sharedStore.get(SHARED_KEY));
+    assert.ok(snap.years.some((e) => e.year === 2094 && e.source === "timor"), "快照须记录年份与数据源");
+  });
+
+  await ta("独立窗口 hydrate 共享快照后零联网，节假日立即可读", async () => {
+    // 手工放一个「本进程内存里没有」的年份，模拟主窗口写、独立窗口读
+    sharedStore.set(SHARED_KEY, JSON.stringify({
+      v: 1,
+      years: [{ year: 2091, source: "timor", updatedAt: Date.now(), map: { "2091-05-01": { name: "劳动节", off: true } } }]
+    }));
+    cn.setHolidayRuntime({ hostEnabled: true, networkAllowed: false, sharedStorage: memStorage });
+    let netCalls = 0;
+    cn.setHolidayTransport(async () => { netCalls++; return { ok: false, error: "不应联网" }; });
+    const changed = await cn.warmChinaCalendar(holidaySettings, [2090, 2091, 2092]);
+    assert.strictEqual(changed, true, "灌入共享缓存应请求一次重绘补出徽标");
+    assert.strictEqual(netCalls, 0, "独立窗口绝不发起任何网络拉取");
+    assert.strictEqual(cn.holidayFor("2091-05-01").name, "劳动节", "节假日应立即可读");
+    assert.strictEqual(cn.holidayFor("2090-01-01"), null, "快照里没有的年份保持为空（严格不联网）");
+    assert.strictEqual(await cn.warmChinaCalendar(holidaySettings, [2091]), false,
+      "快照未变时不再 hydrate、不重绘（避免渲染循环）");
+    assert.strictEqual(netCalls, 0);
+  });
+
+  await ta("换数据源后不复用旧快照（避免格式不兼容）", async () => {
+    sharedStore.set(SHARED_KEY, JSON.stringify({
+      v: 1,
+      years: [{ year: 2089, source: "timor", updatedAt: Date.now(), map: { "2089-01-01": { name: "元旦", off: true } } }]
+    }));
+    cn.setHolidayRuntime({ hostEnabled: true, networkAllowed: false, sharedStorage: memStorage });
+    let calls = 0;
+    cn.setHolidayTransport(async () => { calls++; return { ok: false, error: "不应联网" }; });
+    const changed = await cn.warmChinaCalendar({ showHolidaysCN: true, holidayCnSource: "holiday-cn" }, [2089]);
+    assert.strictEqual(changed, false, "源不匹配不应灌入");
+    assert.strictEqual(cn.holidayFor("2089-01-01"), null);
+    assert.strictEqual(calls, 0);
+  });
+
+  await ta("全候选失败后进入冷却，短期内不再重发请求", async () => {
+    sharedStore.clear();
+    cn.setHolidayRuntime({ hostEnabled: true, networkAllowed: true, sharedStorage: memStorage });
+    let calls = 0;
+    cn.setHolidayTransport(async () => { calls++; return { ok: false, error: "TLS timeout" }; });
+    const s = { showHolidaysCN: true, holidayCnSource: "chinese-days" };
+    await cn.warmChinaCalendar(s, [2092]);
+    const first = calls;
+    assert.ok(first > 0, "首次应确实尝试拉取");
+    await cn.warmChinaCalendar(s, [2092]);
+    assert.strictEqual(calls, first, "冷却期内不得重复联网（否则切月/筛选必刷屏）");
+  });
+
   globalThis.fetch = origFetch;
 
   console.log(`\nholiday-cn tests: ${pass} passed, ${fail} failed`);

@@ -196,4 +196,46 @@ assert.ok(/secondaryWindowOpen/.test(src) && /SECONDARY_WIN_KEY/.test(src) && /s
 assert.ok(/markSecondaryWindowOpen/.test(src) && /clearSecondaryWindowOpen/.test(src),
   "独立窗口须在 onload 标记、onunload 清除存在态标记；主窗口 onload 亦清陈旧标记");
 
-console.log("window-spike: all assertions passed (命令形态 / 弹窗链路 / 桌面端限定 / i18n 一致 / 独立窗口时序 / 多窗口写回 / 跨窗口实时同步 / load 竞态修复 / 独立窗口复用主窗口同id+存活感知单例)");
+/* ---------- 10. 独立窗口跳过节假日网络预热，只复用主窗口共享缓存 ---------- */
+const cnSrc = fs.readFileSync(path.join(ROOT, "src", "core", "holiday-cn.ts"), "utf8");
+assert.ok(/setHolidayRuntime\(\{\s*networkAllowed:\s*!this\.isSecondaryWindow\s*\}\)/.test(src),
+  "onload 必须按窗口类型注入节假日网络策略：独立窗口 networkAllowed=false（绝不联网预热）");
+assert.ok(/if\s*\(!runtimeNetwork\)\s*return\s+changed/.test(cnSrc),
+  "warmChinaCalendar 在网络被禁时必须只返回 hydrate 结果、绝不发起拉取");
+assert.ok(/hydrateSharedHolidayCache/.test(cnSrc) && /writeSharedYear/.test(cnSrc),
+  "必须有共享快照的写入与 hydrate（同源 localStorage 跨渲染进程复用，主窗口拉、独立窗口读）");
+assert.ok(/FAIL_COOLDOWN_MS/.test(cnSrc),
+  "必须有失败冷却，避免全候选超时后每次 renderView 重发请求刷屏");
+
+/* ---------- 11. 独立窗口乐观首帧（L2）：脱敏共享快照 + 乐观期禁落盘 ---------- */
+const ffSrc = fs.readFileSync(path.join(ROOT, "src", "core", "first-frame.ts"), "utf8");
+assert.ok(/import\s*\{[^}]*readFirstFrameSnapshot[^}]*writeFirstFrameSnapshot[^}]*\}\s*from\s*["']@\/core\/first-frame["']/.test(src),
+  "onload 必须接入乐观首帧快照模块");
+assert.ok(/this\.isSecondaryWindow\s*\?\s*readFirstFrameSnapshot\(\)\s*:\s*null/.test(src),
+  "只有独立窗口读快照；主窗口只负责写，绝不拿快照当自己的数据源");
+assert.ok(/if\s*\(firstFrame\)\s*\{[^}]*firstFrame\s*=\s*null/.test(src),
+  "快照只能用一次，之后一律回真实读盘（否则校正会再次吃到无凭据数据）");
+assert.ok(/if\s*\(firstFrameActive\)\s*return\s+Promise\.resolve\(\)/.test(src),
+  "乐观期必须禁止落盘：绝不能把「无凭据」的乐观内存写回数据文件");
+assert.ok(/if\s*\(ok\)\s*firstFrameActive\s*=\s*false/.test(src),
+  "只有真实读盘成功才解除落盘锁；读盘失败保持只读更安全");
+assert.ok(/Promise<boolean>/.test(src) && /reloadFromDisk\(\)\.then\(\(ok\)/.test(src),
+  "reloadFromDisk 必须返回成功标志供乐观首帧解锁");
+assert.ok(/if\s*\(!this\.isSecondaryWindow\)\s*\{[\s\S]{0,200}writeFirstFrameSnapshot\(d\)/.test(src),
+  "主窗口读盘后必须刷新共享快照（保证启动即有快照）");
+assert.ok(/writeFirstFrameSnapshot\(d\)/.test(src),
+  "主窗口每次落盘也要刷新快照，避免独立窗口吃到过期数据");
+assert.ok(/快照载入失败，回退真实读盘/.test(src),
+  "快照骨架与 store 版本不兼容时必须回退真实读盘，宁可慢也不空白");
+// 数据层安全红线
+for (const part of ["password", "secret", "token", "keyring", "webhookurl"]) {
+  assert.ok(ffSrc.includes(`"${part}"`), `脱敏名单必须包含 ${part}`);
+}
+assert.ok(/SYNC_ONLY_KEY/.test(ffSrc) && /raw/.test(ffSrc),
+  "必须剔除 item.raw 等同步专用大字段（实测原始数据 2.6MB → 快照 170KB）");
+assert.ok(/FIRST_FRAME_MAX_BYTES/.test(ffSrc) && /removeItem\(FIRST_FRAME_KEY\)/.test(ffSrc),
+  "体积超限/配额失败必须清掉旧快照，避免陈旧数据");
+assert.ok(/FIRST_FRAME_MAX_AGE_MS/.test(ffSrc) && /bad shape/.test(ffSrc),
+  "必须校验时效与结构，损坏数据不采用");
+
+console.log("window-spike: all assertions passed (命令形态 / 弹窗链路 / 桌面端限定 / i18n 一致 / 独立窗口时序 / 多窗口写回 / 跨窗口实时同步 / load 竞态修复 / 独立窗口复用主窗口同id+存活感知单例 / 独立窗口跳过节假日预热 / 乐观首帧脱敏快照与禁落盘)");

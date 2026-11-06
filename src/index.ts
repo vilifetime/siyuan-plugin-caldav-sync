@@ -10,7 +10,8 @@ import { CalStore } from "@/core/store";
 import { SyncEngine } from "@/core/sync";
 import { setSecretSeed } from "@/core/secret";
 import { setDirectFallbackToProxy, httpRequest } from "@/core/http";
-import { setHolidayTransport } from "@/core/holiday-cn";
+import { setHolidayTransport, setHolidayRuntime } from "@/core/holiday-cn";
+import { readFirstFrameSnapshot, writeFirstFrameSnapshot } from "@/core/first-frame";
 import { occurrencesInRange } from "@/core/ics";
 import { todayStamp, fmtDateCn, fmtTime, stampOfMs, parseLocalStamp, diffDays } from "@/core/date";
 import type { CalItem } from "@/core/types";
@@ -254,6 +255,13 @@ export default class CalDavPlugin extends Plugin {
     // 直连在网络层失败时自动改走内核代理 —— 见 core/http.ts 的说明。
     setDirectFallbackToProxy(isMobile());
 
+    // [issue #5 · C 项] 独立窗口不联网预热节假日：只复用主窗口已写入的共享缓存。
+    // 独立窗口是另一个渲染进程，内存缓存不共享；此前它每次 renderView 都把三年 × 多候选
+    // 重拉一遍，国内 jsdelivr/raw 全超时 → 内核代理回退直连刷屏、徽标迟迟不出现。
+    // 主窗口照常按更新频率拉取并写共享快照；设置页「立即检查更新」仍可强制拉取。
+    // 农历/节气走内置算法、同步渲染，不受此开关影响。
+    setHolidayRuntime({ networkAllowed: !this.isSecondaryWindow });
+
     // 中国日历·节假日拉取改走 SiYuan 内核代理（服务端 fetch，绕开浏览器 CORS、
     // 走本机真实网络/代理，国内 GitHub/raw 即便浏览器直连被墙也能经此拿到）。
     setHolidayTransport(async (url, ms, headers) => {
@@ -276,16 +284,52 @@ export default class CalDavPlugin extends Plugin {
     // 再加载 store —— 顺序不能反，否则密文解不开会被当成「密码丢失」。
     await this.ensureSecretSeed();
 
+
+    // [issue #5 · L2 乐观首帧] 独立窗口先吃主窗口写的同源共享快照，让 store.load() 秒回，
+    // 跳过「内核读盘往返 + 解析 2.6MB 数据 + 逐账户凭据解密」实测约 175ms；随后后台再做
+    // 一次真实读盘校正（恢复账户/凭据并重绘）。
+    // 安全红线：快照递归剔除所有凭据类字段（见 core/first-frame.ts）；乐观期一律不落盘，
+    // 绝不把「无凭据」的乐观内存写回数据文件（会丢密码）。主窗口每次真实读盘/落盘都刷新快照。
+    let firstFrame = this.isSecondaryWindow ? readFirstFrameSnapshot() : null;
+    let firstFrameActive = !!firstFrame; // 乐观期：禁止任何落盘
+    const loadDataForStore = (): Promise<any> => {
+      if (firstFrame) {
+        const data = firstFrame.data;
+        firstFrame = null; // 快照只用一次，之后一律走真实读盘
+        return Promise.resolve(data);
+      }
+      return this.loadPluginData();
+    };
     this.store = new CalStore({
       // 读：新文件名优先，读不到再回退历史文件名并一次性迁移（见 loadPluginData）
-      loadData: () => this.loadPluginData(),
+      loadData: () => {
+        const p = loadDataForStore();
+        // 主窗口：启动读盘及后续每次重载都刷新共享快照，供独立窗口乐观首帧使用。
+        if (!this.isSecondaryWindow) {
+          void p.then((d) => { writeFirstFrameSnapshot(d); }).catch(() => { /* 忽略 */ });
+        }
+        return p;
+      },
       // [SPIKE issue #5] 独立窗口现在正常落盘：勾选待办 / 改设置都必须写回。
       // 「写 → dataChange → 关窗」的循环已通过覆写 onDataChanged（只 reload 不 teardown）
       // 彻底阻断，因此不再需要把从属窗口设为只读。落盘后顺便广播给其它窗口（见 saveDataAndNotify）。
-      saveData: (d) => this.saveDataAndNotify(DATA_FILE, d)
+      saveData: (d) => {
+        if (!this.isSecondaryWindow) writeFirstFrameSnapshot(d);
+        if (firstFrameActive) return Promise.resolve(); // 乐观期：丢弃写盘，等真实读盘校正
+        return this.saveDataAndNotify(DATA_FILE, d);
+      }
     });
-    await this.store.load();
+    try {
+      await this.store.load();
+    } catch (e) {
+      if (!firstFrameActive) throw e;
+      // 快照骨架与当前 store 版本不兼容：立刻退回真实读盘，宁可慢也不空白。
+      console.warn("[caldav][first-frame] 快照载入失败，回退真实读盘", e);
+      await this.store.load();
+      firstFrameActive = false;
+    }
     this.setupCrossWindowSync();
+
     // 上次视图存在配置里（settings.lastView），必须在 load() 之后读。
     // 早先是 localStorage —— 思源每次启动端口随机，localStorage 按 origin（含端口）
     // 隔离，写进去的记录下次永远读不回来，等于「记住上次视图」一直是失效的。
@@ -299,6 +343,22 @@ export default class CalDavPlugin extends Plugin {
     this.mainCtx = this.createCtx();
     // 渲染就绪信号：独立窗口页签延迟补挂载以本信号为准（createCtx 之后才真正可渲染）。
     try { this.resolveCtxReady(); } catch { /* 忽略 */ }
+
+    // [L2] 真实数据校正：乐观首帧只有 items/settings（无凭据）。setTimeout(0) 让首帧
+    // 挂载（ctxReady.then 微任务）先完成后，再后台从磁盘完整载入、恢复凭据并刷新面板。
+    // 只有真实读盘成功才解除落盘锁 —— 读盘失败宁可暂保持只读，也不能把乐观数据写回文件。
+    // reloadFromDisk 用 applyingRemote 抑制广播，避免触发跨窗口回环。
+    if (firstFrameActive) {
+      setTimeout(() => {
+        void this.reloadFromDisk().then((ok) => {
+          if (ok) firstFrameActive = false;
+          else console.warn("[caldav][first-frame] 真实读盘失败，独立窗口暂保持只读以免写坏凭据");
+        }).catch((e) => {
+          console.warn("[caldav][first-frame] 校正失败，独立窗口暂保持只读", e);
+        });
+      }, 0);
+    }
+
     // i18n：把思源按 window.siyuan.config.lang 自动加载的 plugin.i18n 喂给全局单例，
     // 之后任何模块（含 core）都能用 t(key) 取文案。必须在 createCtx 之后、首次渲染前完成。
     setI18n(this.i18n as unknown as Record<string, string> | undefined);
@@ -890,15 +950,20 @@ export default class CalDavPlugin extends Plugin {
    * 用 `applyingRemote` 在 800ms 内抑制本窗口的 persist 广播，避免回环：
    * `store.load()` 末尾的 `adoptKeyring` 会排一个 persistSoon，那次写盘不应再广播出去。
    */
-  private async reloadFromDisk(): Promise<void> {
+  private async reloadFromDisk(): Promise<boolean> {
     this.applyingRemote = true;
+    let ok = false;
     try {
       await this.store.load();
-    } catch {
+      ok = true;
+    } catch (e) {
       /* 读取失败不阻塞；绝不向上冒泡，否则可能重新触发思源的插件 teardown */
+      console.warn("[caldav] 从磁盘重载失败（保留当前内存数据）", e);
     }
     this.refreshPanels();
     setTimeout(() => { this.applyingRemote = false; }, 800);
+    // [L2] 乐观首帧的落盘锁只在真实数据就位后才解除，读盘失败时保持只读更安全。
+    return ok;
   }
 
   /**
@@ -1221,44 +1286,60 @@ export default class CalDavPlugin extends Plugin {
     if (this.openingWindow) return;
     this.openingWindow = true;
     try {
+      // 快速路径（提速核心）：localStorage 标记不存在 = 绝大多数「无独立窗口」场景 → 不必等
+      // BC 探活的 350ms 超时，立即开窗口。BC 探活（winAliveCheck）只用于发现「窗口崩溃却没走
+      // onunload、残留陈旧标记」的稀有态，那种才走慢路径。即便快速路径偶发误判，同 id 的
+      // openTab 在窗口已存活时也会自动聚焦既有实例、不会新建重复窗口，故安全。
+      if (!this.secondaryWindowOpen()) {
+        this.openCalendarTabAndWindow();
+        return;
+      }
       const alive = await this.winAliveCheck();
       if (alive) return; // 确有存活的独立窗口，不重复开
       this.clearSecondaryWindowOpen(); // 探活失败 → 标记必陈旧，清掉
-      const effective = this.mainCtx.viewMode;
-      const title = effective === "task" ? _t("任务") : _t("日历");
-      const tabPromise = openTab({
-        app: this.app,
-        custom: {
-          icon: "iconCalDavSync",
-          title,
-          // 同 id（与主窗口 openPanelTab 一致）：思源对同 id 的 custom 页签会聚焦已存在实例，
-          // openWindow 随后把它整体「搬」到独立窗口。元素一路 isConnected=true → 渲染稳定，
-          // 不会出现不同 id 新建实例迁移时页签空白的坑（第五~七轮反复踩过）。代价是打开独立
-          // 窗口时主窗口那个月历 tab 被搬走（关掉），但可重新打开，雄哥确认可接受。
-          data: { type: TAB_TYPE },
-          id: this.name + TAB_TYPE
-        },
-        keepCursor: false
-      });
-      void Promise.resolve(tabPromise).then((tab) => {
-        if (!tab) return; // 某些版本/移动端 openTab 返回空，静默跳过
-        try {
-          openWindow({
-            tab,
-            alwaysOnTop: true,
-            width: 1000,
-            height: 700
-          });
-        } catch (e) {
-          // 弹窗失败不能影响其他提醒/命令，只记日志
-          console.warn("[caldav][spike] openWindow 失败", e);
-        }
-      }).catch((e) => {
-        console.warn("[caldav][spike] openTab 失败", e);
-      });
+      this.openCalendarTabAndWindow();
     } finally {
       this.openingWindow = false;
     }
+  }
+
+  /**
+   * openTab（同 id 聚焦既有实例）→ openWindow 整体搬到独立窗口。
+   * 抽出来供「快速路径 / 探活慢路径」两条分支共用，避免重复。
+   */
+  private openCalendarTabAndWindow(): void {
+    const effective = this.mainCtx.viewMode;
+    const title = effective === "task" ? _t("任务") : _t("日历");
+    const tabPromise = openTab({
+      app: this.app,
+      custom: {
+        icon: "iconCalDavSync",
+        title,
+        // 同 id（与主窗口 openPanelTab 一致）：思源对同 id 的 custom 页签会聚焦已存在实例，
+        // openWindow 随后把它整体「搬」到独立窗口。元素一路 isConnected=true → 渲染稳定，
+        // 不会出现不同 id 新建实例迁移时页签空白的坑（第五~七轮反复踩过）。代价是打开独立
+        // 窗口时主窗口那个月历 tab 被搬走（关掉），但可重新打开，雄哥确认可接受。
+        data: { type: TAB_TYPE },
+        id: this.name + TAB_TYPE
+      },
+      keepCursor: false
+    });
+    void Promise.resolve(tabPromise).then((tab) => {
+      if (!tab) return; // 某些版本/移动端 openTab 返回空，静默跳过
+      try {
+        openWindow({
+          tab,
+          alwaysOnTop: true,
+          width: 1000,
+          height: 700
+        });
+      } catch (e) {
+        // 弹窗失败不能影响其他提醒/命令，只记日志
+        console.warn("[caldav][spike] openWindow 失败", e);
+      }
+    }).catch((e) => {
+      console.warn("[caldav][spike] openTab 失败", e);
+    });
   }
 
   /**

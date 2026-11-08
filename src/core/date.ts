@@ -1,5 +1,5 @@
 import { pad2, type LocalStamp } from "./types";
-import { t } from "./i18n";
+import { isEnglish, t } from "./i18n";
 
 
 /** 本地时区某个 UTC 毫秒的墙上时间字段 */
@@ -112,8 +112,81 @@ export function fmtTime(stamp: LocalStamp): string {
   return stamp.slice(11, 16);
 }
 
+/** 英文月份名。中文不用名字，走「N 月」；月份标题（年视图 12 个小月历）两种语言都要。 */
+export const MONTH_NAMES_EN = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+] as const;
+
+/** 1st / 2nd / 3rd / 4th … 11th / 12th / 13th … 21st / 22nd / 23rd */
+export function ordinalEn(day: number): string {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${day}th`;
+  switch (day % 10) {
+    case 1: return `${day}st`;
+    case 2: return `${day}nd`;
+    case 3: return `${day}rd`;
+    default: return `${day}th`;
+  }
+}
+
+/**
+ * 月份标题：英文 "January"，中文「1 月」。
+ * 年视图 12 个小月历、月视图工具栏标题共用。
+ */
+export function monthLabel(month: number): string {
+  if (month < 1 || month > 12) return String(month);
+  // 中文分支直接用中文，不套 t()：zh_CN 本就是恒等映射，硬编码可杜绝
+  // 「语言判定失效 + 英文字典」时退化成 `1 Month` 这种半英半中。
+  return isEnglish() ? MONTH_NAMES_EN[month - 1] : `${month} 月`;
+}
+
+/**
+ * 星期名（周一起始：0=周一 … 6=周日）。
+ *
+ * 旧实现在 view-month / view-week / view-list / view-year / editor 各自写死
+ * `["周一",…,"周日"]` / `["一",…,"日"]`，且是**模块顶层常量** —— 宿主在插件
+ * init 时才 setI18n(字典)，常量早在 import 阶段就求值成中文，英文界面永远显示中文
+ * （雄哥 2026-11-08 截图）。故统一改成渲染时调用本函数。
+ *
+ * 英文全称 Monday…Sunday 用于月/周/日/列表视图；短名 Mon…Sun 用于年视图
+ * 迷你月历与重复规则按钮（格子只有 ~20px / 28px，全称塞不下）。
+ * 中文分支同样硬编码，不经 t()，避免语言判定失效时退化成半英半中。
+ */
+export const WEEKDAY_NAMES_EN = [
+  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+] as const;
+export const WEEKDAY_SHORT_EN = [
+  "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
+] as const;
+const WEEKDAY_NAMES_ZH = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"] as const;
+const WEEKDAY_SHORT_ZH = ["一", "二", "三", "四", "五", "六", "日"] as const;
+
+/** mon0：周一=0 … 周日=6；short=true 出短名（中文单字 / 英文三字母）。 */
+export function weekdayLabel(mon0: number, short = false): string {
+  const i = ((Math.trunc(mon0) % 7) + 7) % 7;
+  if (isEnglish()) return short ? WEEKDAY_SHORT_EN[i] : WEEKDAY_NAMES_EN[i];
+  return short ? WEEKDAY_SHORT_ZH[i] : WEEKDAY_NAMES_ZH[i];
+}
+
+/** 7 个星期名，按周一起始顺序（渲染表头用）。 */
+export function weekdayLabels(short = false): string[] {
+  return [0, 1, 2, 3, 4, 5, 6].map((i) => weekdayLabel(i, short));
+}
+
+/**
+ * 短日期（月 + 日）：中文「9月24日」，英文 "September 24th"。
+ *
+ * 旧实现是 `${m}${t("月")}${d}${t("日")}` 逐字翻译，英文界面得到
+ * `9Month24Day`（雄哥 2026-11-08 截图）；日期格式必须按语言整体换，
+ * 不能把「月」「日」当单词直译。名字沿用 fmtDateCn 避免改动所有调用点。
+ */
 export function fmtDateCn(stamp: LocalStamp): string {
-  return `${+stamp.slice(5, 7)}${t("月")}${+stamp.slice(8, 10)}${t("日")}`;
+  const m = +stamp.slice(5, 7);
+  const d = +stamp.slice(8, 10);
+  if (isEnglish()) return `${MONTH_NAMES_EN[m - 1] || m} ${ordinalEn(d)}`;
+  // 同上：中文格式直接写死，不再经 t("月")/t("日")，避免退化成 9Month24Day
+  return `${m}月${d}日`;
 }
 
 /**

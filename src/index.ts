@@ -34,7 +34,7 @@ import { confirmBlockChanges } from "@/ui/change-alert-dialog";
 import type { KernelCaller } from "@/core/block-api";
 import { getTaskBlockById, getBlockRootId, setBlockSkip, listNotebooks, getBlockDetail, BLOCK_SKIP_ATTR } from "@/core/block-api";
 import { runBlockSync, convertBlock, unsyncBlock, clearBlockSync } from "@/core/block-sync";
-import { setI18n, t as _t } from "./core/i18n";
+import { isEnglish, setI18n, t as _t } from "./core/i18n";
 
 
 /**
@@ -684,7 +684,12 @@ export default class CalDavPlugin extends Plugin {
       "completed": _t("已完成"),
     };
     const status = item.status ? (statusText[item.status] || item.status) : _t("未完成（未开始）");
-    const dateCn = (stamp: string): string => (stamp ? `${stamp.slice(0, 4)}${_t("年")}${fmtDateCn(stamp)}` : _t("—"));
+    const dateCn = (stamp: string): string => {
+      if (!stamp) return _t("—");
+      return isEnglish()
+        ? `${fmtDateCn(stamp)}, ${stamp.slice(0, 4)}`
+        : `${stamp.slice(0, 4)}${_t("年")}${fmtDateCn(stamp)}`;
+    };
     const full = (stamp: string, allDay: boolean): string => {
       if (!stamp) return _t("—");
       const dp = dateCn(stamp);

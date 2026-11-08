@@ -3,16 +3,30 @@ import type { CalItem, SortMode, CalSettings } from "../core/types";
 import { DEFAULT_CATEGORIES, calEventColor, calTodoColor, findCalendarByUrl } from "../core/types";
 import type { PanelCtx } from "./panel";
 import { occurrencesInRange } from "../core/ics";
-import { parseLocalStamp, stampOfMs } from "../core/date";
+import { parseLocalStamp, stampOfMs, weekdayLabel } from "../core/date";
 import { stateOfStatus, STATUS_CANCELLED, type TaskState } from "../core/task-state";
 import { chinaCalendarEnabled, holidayFor, lunarFor } from "../core/holiday-cn";
-import { t } from "../core/i18n";
+import { t, isEnglish } from "../core/i18n";
 
 
 export interface ViewArgs {
   ctx: PanelCtx;
   viewEl: HTMLElement;
   occurrences: (startMs: number, endMs: number) => Map<CalItem, string[]>;
+}
+
+/**
+ * 星期表头文案（月 / 周视图的 7 等分表头）。
+ *
+ * 英文宽面板出 Monday…Sunday；面板被拖窄时由 index.css 的 @container 规则
+ * 自动改显 Mon…Sun，避免全称把 1fr 网格的 min-content 撑破产生横向滚动条
+ * （headless 实测 280px 面板下全称溢出 182px）。中文恒为「周一…周日」，
+ * 不输出额外 span，布局与旧版完全一致。
+ */
+export function weekdayCellHtml(mon0: number): string {
+  const full = weekdayLabel(mon0);
+  if (!isEnglish()) return full;
+  return `<span class="cal-wd-full">${full}</span><span class="cal-wd-short">${weekdayLabel(mon0, true)}</span>`;
 }
 
 /**

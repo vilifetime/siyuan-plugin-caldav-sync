@@ -51,7 +51,7 @@ export function askDiaryRange(onPick: (range: DiaryRange, target: DiaryTarget) =
           <input type="radio" name="caldav-range" value="${o.key}"${o.key === "day" ? " checked" : ""}/>
           <span class="caldav-range-opt-label">${o.label}</span>
         </label>
-        <!-- ${t("子选项槽：只有被选中的范围行才往里渲染（见")} renderSub${t("）")} -->
+        <!-- 子选项槽：只有被选中的范围行才往里渲染（见 renderSub） -->
         <span class="caldav-range-inline" data-inline></span>
       </div>
       <span class="caldav-range-opt-hint">${o.hint}</span>

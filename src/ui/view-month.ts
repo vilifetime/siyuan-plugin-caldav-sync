@@ -1,12 +1,10 @@
 /** 月视图：5 行 x 7 列（周一起始，以今天为锚的滑动窗口） */
-import { addDays, dateStampOfMs, todayStamp } from "../core/date";
-import { monthChipHtml, calColorOf, chinaDayBarHTML, type ViewArgs } from "./view-common";
+import { addDays, dateStampOfMs, todayStamp, weekdayLabels } from "../core/date";
+import { monthChipHtml, calColorOf, chinaDayBarHTML, weekdayCellHtml, type ViewArgs } from "./view-common";
 import { openDateAddMenu } from "./date-add-menu";
 import { openMonthDayPopup, closeMonthDayPopup, schedulePopupClose, cancelPopupClose } from "./month-day-popup";
 import { t } from "../core/i18n";
 
-
-const WEEK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 export function renderMonthView(args: ViewArgs): void {
   const { ctx, viewEl, occurrences } = args;
@@ -57,7 +55,7 @@ export function renderMonthView(args: ViewArgs): void {
   const html: string[] = [];
   /** 每天的**完整**条目表：默认只渲染前 3 条，放不下时浮层里按需取全部 */
   const dayEntries = new Map<string, { it: import("../core/types").CalItem; occ: string }[]>();
-  html.push(`<div class="cal-month"><div class="cal-month-weeks">${WEEK_LABELS.map((w) => `<div class="cal-month-weeklabel">${w}</div>`).join("")}</div><div class="cal-month-grid" ${rowTemplate ? `style="${rowTemplate}"` : ""}>`);
+  html.push(`<div class="cal-month"><div class="cal-month-weeks">${weekdayLabels().map((w, i) => `<div class="cal-month-weeklabel" title="${w}">${weekdayCellHtml(i)}</div>`).join("")}</div><div class="cal-month-grid" ${rowTemplate ? `style="${rowTemplate}"` : ""}>`);
   for (let i = 0; i < totalCells; i++) {
     const day = addDays(dateStampOfMs(startMs), i);
     const inMonth = +day.slice(5, 7) === m;

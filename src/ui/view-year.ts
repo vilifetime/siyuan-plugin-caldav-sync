@@ -2,13 +2,11 @@
  * 年视图：12 个迷你月历网格，标注有日程/任务的日期（圆点 + 颜色）。
  * 点击月标题跳转到该月；点击某天跳转到该天（日视图）。
  */
-import { addDays, dateStampOfMs, todayStamp } from "../core/date";
+import { addDays, dateStampOfMs, todayStamp, monthLabel, weekdayLabel, weekdayLabels } from "../core/date";
 import { calColorOf, escape, type ViewArgs } from "./view-common";
 import { holidayFor } from "../core/holiday-cn";
-import { t as _t } from "../core/i18n";
+import { isEnglish, t as _t } from "../core/i18n";
 
-
-const WEEK_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
 
 function pad2(n: number): string {
   return n < 10 ? "0" + n : String(n);
@@ -56,14 +54,14 @@ export function renderYearView({ ctx, viewEl, occurrences }: ViewArgs): void {
       </div>`);
     }
     months.push(`<div class="cal-year-month">
-      <div class="cal-year-month-head" data-month="${y}-${pad2(m + 1)}" title="${_t("跳转到")} ${m + 1} ${_t("月")}">${m + 1} ${_t("月")}</div>
-      <div class="cal-year-weeks">${WEEK_LABELS.map((w) => `<span>${w}</span>`).join("")}</div>
+      <div class="cal-year-month-head" data-month="${y}-${pad2(m + 1)}" title="${_t("跳转到")} ${monthLabel(m + 1)}">${monthLabel(m + 1)}</div>
+      <div class="cal-year-weeks">${weekdayLabels(true).map((w, i) => `<span title="${weekdayLabel(i)}">${w}</span>`).join("")}</div>
       <div class="cal-year-grid">${cells.join("")}</div>
     </div>`);
   }
 
   viewEl.innerHTML = `<div class="cal-year">
-    <div class="cal-year-head">${y} ${_t("年")} · ${_t("共")} ${total} ${_t("项日程")} / ${_t("任务")}</div>
+    <div class="cal-year-head">${y}${isEnglish() ? "" : ` ${_t("年")}`} · ${_t("共")} ${total} ${_t("项日程")} / ${_t("任务")}</div>
     <div class="cal-year-months">${months.join("")}</div>
   </div>`;
 

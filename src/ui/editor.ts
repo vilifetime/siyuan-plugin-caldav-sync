@@ -7,14 +7,14 @@ import { isMobile } from "./device";
 import { adoptMobileLayer } from "./mobile-layers";
 import type { Alarm, CalAttachment, CalCalendar, CalItem, CalKind, CategoryDef, Recurrence } from "../core/types";
 import { DEFAULT_CATEGORIES, accountOfUrl, calEventColor, enabledCalendars, findCalendarByUrl, resolveDefaultCalendar } from "../core/types";
-import { addDays, defaultStartStamp, isDateOnly, parseLocalStamp, stampOfMs, todayStamp } from "../core/date";
+import { addDays, defaultStartStamp, isDateOnly, parseLocalStamp, stampOfMs, todayStamp, weekdayLabel } from "../core/date";
 import { attachSizeMaxBytes, convertItemKind, icsSizeMaxBytes, itemToEditedICS } from "../core/ics";
 import type { PanelCtx } from "./panel";
 import { escape } from "./view-common";
 import { icons } from "./icons";
 import { enableDialogResize } from "./dialog-resize";
 import { openCategoryManager } from "./category-manager";
-import { t as _t } from "../core/i18n";
+import { isEnglish, t as _t } from "../core/i18n";
 
 
 /** 超过这个大小的文件，上传前要先跟用户确认（字节）。内联进 ICS 后体积涨 1/3，且每次编辑都重传 */
@@ -99,7 +99,9 @@ export function openEditor(ctx: PanelCtx, preset: EditorPreset): void {
   const mobile = isMobile();
 
   const dialog = newDialog({
-    title: isNew ? (isTodo ? _t("新建待办") : _t("新建日程")) : _t("编辑{0}", (isTodo ? "待办" : "日程")),
+    // ⚠️ 第二个参数也必须走字典：曾经直接塞中文 "待办"/"日程"，英文界面会拼出
+    // 「Edit日程」这种中英混排标题（2026-11-08 雄哥指正）。中文恒等映射，中文界面不变。
+    title: isNew ? (isTodo ? _t("新建待办") : _t("新建日程")) : _t("编辑{0}", isTodo ? _t("待办") : _t("日程")),
     content: `<div class="caldav-editor">${editorHtml(
       it,
       cals,
@@ -184,7 +186,11 @@ function repeatSummary(r: Recurrence | undefined): string {
   if (!r) return _t("不重复");
   const freqText: Record<string, string> = { DAILY: _t("每天"), WEEKLY: _t("每周"), MONTHLY: _t("每月"), YEARLY: _t("每年") };
   const base = freqText[r.freq] || r.freq;
-  const interval = r.interval && r.interval > 1 ? `${_t("每")} ${r.interval} ${r.freq === "DAILY" ? _t("天") : r.freq === "WEEKLY" ? _t("周") : r.freq === "MONTHLY" ? _t("月") : _t("年")}` : base;
+  // 重复频率的「月」是单位不是月份名：英文要用复数 months（旧值 "Every 2 Month"）。
+  const unitZh = r.freq === "DAILY" ? _t("天") : r.freq === "WEEKLY" ? _t("周") : r.freq === "MONTHLY" ? _t("月") : _t("年");
+  const unitEn: Record<string, string> = { DAILY: "days", WEEKLY: "weeks", MONTHLY: "months", YEARLY: "years" };
+  const unit = isEnglish() ? (unitEn[r.freq] || unitZh) : unitZh;
+  const interval = r.interval && r.interval > 1 ? `${_t("每")} ${r.interval} ${unit}` : base;
   let end = "";
   if (r.count) end = `${_t("，共")} ${r.count} ${_t("次")}`;
   if (r.until) end = `${_t("，至")} ${r.until.slice(0, 10)}`;
@@ -684,10 +690,10 @@ function editorHtml(
             <option value="YEARLY" ${r?.freq === "YEARLY" ? "selected" : ""}>${_t("每年")}</option>
           </select>
           <input class="caldav-input caldav-num" data-f="interval" type="number" min="1" value="${r?.interval || 1}" title="${_t("间隔")}"/>
-          <div class="caldav-weekdays">${["一", "二", "三", "四", "五", "六", "日"]
-            .map((l, i) => {
-              const code = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"][i];
-              return `<label class="caldav-wd ${r?.byDay?.includes(code) ? "is-on" : ""}" data-wd="${code}">${l}</label>`;
+          <div class="caldav-weekdays">${["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+            .map((code, i) => {
+              const l = weekdayLabel(i, true);
+              return `<label class="caldav-wd ${r?.byDay?.includes(code) ? "is-on" : ""}" data-wd="${code}" title="${weekdayLabel(i)}">${l}</label>`;
             })
             .join("")}</div>
           <select class="caldav-input" data-f="endMode">

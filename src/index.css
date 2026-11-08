@@ -355,14 +355,21 @@
 
 .cal-month-weeks {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  /* minmax(0,1fr)：英文星期全称 Monday/Wednesday 的 min-content 会把裸 1fr 列
+     撑破（headless 实测 280px 面板溢出 182px），必须显式允许列收缩到 0。 */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   border-bottom: 1px solid var(--caldav-border);
+  /* 窄面板（Dock 被拖窄）时让后代的星期名自动切缩写，见文件末尾 @container 规则 */
+  container-type: inline-size;
 }
 
 .cal-month-weeklabel {
-  padding: 6px 10px;
-  font-size: 11.5px;
+  padding: 6px 3px;
+  font-size: 11px;
   color: var(--caldav-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .cal-month-grid {
@@ -659,6 +666,9 @@
   height: 100%;
   overflow: hidden;
   position: relative;
+  /* 与月视图表头同以「面板全宽」作查询容器：挂在内层 .cal-wk-header 会被
+     scrollbar-gutter 预留的槽位吃掉约 15px，导致 480px 面板两端切换不一致。 */
+  container-type: inline-size;
 }
 
 /* ⚠️ 周视图里「同一批日期列」由三处独立渲染：日期表头 .cal-wk-days、全天栏 .cal-wk-allday-cells、
@@ -683,7 +693,7 @@
 .cal-wk-days {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(var(--cols, 7), 1fr);
+  grid-template-columns: repeat(var(--cols, 7), minmax(0, 1fr));
 }
 
 /* ⚠️ 表头只有 44px 高（.cal-wk-header），而「周几 + 日期圆圈」竖排要占
@@ -716,7 +726,22 @@
   font-weight: 700;
 }
 
-.cal-wk-wd { color: var(--caldav-text-2); font-size: 11px; line-height: 14px; }
+.cal-wk-wd { color: var(--caldav-text-2); font-size: 11px; line-height: 14px; white-space: nowrap; max-width: 100%; overflow: hidden; }
+
+/* ── 星期表头：英文全称优先，面板拖窄时自动切缩写 ──
+   月视图每列 = 面板宽/7，周视图每列 = (面板宽 - 48)/7；英文最长的
+   Wednesday 在 11px 字号下约 65px，面板 <480px 时全称会被裁 8~25px
+   （headless 实测）。故 .cal-month-weeks / .cal-wk 各自声明为
+   inline-size 容器，宽度不足 480px 时把 .cal-wd-full 换成 .cal-wd-short
+   （Mon…Sun）。既不会出现中文残留，也不会截断或撑出横向滚动条。
+   中文界面由 weekdayCellHtml() 判定后只输出「周一」，不受本规则影响。
+   ⚠️ 别把 minmax(0,1fr) 改回裸 1fr：全称的 min-content 会撑破 7 等分网格。 */
+.cal-wd-short { display: none; }
+@container (max-width: 479px) {
+  .cal-wd-full { display: none; }
+  .cal-wd-short { display: inline; }
+}
+
 .cal-wk-num { font-weight: 600; font-size: 15px; line-height: 19px; padding: 1px 6px; }
 
 /* 周/日视图日期头部：日期数 + 中国日历叠加层放在同一行（不增加表头高度，维持 44px 约束） */
@@ -2402,8 +2427,15 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px 12px;
+  /* 编辑态 5 个按钮（Delete / Cancelled / To Event / Cancel / Save）必须单行、不越界。
+     旧值 gap 10 / padding 14 在英文 520px 下实测溢出 55.8px，Save 被裁
+     （雄哥 2026-11-08 截图）；收紧容器 + 按钮整体小一号解决，不靠换行或滚动。
+     2026-11-08 术语调整中曾用 To Schedule，440px 极限窄下溢出 3.8px，
+     故容器 gap 5→4；最终两端统一为 Event / To-do，To Event 更短，保留 4px 余量。 */
+  flex-wrap: nowrap;
+  overflow-x: hidden;
+  gap: 4px;
+  padding: 8px 10px 10px;
   border-top: 1px solid var(--caldav-border);
   background: var(--caldav-bg-2);
   /* 页脚是对话框最底部：自带与容器一致的圆角，避免直角背景盖住左下/右下圆角 */
@@ -2464,11 +2496,26 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
 }
 .caldav-flex { flex: 1; }
 
+/* 页脚里的弹性占位不参与 grow：否则它会在单行分配里吃掉可用宽度，把「保存」挤出右界。
+   改由「取消」的 margin-left:auto 把右侧两个按钮推到最右（与 Obsidian 端同构）。 */
+.caldav-editor-foot .caldav-flex { flex: 0 1 0; }
+.caldav-editor-foot .caldav-foot-btn--ghost { margin-left: auto; }
+
 /* 页脚按钮：一律不参与收缩、不换行。
    窄屏时页脚里的说明文字会把按钮挤窄，按钮内的「图标 + 文字」就断成两行（截图里的「取消」「保存」）。 */
 .caldav-editor-foot .caldav-foot-btn {
   flex: 0 0 auto;
   white-space: nowrap;
+  /* 图标 + 文字离边框更近、按钮整体小一号（雄哥 2026-11-08）：
+     横向 18→9、纵向 8→6、内部 gap 5→4、字号 13→12、图标 14→12。
+     选择器限定编辑弹窗页脚，Dock / 设置页 / 分类管理器的按钮保持原尺寸。 */
+  padding: 6px 9px;
+  gap: 4px;
+  font-size: 12px;
+}
+.caldav-editor-foot .caldav-foot-btn svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* 错误提示：位于页脚按钮行左侧空白处，无内容时不占位 */
@@ -2871,7 +2918,10 @@ input.caldav-input[type="time"]:hover::-webkit-calendar-picker-indicator {
   border-color: var(--caldav-warn);
 }
 
-.caldav-foot-btn svg { width: 14px; height: 14px; }
+.caldav-foot-btn svg {
+  width: 14px;
+  height: 14px;
+}
 
 /* 缩放手柄（右下角） */
 .caldav-resize {

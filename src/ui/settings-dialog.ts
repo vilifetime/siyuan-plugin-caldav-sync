@@ -644,7 +644,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
             if (ok) { msg.textContent = _t("已更新（重新打开日历视图即可见）"); msg.style.color = ""; }
             else {
               const err = getLastHolidayError();
-              msg.textContent = _t("拉取失败：{0}", (err || "未知原因"));
+              msg.textContent = _t("拉取失败：{0}", (err || _t("未知原因")));
               msg.style.color = "var(--caldav-danger, #d23f3f)";
             }
           }
@@ -931,7 +931,9 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         if (label) label.textContent = _t("扫描中…");
         try {
           const text = (await ctx.scanBlocksNow?.()) || _t("当前入口不可用");
-          setMsg(text, !/失败|未启用/.test(text));
+          // 判成功/失败要同时认中英关键词：文案走 i18n 后英文消息不含「失败/未启用」，
+          // 只留中文正则会把所有错误都标成绿色成功（2026-11-08 修）。
+          setMsg(text, !/失败|未启用|failed|not running|disabled|unavailable/i.test(text));
         } finally {
           if (label) label.textContent = _t("立即扫描");
         }
@@ -957,7 +959,7 @@ export function openSettingsDialog(ctx: PanelCtx): Promise<void> {
         if (label) label.textContent = _t("清理中…");
         try {
           const text = (await ctx.clearBlockItems?.()) || _t("当前入口不可用");
-          setMsg(text, !/失败/.test(text));
+          setMsg(text, !/失败|failed|not running|disabled|unavailable/i.test(text));
         } finally {
           if (label) label.textContent = _t("一键清理");
         }
@@ -1123,7 +1125,7 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
     <div class="caldav-field" id="caldav-webhook-secret" style="display:${s.webhookType === "dingtalk" ? "" : "none"}">
       <label class="caldav-field-label">${_t("钉钉加签密钥")}</label>
       <div class="caldav-input-wrap">
-        <input class="caldav-input" type="text" data-s="webhookSecret" value="${escape(s.webhookSecret || "")}" placeholder="SECxxxxxxxx（机器人安全设置「加签」处复制）"/>
+        <input class="caldav-input" type="text" data-s="webhookSecret" value="${escape(s.webhookSecret || "")}" placeholder="${escape(_t("SECxxxxxxxx（机器人安全设置「加签」处复制）"))}"/>
       </div>
       <p class="caldav-set-hint">${_t("钉钉机器人安全设为「加签」时填写；关键词 / IP 白名单模式留空即可。")}</p>
     </div>
@@ -1265,18 +1267,18 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
   </div>
 
   <!--
-    ${_t("思源任务块识别与映射（")}issue #2${_t("，")}2026-10-28${_t("）")}
-    ${_t("文档里写的任务块（")}- [ ] ${_t("待办）")}⇄ CalDAV VTODO${_t("，身份锚点是")} **Block ID**
-    ${_t("（写进")} VTODO ${_t("的")} X-SIYUAN-BLOCK-ID${_t("），不是文本匹配")} ${_t("——")} ${_t("改文字也不会对丢。")}
-    ⚠️ ${_t("总开关没打开就完全不启用：不自动扫描、块菜单不出现、不做状态同步，")}
-    ${_t("「立即扫描」按钮点了也只提示功能未启用。")}
+    思源任务块识别与映射（issue #2，2026-10-28）
+    文档里写的任务块（- [ ] 待办）⇄ CalDAV VTODO，身份锚点是 **Block ID**
+    （写进 VTODO 的 X-SIYUAN-BLOCK-ID），不是文本匹配 —— 改文字也不会对丢。
+    ⚠️ 总开关没打开就完全不启用：不自动扫描、块菜单不出现、不做状态同步，
+    「立即扫描」按钮点了也只提示功能未启用。
   -->
   <!--
-    ⚠️ ${_t("类名")}**${_t("一律")} caldav-blk-*${_t("，绝不复用")} .caldav-acc / .caldav-acc-head / .caldav-acc-body**${_t("。")}
-    ${_t("设置页到处是全局")} .caldav-acc-head ${_t("选择器（")}bindAccounts ${_t("给账户卡挂展开收起）、")}
-    ${_t("测试也按")} .caldav-acc ${_t("数账户卡")} ${_t("——")} ${_t("复用会让这张卡被当成一张账户卡：")}
-    ${_t("点它的卡头会去走账户展开逻辑（")}activeAccId ${_t("被置空")} → ${_t("整页")} rerender${_t("），")}
-    ${_t("账户计数也会平白多一张。外观在")} index.css ${_t("里另写一份同样的规则。")}
+    ⚠️ 类名**一律 caldav-blk-*，绝不复用 .caldav-acc / .caldav-acc-head / .caldav-acc-body**。
+    设置页到处是全局 .caldav-acc-head 选择器（bindAccounts 给账户卡挂展开收起）、
+    测试也按 .caldav-acc 数账户卡 —— 复用会让这张卡被当成一张账户卡：
+    点它的卡头会去走账户展开逻辑（activeAccId 被置空 → 整页 rerender），
+    账户计数也会平白多一张。外观在 index.css 里另写一份同样的规则。
   -->
   <div class="caldav-blk-acc ${s.blockSyncEnabled ? "is-open" : ""}" data-blk-acc>
     <div class="caldav-blk-head" data-blk-head>
@@ -1403,7 +1405,7 @@ export function settingsHtml(s: CalSettings, mobile: boolean, expandedId?: strin
         ${_t("留空后同步完全自动（默认")} 20${_t("，改之前建议先想清楚）。")}
       </p>
 
-      <!-- ${_t("「扫描清理」：段标题")} + ${_t("两个动作按钮")} -->
+      <!-- 「扫描清理」：段标题 + 两个动作按钮 -->
       <div class="caldav-section-title caldav-blk-subtitle"><span class="caldav-section-icon">${icons.refreshThin}</span>${_t("扫描清理")}</div>
       <div class="caldav-actions-row">
         <button class="caldav-btn caldav-btn--sm" data-action="blocks-scan">${icons.refreshThin}<span data-blocksync-scan-label>${_t("立即扫描")}</span></button>

@@ -20,6 +20,7 @@ import { toggleTodoDone } from "./panel";
 import { openEditor } from "./editor";
 import { monthChipHtml, calColorOf, keyOfItem } from "./view-common";
 import type { CalItem } from "../core/types";
+import { fmtDateCn } from "../core/date";
 import { t as _t } from "../core/i18n";
 
 
@@ -170,10 +171,9 @@ export function openMonthDayPopup(
 
   const pop = document.createElement("div");
   pop.className = "caldav-month-pop";
-  const [, m, d] = day.split("-");
   pop.innerHTML = `
     <div class="caldav-month-pop-head">
-      <span class="caldav-month-pop-title">${+m}${_t("月")}${+d}${_t("日")}</span>
+      <span class="caldav-month-pop-title">${fmtDateCn(day)}</span>
       <span class="caldav-month-pop-count">${entries.length} ${_t("项")}</span>
     </div>
     <div class="caldav-month-pop-list">

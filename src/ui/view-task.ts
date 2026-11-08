@@ -484,11 +484,11 @@ export function renderTaskView({ ctx, viewEl }: ViewArgs): void {
     <select class="cal-task-filter" data-filter title="${t("按条件筛选")}">${optsHtml}</select>
     <input class="caldav-input cal-task-quick" placeholder="${t("快速添加待办，回车保存（默认今天）…")}" data-quickadd/>
     <!--
-      ${t("搜索框（")}2026-10-09 ${t("雄哥要求）：原先搜索框在左侧")} Dock ${t("里，")}
-      ${t("但")}Dock ${t("只显示少量条目、在那儿搜等于「搜一个看不见全貌的列表」。")}
-      ${t("挪到任务视图")} ${t("——")} ${t("这里才是完整清单，搜到了立刻看得见。")}
-      ${t("宽度按")} 2:1 ${t("分给快速添加（")}flex:2${t("）与搜索（")}flex:1${t("）：")}
-      ${t("快速添加是高频操作、需要能看清标题全文；搜索是「临时过滤」用途。")}
+      搜索框（2026-10-09 雄哥要求）：原先搜索框在左侧 Dock 里，
+      但Dock 只显示少量条目、在那儿搜等于「搜一个看不见全貌的列表」。
+      挪到任务视图 —— 这里才是完整清单，搜到了立刻看得见。
+      宽度按 2:1 分给快速添加（flex:2）与搜索（flex:1）：
+      快速添加是高频操作、需要能看清标题全文；搜索是「临时过滤」用途。
     -->
     <span class="cal-task-searchwrap">
       <span class="cal-task-search-icon">${icons.search}</span>

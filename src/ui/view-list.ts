@@ -20,7 +20,7 @@
  * 待办的「时间」取**到期时间**（与日历视图一致，见 view-common.todoDueOccurrences）。
  */
 import type { CalItem } from "../core/types";
-import { addDays, isDateOnly, padDate, parseLocalStamp, startOfWeek } from "../core/date";
+import { addDays, isDateOnly, padDate, parseLocalStamp, startOfWeek, weekdayLabel } from "../core/date";
 import { calColorOf, escape, keyOfItem, occComparator, stateOfItem, type ViewArgs } from "./view-common";
 import { stateTextZh } from "../core/task-state";
 import { blockBadgeOn } from "../core/block-todo";
@@ -31,8 +31,7 @@ import { t } from "../core/i18n";
 // innerHTML，故此处保持原样。从 Obsidian 端 cp 同步本文件时**不要**把 setHtml
 // 带过来（思源没有 dom.ts，会直接编译失败）。
 
-/** 星期中文名（周一起始，与周/月视图一致） */
-const WEEK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+// 星期名不在此写死：core/date.ts 的 weekdayLabel() 在渲染时按当前语言字典取值。
 
 /**
  * 当前视图对应的时间窗。
@@ -192,7 +191,7 @@ export function renderListView({ ctx, viewEl, occurrences }: ViewArgs): void {
   const blocks = days
     .map((day) => {
       const list = byDay.get(day)!.slice().sort(cmp);
-      const wd = WEEK_LABELS[(parseLocalStamp(day).getDay() + 6) % 7];
+      const wd = weekdayLabel((parseLocalStamp(day).getDay() + 6) % 7);
       const rows = list.map(({ it, occ }) => rowHtml(ctx, it, occ)).join("");
       return `<div class="cal-list-day">
         <div class="cal-list-date"><span class="cal-list-md">${+day.slice(5, 7)}/${+day.slice(8, 10)}</span><span class="cal-list-wd">${wd}</span><span class="cal-list-count">${list.length} ${t("项")}</span></div>

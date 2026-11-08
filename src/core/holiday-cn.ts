@@ -20,7 +20,7 @@
  */
 import { Solar } from "lunar-javascript";
 import type { CalSettings } from "./types";
-import { t as _t } from "./i18n";
+import { isEnglish, t as _t } from "./i18n";
 
 
 export interface CnHoliday {
@@ -305,7 +305,7 @@ async function fetchYearJson(def: SourceDef, year: number, timeoutMs = 12000): P
   const hit = results.findIndex((r) => r && r.ok);
   if (hit < 0) {
     const errs = results.filter((r) => r && r.error).map((r) => r!.error).join(_t("；")) || _t("全部候选源无响应");
-    lastHolidayError = `${_t("「")}${def.label}${_t("」")}${year}${_t("年")} ${_t("所有候选源均失败：")}${errs}`;
+    lastHolidayError = `${_t("「")}${def.label}${_t("」")}${year}${isEnglish() ? "" : _t("年")} ${_t("所有候选源均失败：")}${errs}`;
     console.warn("[caldav] " + lastHolidayError);
     return null;
   }
@@ -362,8 +362,10 @@ export function lunarFor(dateStr: string): { lunar: string; jieqi: string } {
   const [y, m, d] = dateStr.split("-").map(Number);
   try {
     const l = Solar.fromYmd(y, m, d).getLunar();
+    // 农历是中文专名，**任何界面语言下都保持中文**（雄哥 2026-11-08 拍板）：
+    // 旧实现经字典模板把「月」译成 month，得到「九月month廿六」这类半英半中。
     // 月、日间插入「月」字：八 → 八月廿九；闰六 → 闰六月初一；冬 → 冬月十一；正 → 正月初一
-    return { lunar: _t("{0}月{1}", l.getMonthInChinese(), l.getDayInChinese()), jieqi: l.getJieQi() };
+    return { lunar: `${l.getMonthInChinese()}月${l.getDayInChinese()}`, jieqi: l.getJieQi() };
   } catch {
     return { lunar: "", jieqi: "" };
   }

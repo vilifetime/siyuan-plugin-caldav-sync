@@ -11,7 +11,7 @@ import type { SyncEngine } from "../core/sync";
 import type { CalAttachment, CalItem, CalKind, DockFilterKey, SortMode } from "../core/types";
 import { DEFAULT_CATEGORIES, calEventColor, enabledCalendars, setTaskViewEventsShown } from "../core/types";
 import { occurrencesInRange } from "../core/ics";
-import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, diffDays } from "../core/date";
+import { parseLocalStamp, stampOfMs, todayStamp, startOfWeek, addDays, isDateOnly, fmtTime, fmtDateCn, monthLabel, ordinalEn, diffDays } from "../core/date";
 import { icons } from "./icons";
 import { BRAND_ICON_HTML } from "./brand-icon";
 import { blockBadgeOn } from "../core/block-todo";
@@ -30,7 +30,7 @@ import { renderListView } from "./view-list";
 import { todoDueOccurrences, stateOfItem } from "./view-common";
 import { stateTextZh } from "../core/task-state";
 import { chinaCalendarEnabled, warmChinaCalendar } from "../core/holiday-cn";
-import { t as _t } from "../core/i18n";
+import { isEnglish, t as _t } from "../core/i18n";
 
 
 export type ViewMode = "year" | "month" | "week" | "day" | "task";
@@ -133,28 +133,28 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           <button class="caldav-seg-btn" data-view="day">${_t("日")}</button>
         </div>
         <!--
-          ${_t("「列表」按钮（")}2026-10-25 ${_t("雄哥拍板方案")} A${_t("）：放在")} ${_t("年")}/${_t("月")}/${_t("周")}/${_t("日")} **${_t("右边")}**${_t("。")}
-          ${_t("它是横切在时间段之上的")}**${_t("正交开关")}** ${_t("——")} ${_t("年")}/${_t("月")}/${_t("周")}/${_t("日决定范围，")}
-          ${_t("列表决定呈现方式（见")} PanelCtx.listMode${_t("）。因此切时间段时列表自动换范围，")}
-          ${_t("不用再点一次「列表」。单独成组（不塞进")} .caldav-seg ${_t("内）是为了视觉上")}
-          ${_t("与「时间段选择」区分开")} ${_t("——")} ${_t("挤在一个分段控件里会被误读成第五种时间段。")}
+          「列表」按钮（2026-10-25 雄哥拍板方案 A）：放在 年/月/周/日 **右边**。
+          它是横切在时间段之上的**正交开关** —— 年/月/周/日决定范围，
+          列表决定呈现方式（见 PanelCtx.listMode）。因此切时间段时列表自动换范围，
+          不用再点一次「列表」。单独成组（不塞进 .caldav-seg 内）是为了视觉上
+          与「时间段选择」区分开 —— 挤在一个分段控件里会被误读成第五种时间段。
         -->
         <button class="caldav-list-toggle" data-action="toggle-list"
                 title="${_t("列表视图")}" aria-label="${_t("列表视图")}" aria-pressed="false">${_t("列表")}</button>
       </div>
       <!--
-        ${_t("任务视图的统计条挂载点。放在")} toolbar-right **${_t("之前")}** ${_t("——")} ${_t("任务视图时左中两块")}
-        ${_t("被")} .is-task ${_t("隐藏，统计条自然靠左；日历视图时本元素为空（见")} renderView ${_t("的清空），")}
-        ${_t("不占位。实际内容由")} view-task.ts ${_t("渲染后写进来（统计数据的来源在那边）。")}
+        任务视图的统计条挂载点。放在 toolbar-right **之前** —— 任务视图时左中两块
+        被 .is-task 隐藏，统计条自然靠左；日历视图时本元素为空（见 renderView 的清空），
+        不占位。实际内容由 view-task.ts 渲染后写进来（统计数据的来源在那边）。
       -->
       <div class="caldav-toolbar-stats" data-slot="task-stats"></div>
       <div class="caldav-toolbar-right">
         <button class="caldav-btn caldav-btn-primary" data-action="new-event">${icons.plus} ${_t("日程")}</button>
         <button class="caldav-btn" data-action="new-todo">${icons.plus} ${_t("待办")}</button>
         <!--
-          ${_t("手动同步按钮（")}2026-10-09 ${_t("雄哥要求，与")} Obsidian ${_t("侧对齐）：")}
-          ${_t("原来只有")} Dock ${_t("里的刷新键与命令面板里有同步入口，主面板工具栏没有")} ${_t("——")}
-          ${_t("想立刻拉一次得先切到")} Dock${_t("。图标用")}icons.sync${_t("。")}
+          手动同步按钮（2026-10-09 雄哥要求，与 Obsidian 侧对齐）：
+          原来只有 Dock 里的刷新键与命令面板里有同步入口，主面板工具栏没有 ——
+          想立刻拉一次得先切到 Dock。图标用icons.sync。
         -->
         <button class="caldav-icon-btn" data-action="sync-now" title="${_t("立即同步")} CalDAV"
                 aria-label="${_t("立即同步")} CalDAV">${icons.sync}</button>
@@ -162,7 +162,7 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
           <button class="caldav-icon-btn" data-action="calfilter" title="${_t("日历筛选")}">${icons.layers}</button>
           <div class="caldav-calfilter-pop" data-pop="calfilter" hidden>
             <div class="caldav-cal-head">${_t("日历筛选")}</div>
-            <!-- ${_t("多账户（")}2026-10-25${_t("）：按账户分组的日历勾选（与侧栏同一份渲染，点眼睛")}/${_t("整行即切换）")} -->
+            <!-- 多账户（2026-10-25）：按账户分组的日历勾选（与侧栏同一份渲染，点眼睛/整行即切换） -->
             <div class="caldav-cal-list caldav-cal-list--filter"></div>
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
               <span class="caldav-switch-label">${_t("日历视图中显示待办任务")}</span>
@@ -172,11 +172,11 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
               </span>
             </label>
             <!--
-              ${_t("任务视图的两个开关（")}2026-10-08 ${_t("对齐")} Obsidian ${_t("侧：那边就放在这个浮层里）。")}
-              **${_t("这是唯一入口")}** ${_t("——")} ${_t("设置弹窗里不再放同一对开关，避免两处都能改、")}
-              ${_t("改完互相打架。默认都是关的；第二层「显示过期日程」初始")} hidden${_t("，")}
-              ${_t("主开关打开才出现，")}hidden ${_t("时整行不占位")}
-              ${_t("（")}display ${_t("由")} CSS ${_t("类定为")} flex${_t("，必须另写")} [hidden] ${_t("规则）。")}
+              任务视图的两个开关（2026-10-08 对齐 Obsidian 侧：那边就放在这个浮层里）。
+              **这是唯一入口** —— 设置弹窗里不再放同一对开关，避免两处都能改、
+              改完互相打架。默认都是关的；第二层「显示过期日程」初始 hidden，
+              主开关打开才出现，hidden 时整行不占位
+              （display 由 CSS 类定为 flex，必须另写 [hidden] 规则）。
             -->
             <label class="caldav-switch-line caldav-switch-line--inline caldav-calfilter-opt">
               <span class="caldav-switch-label">${_t("任务视图中显示日程事件")}</span>
@@ -194,13 +194,13 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
               </span>
             </label>
             <!--
-              ${_t("「过期」在任务视图里没有独立的「逾期」语义：分桶时直接归到「已完成」组。")}
-              ${_t("不写这句，用户会去「逾期」组里找这些日程、然后以为开关坏了。")}
-              ${_t("与主行同缩进、再小一档字号，视觉上属于上面那行的脚注。")}
+              「过期」在任务视图里没有独立的「逾期」语义：分桶时直接归到「已完成」组。
+              不写这句，用户会去「逾期」组里找这些日程、然后以为开关坏了。
+              与主行同缩进、再小一档字号，视觉上属于上面那行的脚注。
             -->
             <div class="caldav-calfilter-note" data-note="showExpired" hidden>${_t("（过期按")}[${_t("已完成")}]${_t("处理）")}</div>
             <div class="caldav-calfilter-foot">
-              <!-- ${_t("不再写死「今日」：点了先弹范围选择（当日")}/${_t("本周")}/${_t("本月")}/${_t("所有）")} -->
+              <!-- 不再写死「今日」：点了先弹范围选择（当日/本周/本月/所有） -->
               <button class="caldav-link" data-action="insert-diary">${_t("把日程与待办插入日记")}</button>
             </div>
           </div>
@@ -317,14 +317,23 @@ export function renderPanel(root: HTMLElement, ctx: PanelCtx): { destroy: () => 
 
   function cursorTitle(): string {
     const c = ctx.cursor;
-    if (ctx.viewMode === "year") return `${+c.slice(0, 4)} ${_t("年")}`;
-    if (ctx.viewMode === "month") return `${+c.slice(0, 4)} ${_t("年")} ${+c.slice(5, 7)} ${_t("月")}`;
+    const y = +c.slice(0, 4);
+    const m = +c.slice(5, 7);
+    const d = +c.slice(8, 10);
+    // 日期标题按语言整体换格式，别把「年/月/日」逐字直译成 "2026 Year 11 Month"
+    //（雄哥 2026-11-08 截图）。中文保持原有写法不动。
+    if (ctx.viewMode === "year") return isEnglish() ? `${y}` : `${y} ${_t("年")}`;
+    if (ctx.viewMode === "month") return isEnglish()
+      ? `${monthLabel(m)} ${y}`
+      : `${y} ${_t("年")} ${m} ${_t("月")}`;
     if (ctx.viewMode === "week") {
       const ws = startOfWeek(c);
       const we = addDays(ws, 6);
       return `${fmtDateCn(ws)} ${_t("–")} ${fmtDateCn(we)}`;
     }
-    if (ctx.viewMode === "day") return `${+c.slice(0, 4)} ${_t("年")} ${+c.slice(5, 7)} ${_t("月")} ${+c.slice(8, 10)} ${_t("日")}`;
+    if (ctx.viewMode === "day") return isEnglish()
+      ? `${monthLabel(m)} ${ordinalEn(d)}, ${y}`
+      : `${y} ${_t("年")} ${m} ${_t("月")} ${d} ${_t("日")}`;
     return _t("待办任务");
   }
 
@@ -953,17 +962,17 @@ export function renderDockPanel(
   <button class="caldav-brand-set" data-dock-action="settings" title="${_t("设置")}" aria-label="${_t("设置")}">${icons.gear}</button>
 </div>
 <!--
-  Dock ${_t("工具行（")}2026-10-10 ${_t("雄哥改版，同日二次调整）：")}
-  ${_t("原两行（上行")} 5 ${_t("个图标按钮")} + ${_t("下行日期范围")}/${_t("分类筛选）")}→ ${_t("现在")}**${_t("一行三个操作点")}**${_t("：")}
-  ① ${_t("日期范围下拉框")} ② ${_t("筛选")} ③ ${_t("打开视图（")}2026-10-10 ${_t("二次调整：筛选与打开视图左右互换，")}
-  ${_t("筛选靠前、打开视图居末）。")}
-  ${_t("去掉的按钮与去处：")}
-    · ${_t("新建")} / ${_t("刷新")} ${_t("——")} ${_t("主窗口工具栏已有（")}+${_t("日程")} / +${_t("待办")} / ${_t("立即同步），")}
-      Dock ${_t("页脚状态条也能点击同步；")}
-    · ${_t("排序")} ${_t("——")} ${_t("任务视图本身按时间轴分桶、组内已排序，")}Dock ${_t("里用处不大；")}
-    · **${_t("日历视图")} / ${_t("任务视图两个按钮合并成一个")}**${_t("（图标用打勾的日历")} calCheck${_t("）：")}
-      ${_t("点击打开「主窗口上次用的那个视图」，省下的一格让日期范围下拉显示完整。")}
-  ${_t("筛选弹层见下方")} catPop ${_t("的注释")} ${_t("——")} ${_t("它挂在")} body ${_t("上，不在这个模板里。")}
+  Dock 工具行（2026-10-10 雄哥改版，同日二次调整）：
+  原两行（上行 5 个图标按钮 + 下行日期范围/分类筛选）→ 现在**一行三个操作点**：
+  ① 日期范围下拉框 ② 筛选 ③ 打开视图（2026-10-10 二次调整：筛选与打开视图左右互换，
+  筛选靠前、打开视图居末）。
+  去掉的按钮与去处：
+    · 新建 / 刷新 —— 主窗口工具栏已有（+日程 / +待办 / 立即同步），
+      Dock 页脚状态条也能点击同步；
+    · 排序 —— 任务视图本身按时间轴分桶、组内已排序，Dock 里用处不大；
+    · **日历视图 / 任务视图两个按钮合并成一个**（图标用打勾的日历 calCheck）：
+      点击打开「主窗口上次用的那个视图」，省下的一格让日期范围下拉显示完整。
+  筛选弹层见下方 catPop 的注释 —— 它挂在 body 上，不在这个模板里。
 -->
 <div class="caldav-dock-tools">
   <div class="caldav-dock-filter-wrap">
